@@ -165,14 +165,13 @@ V2 is defined from its own requirements, research and accepted architecture deci
 
 ### F0.1 — Product Definition
 
-**Correction (F0.17, 2026-09-15):** this section previously pointed to `docs/01-product/product-definition.md`, a file that does not exist in the repository. F0.17 verified this is a broken reference, not a hidden product-definition document. F0.1 content is not lost — it is distributed across:
+Closed baseline.
 
-- this document, [§2 Product summary](#2-product-summary);
-- `docs/01-product/requirements-scope.md` (F0.2), which explicitly derives from and restates the F0.1 product decisions;
-- `docs/adr/ADR-001-greenfield-v2.md`, which traces back to F0.1;
-- a condensed historical snapshot in the repository root, `Fase_0_Documento_Maestro_Moto_Trip_Tracker_V2.docx` (§4), which is a legacy consolidated export and should not be treated as the authoritative source going forward.
+Source:
 
-No dedicated F0.1 document with the depth of F0.2/F0.3 was ever produced as a standalone file. This is a documentation-completeness gap, not a missing product decision — see `docs/00-master/phase-1-readiness-review.md` for the full analysis. It does not block Phase 1 / W0.
+`docs/01-product/product-definition.md`
+
+**Note (2026-09-15):** this file was created after F0.17 found the reference to it was broken (the file did not previously exist; see `docs/00-master/phase-1-readiness-review.md` Finding H1). It formalizes decisions already accepted and already used by downstream documents — it does not introduce new product scope.
 
 ---
 
@@ -200,9 +199,11 @@ Source:
 
 `docs/00-master/phase-1-readiness-review.md`
 
-**Verdict: GO, scoped strictly to starting Wave W0** (`FND-001` through `EXP-001` as defined in `docs/05-roadmap/phase1-backlog.md`). This is a documentation-readiness verdict, not an authorization that has been acted on: the Android project has not been created, no dependencies were installed and no implementation task has started as a result of this review.
+**Verdict: GO, scoped strictly to starting Wave W0** (`FND-001` through `EXP-001` as defined in `docs/05-roadmap/phase1-backlog.md`). At the time this review closed, it was a documentation-readiness verdict only, with no implementation acted on yet.
 
-The review found no unresolved product or architecture decision blocking W0. It found and corrected one broken reference (`docs/01-product/product-definition.md` does not exist; see the F0.1 note above) and one stale cross-reference in `docs/03-architecture/system-architecture.md` §23. It also flagged, without fixing, a status-label inconsistency between the F0.2/F0.3 source documents (self-declared "Draft baseline") and this master document's document map (which lists them as Closed/Approved) — this is a documentation-coherence recommendation, not a blocker. Detector thresholds, production location sampling profile, map provider, elevation algorithm and diagnostic retention limits remain correctly deferred to their documented gates (`EXP-008`/G4, `MAP-001`, field measurement) and are not frozen by this review.
+The review found no unresolved product or architecture decision blocking W0. It found and corrected one broken reference (`docs/01-product/product-definition.md` did not exist; see the F0.1 note above — it has since been created) and one stale cross-reference in `docs/03-architecture/system-architecture.md` §23. It also flagged, without fixing, a status-label inconsistency between the F0.2/F0.3 source documents (self-declared "Draft baseline") and this master document's document map (which lists them as Closed/Approved) — this is a documentation-coherence recommendation, not a blocker. Detector thresholds, production location sampling profile, map provider, elevation algorithm and diagnostic retention limits remain correctly deferred to their documented gates (`EXP-008`/G4, `MAP-001`, field measurement) and are not frozen by this review.
+
+**Phase 1 progress (2026-09-15):** the project owner authorized starting W0 the same day. `FND-001` (Android project bootstrap) is done — see `docs/05-roadmap/phase1-backlog.md` for the task-level report, including two dependency-version deviations from F0.8's exact pins discovered by attempting a real build (documented there and in `gradle/libs.versions.toml`).
 
 ## 9. Phase 0 completion condition
 

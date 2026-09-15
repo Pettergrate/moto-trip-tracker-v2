@@ -124,6 +124,7 @@ Ninguna de estas decisiones diferidas requiere una respuesta del propietario par
 - **Efecto sobre el inicio de W0:** Ninguno. Ninguna tarea de `phase1-backlog.md` depende de este archivo.
 - **Acción tomada en esta revisión:** referencia corregida; se documentó dónde vive realmente el contenido de F0.1 (ver §4).
 - **Acción pendiente:** decisión opcional y no bloqueante del propietario sobre crear el archivo dedicado (ver §4).
+- **Resuelto (2026-09-15):** el propietario pidió crear el archivo. `docs/01-product/product-definition.md` fue creado consolidando el contenido ya aceptado (sin inventar alcance nuevo); `phase-0-master.md` §8 actualizado para apuntar a él.
 
 ### H2 — Inconsistencia de estado entre F0.2/F0.3 y el índice maestro (Prioridad: Baja-Moderada)
 

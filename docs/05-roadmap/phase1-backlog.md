@@ -21,6 +21,15 @@ This backlog is intentionally task-sized. It is not authorization to code before
 
 **Acceptance:** app installs/launches; Compose shell exists; dependency catalog/build config is explicit; no V1 code copied; basic local test command passes.
 
+**Status: Done (2026-09-15).** Bootstrapped as `applicationId`/namespace `com.mototriptracker.app`, single `:app` module, Kotlin (AGP 9.4.0 built-in Kotlin support — the separate `org.jetbrains.kotlin.android` plugin no longer applies under AGP 9.0+), Compose (compiler via `org.jetbrains.kotlin.plugin.compose`), Material 3, single Activity. Verified end-to-end: `./gradlew assembleDebug` and `./gradlew testDebugUnitTest` both succeed, and the resulting debug APK was installed and launched on a physical Android 16 (API 36) device via `adb`, confirmed running without crashing.
+
+Deviations from the F0.8-pinned dependency table, discovered only by attempting a real build, and documented in `gradle/libs.versions.toml`:
+- Compose BOM pinned to **2026.06.01**, not F0.8's 2026.08.00 — that BOM resolves `androidx.compose.ui:ui-android:1.12.0`, whose AAR metadata requires `minCompileSdk=37`, which is unavailable in this environment and outside F0.8's pinned SDK baseline (compileSdk/targetSdk 36). compileSdk/targetSdk 36 and minSdk 26 were kept exactly as F0.8 specifies.
+- `core-ktx` pinned to 1.18.0 and `activity-compose` to 1.11.0 for the same reason (newer releases require compileSdk 37).
+- Kotlin pinned to 2.3.21 (not specified by F0.8, which left the exact Kotlin version open).
+
+None of these are architecture changes; all are routine version-pinning explicitly anticipated by `docs/03-architecture/system-architecture.md` §3.2 ("revalidate releases estables... al crear Fase 1/W0"). If compileSdk 37 is adopted later, this pin should be revisited.
+
 ---
 
 ### FND-002 — Architecture and package skeleton

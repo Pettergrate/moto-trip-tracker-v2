@@ -1,0 +1,8 @@
+<resources>
+    <!--
+        Minimal launcher/window theme. All actual UI theming is done in Compose
+        (MaterialTheme in MainActivity.kt); this only satisfies the manifest's
+        android:theme requirement without pulling in AppCompat/Material XML.
+    -->
+    <style name="Theme.MotoTripTracker" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

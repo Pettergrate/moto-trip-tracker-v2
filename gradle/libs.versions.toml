@@ -1,0 +1,33 @@
+[versions]
+# Baseline per docs/03-architecture/system-architecture.md (F0.8) §3.
+# Revalidated against live Google/Maven Central metadata on 2026-09-15 (FND-001).
+#
+# NOTE: F0.8 pinned Compose BOM 2026.08.00, but that BOM resolves
+# androidx.compose.ui:ui-android:1.12.0, whose AAR metadata requires
+# minCompileSdk=37 (verified by downloading and inspecting the AAR directly).
+# compileSdk 37 is not available in this environment's SDK and is outside
+# F0.8's pinned SDK baseline (compileSdk/targetSdk 36, minSdk 26) here.
+# compose-bom 2026.06.01 is the newest BOM release whose ui-android artifact
+# still reports minCompileSdk<=36; used here to honor F0.8's SDK pin without
+# a silent SDK bump. Revisit alongside a compileSdk 37 decision if/when made.
+agp = "9.4.0"
+kotlin = "2.3.21"
+composeBom = "2026.06.01"
+coreKtx = "1.18.0"
+activityCompose = "1.11.0"
+junit = "4.13.2"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
