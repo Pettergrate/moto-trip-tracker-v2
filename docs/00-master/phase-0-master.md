@@ -1,0 +1,305 @@
+# Moto Trip Tracker V2
+## Phase 0 — Master Document
+
+**Project type:** Greenfield Android application  
+**Status:** Phase 0 — Discovery & Design (documentation review complete; implementation not started)  
+**Version:** 0.17
+**Last updated:** 2026-09-15
+
+---
+
+## 1. Purpose
+
+This document is the main index and source of truth for Phase 0 of Moto Trip Tracker V2.
+
+V2 is a new project built from scratch using its own requirements, research and architecture. V1 is outside the current planning and implementation scope; no V1 code, architecture or behavior is inherited.
+
+### Core rule
+
+> No implementation before specification, no architectural decision without rationale, and no feature is considered complete without validation.
+
+---
+
+## 2. Product summary
+
+Moto Trip Tracker V2 is an Android application focused on motorcycle trips.
+
+Its central value is automatic trip detection and recording, combined with:
+
+- GPS route recording
+- map visualization
+- trip history
+- manual start / pause / resume / finish controls
+- trip statistics
+- favorites
+- merge / split operations
+- route organization
+- offline-first behavior
+- recovery after interruptions
+- future analytics, route comparison and motorcycle management
+
+Automatic recording is a core differentiator, but it is not the entire product.
+
+---
+
+## 3. Phase 0 objectives
+
+Phase 0 must define the product before implementation begins.
+
+It will establish:
+
+1. Product definition
+2. Requirements and scope
+3. Trip detection behavior
+4. Android platform constraints
+5. GPS/location strategy
+6. Field-test methodology
+7. Domain and data model
+8. System architecture
+9. UX/navigation structure
+10. Reliability and recovery requirements
+11. Permissions and privacy
+12. Testing strategy
+13. Diagnostics and observability
+14. Architecture Decision Records (ADRs)
+15. V2 implementation roadmap
+16. Phase 1 readiness criteria (F0.17; original workstream ID preserved)
+
+---
+
+## 4. Phase 0 document map
+
+| ID | Document | Status |
+|---|---|---|
+| F0.1 | Product Definition | Closed baseline |
+| F0.2 | Requirements & Scope | Closed baseline |
+| F0.3 | Trip Detection Specification | Approved baseline |
+| F0.4 | Android Platform Research | Closed v0.1 |
+| F0.5 | GPS & Location Research | Closed v0.1 |
+| F0.6 | Field Experiment Design | Closed design v0.1 |
+| F0.7 | Domain & Data Model | Closed conceptual v0.1 |
+| F0.8 | System Architecture | Closed technical v0.1 |
+| F0.9 | UX & Navigation Architecture | Closed UX v0.1 |
+| F0.10 | Reliability & Recovery | Closed reliability v0.1 |
+| F0.11 | Privacy & Permissions | Closed privacy v0.1 |
+| F0.12 | Testing Strategy | Closed testing v0.1 |
+| F0.13 | Observability & Diagnostics | Closed observability v0.1 |
+| F0.14 | ADR Baseline | Closed ADR v0.1 |
+| F0.15 | V2 Roadmap | Closed roadmap v0.1 |
+| F0.17 | Phase 1 Readiness Review | Closed — **GO, scoped to Wave W0**. See `docs/00-master/phase-1-readiness-review.md` |
+
+---
+
+## 5. Development workflow
+
+The project will be developed in controlled stages.
+
+```text
+Specification
+    ↓
+Research
+    ↓
+Architecture
+    ↓
+Roadmap
+    ↓
+Small implementation task
+    ↓
+Validation
+    ↓
+Documentation update
+    ↓
+Next task
+```
+
+Codex and Claude Code should receive small, bounded tasks rather than broad instructions to build entire systems.
+
+Each implementation task should eventually contain:
+
+- objective
+- context
+- dependencies
+- allowed scope
+- expected files/modules
+- acceptance criteria
+- tests
+- definition of done
+
+---
+
+## 6. V1 policy
+
+By project-owner decision on 2026-09-15, F0.16 is removed. It is not a deliverable or a prerequisite for Phase 1. F0.17 retains its original ID.
+
+V2 is defined from its own requirements, research and accepted architecture decisions.
+
+> Do not inspect or replicate V1 as part of V2 planning or implementation. Any future change to this scope requires an explicit project-owner decision.
+
+---
+
+## 7. Current decision log
+
+### DEC-001 — V2 is greenfield
+
+**Decision:** Build Moto Trip Tracker V2 from scratch.
+
+**Reason:** V1 has accumulated structural and reliability problems. Starting clean allows architecture, documentation and validation to be designed intentionally.
+
+**Status:** Accepted.
+
+### DEC-002 — Phase 0 precedes implementation
+
+**Decision:** Product, research, architecture and roadmap are defined before large-scale implementation.
+
+**Status:** Accepted.
+
+### DEC-003 — Documentation is modular
+
+**Decision:** Use a master Phase 0 index plus focused documents rather than one monolithic file.
+
+**Status:** Accepted.
+
+---
+
+## 8. Current Phase 0 progress
+
+### F0.1 — Product Definition
+
+**Correction (F0.17, 2026-09-15):** this section previously pointed to `docs/01-product/product-definition.md`, a file that does not exist in the repository. F0.17 verified this is a broken reference, not a hidden product-definition document. F0.1 content is not lost — it is distributed across:
+
+- this document, [§2 Product summary](#2-product-summary);
+- `docs/01-product/requirements-scope.md` (F0.2), which explicitly derives from and restates the F0.1 product decisions;
+- `docs/adr/ADR-001-greenfield-v2.md`, which traces back to F0.1;
+- a condensed historical snapshot in the repository root, `Fase_0_Documento_Maestro_Moto_Trip_Tracker_V2.docx` (§4), which is a legacy consolidated export and should not be treated as the authoritative source going forward.
+
+No dedicated F0.1 document with the depth of F0.2/F0.3 was ever produced as a standalone file. This is a documentation-completeness gap, not a missing product decision — see `docs/00-master/phase-1-readiness-review.md` for the full analysis. It does not block Phase 1 / W0.
+
+---
+
+
+### F0.15 — V2 Roadmap
+
+Closed roadmap baseline v0.1.
+
+Source:
+
+`docs/05-roadmap/v2-roadmap.md`
+
+Supporting artifacts:
+
+- `docs/05-roadmap/phase1-backlog.md`
+- `docs/05-roadmap/agent-task-template.md`
+
+Key decisions: Phase 1 is dependency-driven rather than calendar-driven; Core is split into W0 Foundation, W1 Manual Recording Vertical Slice, W2 Automatic Detection + Field Freeze, W3 Editing/Everyday Use, W4 Reliability/Permissions/Diagnostics Hardening and W5 Core Release Hardening. F0.6 field validation remains a hard G4 gate before detector/location defaults are frozen. DoR/DoD and agent execution constraints prevent Codex/Claude from inventing product or architecture.
+
+### F0.17 — Phase 1 Readiness Review
+
+Closed — documentation review complete.
+
+Source:
+
+`docs/00-master/phase-1-readiness-review.md`
+
+**Verdict: GO, scoped strictly to starting Wave W0** (`FND-001` through `EXP-001` as defined in `docs/05-roadmap/phase1-backlog.md`). This is a documentation-readiness verdict, not an authorization that has been acted on: the Android project has not been created, no dependencies were installed and no implementation task has started as a result of this review.
+
+The review found no unresolved product or architecture decision blocking W0. It found and corrected one broken reference (`docs/01-product/product-definition.md` does not exist; see the F0.1 note above) and one stale cross-reference in `docs/03-architecture/system-architecture.md` §23. It also flagged, without fixing, a status-label inconsistency between the F0.2/F0.3 source documents (self-declared "Draft baseline") and this master document's document map (which lists them as Closed/Approved) — this is a documentation-coherence recommendation, not a blocker. Detector thresholds, production location sampling profile, map provider, elevation algorithm and diagnostic retention limits remain correctly deferred to their documented gates (`EXP-008`/G4, `MAP-001`, field measurement) and are not frozen by this review.
+
+## 9. Phase 0 completion condition
+
+Phase 0 is complete only when:
+
+- product scope is stable enough to implement
+- automatic trip behavior is specified
+- critical Android restrictions are researched
+- data model is defined
+- architecture is documented
+- testing and field validation plans exist
+- implementation roadmap is decomposed into small tasks
+- no unresolved blocker prevents Phase 1
+
+### F0.2 — Requirements & Scope
+
+Initial draft created.
+
+Source:
+
+`docs/01-product/requirements-scope.md`
+
+The document establishes requirement IDs, P0/P1/P2 priorities, Core/Post-Core/Future scope, research-gated decisions and traceability conventions.
+
+
+### F0.8 — System Architecture
+
+Closed technical baseline v0.1.
+
+Source:
+
+`docs/03-architecture/system-architecture.md`
+
+Key decisions: Android native Kotlin/Compose, Room local source of truth, Navigation 3, Hilt, foreground location service owns live tracking, WorkManager only for deferrable processing, and a single-module bootstrap.
+
+
+### F0.9 — UX & Navigation Architecture
+
+Closed UX baseline v0.1.
+
+Source:
+
+`docs/03-architecture/ux-navigation.md`
+
+Key decisions: compact primary navigation with Home/History/Favorites, Active Trip as a special persistent destination, ride-first interaction, explicit Pause/Resume/Finish, map-independent Trip Detail, capability-oriented Auto Tracking setup, and safe Merge/Split/Delete flows.
+
+
+### F0.10 — Reliability & Recovery
+
+Closed reliability baseline v0.1.
+
+Source:
+
+`docs/03-architecture/reliability-recovery.md`
+
+Key decisions: persistent data is the Trip source of truth; same-boot process death attempts same-capture recovery; sticky FGS restart rehydrates from Room; reboot/user stop do not fake continuity; gaps are explicit; Finish/Merge/Split are idempotent and transactional; derived processing uses persistent unique work.
+
+
+### F0.11 — Privacy & Permissions
+
+Closed privacy/permissions baseline v0.1.
+
+Source:
+
+`docs/03-architecture/privacy-permissions.md`
+
+Key decisions: Core is local-first; precise location is required for reliable tracking; Background Location exists only for Full Auto and is requested incrementally with prominent disclosure; Full Auto also requires notifications enabled by product policy; no broad storage permission, ads SDK or external analytics SDK in Core; sensitive route DB is excluded from Android cloud Auto Backup; sharing/export is explicit and privacy zones affect only shared artifacts.
+
+
+### F0.12 — Testing Strategy
+
+Closed testing baseline v0.1.
+
+Source:
+
+`docs/04-testing/testing-strategy.md`
+
+Key decisions: risk-based layered testing; deterministic detector/location replay; fake clocks; Room migration/transaction tests; merge/split invariant tests; foreground-service/recovery integration tests; Compose/accessibility tests; privacy/performance checks; and commit/merge/release/detector-freeze gates.
+
+
+### F0.13 — Observability & Diagnostics
+
+Closed observability baseline v0.1.
+
+Source:
+
+`docs/04-testing/observability-diagnostics.md`
+
+Key decisions: local-first evidence rather than remote telemetry; structured DiagnosticEvent separate from RawTrack/domain data; detector reason codes and versioning; Debug Screen; ApplicationExitInfo/process state summary; privacy-safe diagnostic ZIP; bounded technical retention; Perfetto/Tracing/StrictMode for development diagnostics.
+
+
+### F0.14 — ADR Baseline
+
+Closed ADR baseline v0.1.
+
+Source:
+
+`docs/adr/README.md`
+
+Twenty Accepted ADRs now constrain greenfield policy, Android stack, persistence, live tracking ownership, capture/trip separation, raw/processed data, detection, permissions, local-first privacy, WorkManager scope, navigation, bootstrap modularity, domain isolation, versioning, transactional/idempotent operations, gaps, observability, testing/field freeze, map isolation and the single-active-capture invariant.
