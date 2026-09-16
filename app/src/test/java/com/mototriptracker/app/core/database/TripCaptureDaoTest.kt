@@ -1,13 +1,12 @@
 package com.mototriptracker.app.core.database
 
-import androidx.room.Room
-import androidx.test.core.app.ApplicationProvider
 import com.mototriptracker.app.core.database.entity.TripCaptureEntity
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.DetectorVersion
 import com.mototriptracker.app.core.model.EndSource
 import com.mototriptracker.app.core.model.LocationProfileVersion
 import com.mototriptracker.app.core.model.StartSource
+import com.mototriptracker.app.testing.TestDatabaseFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -26,20 +25,9 @@ import org.robolectric.RobolectricTestRunner
 /**
  * TST-DB-002 (F0.12 §6): verifies the single-ACTIVE-capture invariant
  * (ADR-020 / REL-INV-001). Runs as a fast JVM unit test — no device/emulator
- * needed.
- *
- * Room's Android-target artifact only exposes the classic
- * Room.inMemoryDatabaseBuilder(Context, Class) factory, not the Context-free
- * KMP one (verified by attempting the latter from this module: it isn't
- * visible here, only on true jvm/ios multiplatform targets). Robolectric
- * supplies that Context so this can still run as a local JVM test instead of
- * an instrumented androidTest that would need a device.
- *
- * Deliberately does *not* call `.setDriver(BundledSQLiteDriver())`: that
- * driver ships Android-ABI native binaries with no Windows/desktop JNI
- * library, so it fails with UnsatisfiedLinkError under Robolectric (verified
- * by trying it). Leaving the driver unset falls back to the classic
- * SupportSQLiteOpenHelper path, which Robolectric shadows natively.
+ * needed, via [TestDatabaseFactory] (TST-001) — see that class for why
+ * Robolectric is involved and why `.setDriver(BundledSQLiteDriver())` is
+ * deliberately not used.
  */
 @RunWith(RobolectricTestRunner::class)
 class TripCaptureDaoTest {
@@ -48,8 +36,7 @@ class TripCaptureDaoTest {
 
     @Before
     fun createDb() {
-        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
-        db = Room.inMemoryDatabaseBuilder(context, MotoTripDatabase::class.java).build()
+        db = TestDatabaseFactory.createInMemory()
     }
 
     @After

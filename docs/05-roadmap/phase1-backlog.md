@@ -117,6 +117,21 @@ One self-caught bug during this task, unrelated to the above: a KDoc comment con
 
 **Acceptance:** a sample replay is deterministic; tests use no arbitrary sleeps for core state timing.
 
+**Status: Done (2026-09-16).** `core/common/DispatcherProvider` (+ `AndroidDispatcherProvider`) is the last ADR-013 seam before domain/data logic can be written without touching `Dispatchers.IO`/`Default`/`Main` directly; bound in `AppModule` alongside `Clock`/`IdGenerator` from FND-004.
+
+Three new pure, Android-free data shapes in `core/model/` back the rest of the harness — not new product decisions, just already-specified F0.4/F0.5/F0.6/F0.11 vocabularies transcribed into domain-safe types so the replay/fake infrastructure has something concrete to work with:
+- `LocationSample` — the observation-level subset of F0.5 §5/F0.7 §6.2's RawTrackPoint contract (everything except capture bookkeeping), per F0.12 §5.2's field list.
+- `ActivityTransitionSample` (+ `ActivityType`, `TransitionType`) — F0.4 §4.1's activity vocabulary + F0.6 §6.3's event field list.
+- `CapabilityInputs` — the raw permission/service/setting inputs F0.11 §18-19 resolves into FULL_AUTO/ASSISTED_AUTO/MANUAL/LOCATION_DEGRADED. This is deliberately just the input shape, not the resolver — `CAP-001` (next task, not yet implemented) owns the actual decision logic.
+
+Test infrastructure lives in a new `app/src/test/.../testing/` package: `LocationReplaySource`/`ActivityReplaySource` (replay a fixed sequence via `Flow`, no real delays, no interpretation — just data replay), `FakeDispatcherProvider` (collapses io/default/main onto one `TestDispatcher`), `FakeCapabilityProvider` (mutable `CapabilityInputs` behind a `StateFlow`, with `fullAuto()`/`cleanInstall()` presets matching CAP-001's own stated test matrix), and `TestDatabaseFactory` (extracted from `TripCaptureDaoTest`'s original inline setup — both the in-memory and file-backed flavors F0.12 §5.6 asks for).
+
+Proved the acceptance criterion directly with `ReplayDeterminismTest` (replaying the same sequence twice yields identical output; wall-clock time measured to confirm nothing is actually sleeping) and `TestDatabaseFactoryTest` (file-backed DB survives a real close/reopen — the one flavor that hadn't been exercised yet). `TripCaptureDaoTest` refactored to use `TestDatabaseFactory` instead of repeating its own setup.
+
+Verified with `./gradlew assembleDebug testDebugUnitTest`: 17/17 tests pass across the whole suite (up from 12).
+
+Two self-caught bugs this task, both the same class of mistake as one already found in FND-004: a KDoc comment containing the literal substring `*/` in running text (`"...DET-*/PRC-*..."`, twice) closed a Kotlin block comment early. Both caught immediately by the compiler; grepped the whole `app/src` tree afterward for the same pattern to confirm no third instance existed.
+
 ---
 
 ### DIA-001 — Structured diagnostic event foundation
