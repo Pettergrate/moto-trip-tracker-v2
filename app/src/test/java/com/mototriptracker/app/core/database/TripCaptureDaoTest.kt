@@ -4,7 +4,9 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.mototriptracker.app.core.database.entity.TripCaptureEntity
 import com.mototriptracker.app.core.model.CaptureStatus
+import com.mototriptracker.app.core.model.DetectorVersion
 import com.mototriptracker.app.core.model.EndSource
+import com.mototriptracker.app.core.model.LocationProfileVersion
 import com.mototriptracker.app.core.model.StartSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -65,8 +67,8 @@ class TripCaptureDaoTest {
         localTimeZoneId = "UTC",
         startSource = StartSource.MANUAL,
         endSource = null,
-        detectorVersion = 1,
-        locationProfileVersion = 1,
+        detectorVersion = DetectorVersion(1),
+        locationProfileVersion = LocationProfileVersion(1),
         createdAt = 1_000L,
         updatedAt = 1_000L
     )

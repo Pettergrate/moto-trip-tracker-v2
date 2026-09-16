@@ -4,7 +4,9 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.mototriptracker.app.core.model.CaptureStatus
+import com.mototriptracker.app.core.model.DetectorVersion
 import com.mototriptracker.app.core.model.EndSource
+import com.mototriptracker.app.core.model.LocationProfileVersion
 import com.mototriptracker.app.core.model.StartSource
 
 /**
@@ -31,8 +33,8 @@ data class TripCaptureEntity(
     val localTimeZoneId: String,
     val startSource: StartSource,
     val endSource: EndSource?,
-    val detectorVersion: Int,
-    val locationProfileVersion: Int,
+    val detectorVersion: DetectorVersion,
+    val locationProfileVersion: LocationProfileVersion,
     val createdAt: Long,
     val updatedAt: Long
 )

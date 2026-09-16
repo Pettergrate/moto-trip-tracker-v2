@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import com.mototriptracker.app.core.model.ProcessingVersion
 import com.mototriptracker.app.core.model.StopOrigin
 
 /**
@@ -35,5 +36,5 @@ data class TripStopEntity(
     val durationMs: Long,
     val label: String?,
     val lockedByUser: Boolean,
-    val processingVersion: Int?
+    val processingVersion: ProcessingVersion?
 )

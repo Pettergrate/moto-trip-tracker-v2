@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import com.mototriptracker.app.core.model.ProcessingVersion
 
 /**
  * F0.7 §9.4 / ADR-016. An explicit, derived discontinuity — never
@@ -24,7 +25,7 @@ import androidx.room.PrimaryKey
 data class LocationGapEntity(
     @PrimaryKey val id: String,
     val tripId: String,
-    val processingVersion: Int,
+    val processingVersion: ProcessingVersion,
     val startedAt: Long,
     val endedAt: Long,
     val startSourceRef: String?,

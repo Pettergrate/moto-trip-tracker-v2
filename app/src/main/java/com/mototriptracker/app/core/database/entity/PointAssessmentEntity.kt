@@ -3,6 +3,7 @@ package com.mototriptracker.app.core.database.entity
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
+import com.mototriptracker.app.core.model.ProcessingVersion
 import com.mototriptracker.app.core.model.TrackPointDecision
 
 /**
@@ -26,7 +27,7 @@ import com.mototriptracker.app.core.model.TrackPointDecision
 data class PointAssessmentEntity(
     val captureId: String,
     val sequenceNumber: Long,
-    val processingVersion: Int,
+    val processingVersion: ProcessingVersion,
     val decision: TrackPointDecision,
     val reasonCodes: String
 )

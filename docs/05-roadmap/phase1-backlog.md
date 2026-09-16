@@ -98,6 +98,14 @@ Deviations discovered only by attempting real builds, documented in `gradle/libs
 
 **Acceptance:** core logic can use fake clocks; domain does not directly call Android system clock; versions are persisted/available where defined.
 
+**Status: Done (2026-09-16).** `core/common/Clock` (interface) + `AndroidClock` (the only class allowed to call `System.currentTimeMillis()`/`android.os.SystemClock.elapsedRealtimeNanos()`) give domain/data code a seam instead of a direct platform dependency (ADR-013). `core/common/IdGenerator` + `UuidIdGenerator` do the same for F0.7 §2.3/F0.8 §8.1 stable identifiers. Both are bound in `core/di/AppModule.kt` via `@Binds` (its first real bindings — FND-002 only proved the empty graph compiled). Test doubles `FakeClock`/`FakeIdGenerator` live under `app/src/test/.../core/common/` and are proven correct by `ClockTest`/`IdGeneratorTest` — this satisfies "core logic can use fake clocks" directly; no artificial domain-logic consumer was invented just to exercise the seam, since none exists yet (DET-*/PRC-* will be the first real consumers and get tested against these same fakes).
+
+Version primitives (`DetectorVersion`, `LocationProfileVersion`, `ProcessingVersion` — `@JvmInline value class` wrapping `Int`, zero runtime cost, `Comparable`) live in `core/model/Versions.kt` per ADR-014 ("identificadores independientes"). Retrofitted into the FND-003 entities that already carried these as plain `Int` (`TripCaptureEntity.detectorVersion/locationProfileVersion`; `processingVersion` on `ProcessedTrackPointEntity`, `PointAssessmentEntity`, `TripStatisticsEntity`, `LocationGapEntity`, `TripStopEntity`) — verified empirically that Room 2.8.5 accepts value classes natively (including inside composite primary keys) with **no schema/affinity change** (confirmed by re-diffing the exported schema JSON: same `INTEGER` affinity, same column names). `schemaVersion` itself is not wrapped — Room's own `@Database(version = ...)` already models it, per ADR-014's own listing.
+
+Verified with `./gradlew assembleDebug testDebugUnitTest` — 12/12 tests pass across the whole suite (up from 4), including the retrofitted `TripCaptureDaoTest`.
+
+One self-caught bug during this task, unrelated to the above: a KDoc comment containing the literal substring `*/` inside running text (`"...DET-*/PRC-*..."`) closed the Kotlin block comment early, turning the rest of the doc into invalid top-level code. Caught by the compiler immediately, fixed by rewording. Noted here only because it's a sharp edge worth remembering when writing KDoc that mentions task-ID wildcards.
+
 ---
 
 ### TST-001 — Deterministic test harness

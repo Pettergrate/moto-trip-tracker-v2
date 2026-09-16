@@ -3,6 +3,7 @@ package com.mototriptracker.app.core.database.entity
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
+import com.mototriptracker.app.core.model.ProcessingVersion
 
 /**
  * F0.7 §9.3. Derived, regenerable Trip metrics for a given processingVersion.
@@ -33,7 +34,7 @@ import androidx.room.Index
 )
 data class TripStatisticsEntity(
     val tripId: String,
-    val processingVersion: Int,
+    val processingVersion: ProcessingVersion,
     val computedAt: Long,
     val distanceM: Double,
     val totalDurationMs: Long,
