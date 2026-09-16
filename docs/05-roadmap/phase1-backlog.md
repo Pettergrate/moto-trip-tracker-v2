@@ -163,6 +163,14 @@ Re-verified with `./gradlew assembleDebug testDebugUnitTest`: 17/17 tests still 
 
 **Acceptance:** deterministic unit coverage for clean install, denied permissions, approximate location, disabled location services and notification denial.
 
+**Status: Done (2026-09-16).** `domain/capability/CapabilityResolver` — the first real logic in `domain/` (everything before it was pure data shapes or infrastructure); `DomainBoundaryTest` from FND-002 finally has real code to check, and still passes (zero `android.*`/`androidx.*` imports).
+
+Precedence, documented in the resolver's own KDoc: (1) missing precise location or disabled location services → `LOCATION_DEGRADED`, overriding everything else — this includes a clean install with every field false, deliberately, since Android's own permission API can't distinguish "never asked" from "denied" either; a friendlier first-run copy for that case is a UI/onboarding concern, not this resolver's. (2) Auto Tracking off by the user, or Activity Recognition not granted → `MANUAL` (F0.9 §16 / F0.11 §5, no approved Assisted fallback for AR denial). (3) otherwise `FULL_AUTO` only if background location AND notifications are both available (F0.11 §18/§9); `ASSISTED_AUTO` otherwise.
+
+10 deterministic tests cover every named scenario from the acceptance criterion (clean install, denied Activity Recognition, denied background location, approximate-only, disabled location services, denied notifications) plus the Auto-Tracking-off case and a couple of precedence checks (AR denial overriding an otherwise-fine location; multiple simultaneous Full-Auto disqualifiers still landing on Assisted, not a worse state).
+
+Verified with `./gradlew assembleDebug testDebugUnitTest`: 27/27 tests pass across the whole suite (up from 17).
+
 ---
 
 ### EXP-001 — Diagnostic harness shell
