@@ -194,6 +194,14 @@ Verified with `./gradlew assembleDebug testDebugUnitTest`: 27/27 tests pass acro
 
 **Acceptance:** session metadata, ground-truth markers and diagnostic export can be captured without becoming user-facing Core UX.
 
+**Status: Done (2026-09-16) — W0 complete.** New `experiment/` package (not Room-backed, deliberately: F0.6's harness output is external analysis files — `session.json`/`annotations.json` — not a production-queryable feature, so keeping it out of `MotoTripDatabase` avoids conflating throwaway experiment data with domain data). `FieldTestSessionMetadata` transcribes F0.6 §6.1's field list verbatim (re-read directly before writing it, given the transcription-bug pattern already found twice); `GroundTruthMarkerType`/`GroundTruthMarker` transcribe F0.6 §7's exact vocabulary. `GroundTruthMarkerLog` accumulates markers (pure, no Android). `FieldTestDatasetWriter` (seam, ADR-013) + `AndroidFieldTestDatasetWriter` (writes to `filesDir/field-tests/sessions/<sessionId>/`) + `FieldTestSessionJson` (serialization via `org.json`, bundled in the Android SDK — no new dependency) + `FieldTestSessionExporter` (ties it together) implement the two files EXP-001 is actually scoped to produce.
+
+**Explicitly not built:** F0.6 §20 lists more dataset files (`raw-track.csv`, `activity-events.jsonl`, `detector-events.jsonl`, `system-events.jsonl`, `processed-track.geojson`, `battery/`) — these need data sources that don't exist yet (`TRK-002` raw location ingestion, `DET-001` activity recognition, a real detector/system-lifecycle observer). Writing placeholder/empty versions of those files just to match F0.6 §20's directory structure would be fabricating dataset content with nothing behind it, so this task doesn't do that — those files get written by the tasks that actually produce their data, when W2's field campaigns need them.
+
+Verified, including one real bug caught: `org.json.JSONObject`/`JSONArray` resolve to the Android SDK **stub** jar outside Robolectric, and every method on the stub throws `RuntimeException("Stub!")` at runtime — the two tests exercising serialization failed immediately until `@RunWith(RobolectricTestRunner::class)` was added (same class of environment gotcha as TST-001's Room/Context issue, different API). `AndroidFieldTestDatasetWriterTest` additionally proves the production writer reaches real file I/O under Robolectric's `Context.filesDir`, not just that it compiles.
+
+`./gradlew assembleDebug testDebugUnitTest`: 36/36 tests pass across the whole suite (up from 30). This closes every task in Wave W0 (`FND-001..004`, `TST-001`, `DIA-001`, `CAP-001`, `EXP-001`) — see `docs/05-roadmap/v2-roadmap.md` §4 for W0's exit condition and W1's entry point.
+
 ---
 
 ## W1 — Manual Recording Vertical Slice

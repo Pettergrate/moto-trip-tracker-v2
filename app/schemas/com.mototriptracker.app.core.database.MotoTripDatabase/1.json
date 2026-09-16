@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 1,
-    "identityHash": "1cb8a963e18c8c9325be004851b86071",
+    "identityHash": "f31a54b4ada7e1d0a7c1be05c13bc26c",
     "entities": [
       {
         "tableName": "trip_capture",
@@ -1568,7 +1568,7 @@
       },
       {
         "tableName": "diagnostic_event",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` TEXT NOT NULL, `occurredAt` INTEGER NOT NULL, `elapsedRealtimeNanos` INTEGER, `temporaryLatitude` REAL NOT NULL, `category` TEXT NOT NULL, `eventType` TEXT NOT NULL, `severity` TEXT NOT NULL, `source` TEXT NOT NULL, `captureId` TEXT, `tripId` TEXT, `correlationId` TEXT, `stateBefore` TEXT, `stateAfter` TEXT, `reasonCode` TEXT, `metadata` TEXT NOT NULL, `appVersion` TEXT NOT NULL, `schemaVersion` INTEGER NOT NULL, `detectorVersion` INTEGER NOT NULL, `locationProfileVersion` INTEGER NOT NULL, `processingVersion` INTEGER NOT NULL, PRIMARY KEY(`eventId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` TEXT NOT NULL, `occurredAt` INTEGER NOT NULL, `elapsedRealtimeNanos` INTEGER, `category` TEXT NOT NULL, `eventType` TEXT NOT NULL, `severity` TEXT NOT NULL, `source` TEXT NOT NULL, `captureId` TEXT, `tripId` TEXT, `correlationId` TEXT, `stateBefore` TEXT, `stateAfter` TEXT, `reasonCode` TEXT, `metadata` TEXT NOT NULL, `appVersion` TEXT NOT NULL, `schemaVersion` INTEGER NOT NULL, `detectorVersion` INTEGER NOT NULL, `locationProfileVersion` INTEGER NOT NULL, `processingVersion` INTEGER NOT NULL, PRIMARY KEY(`eventId`))",
         "fields": [
           {
             "fieldPath": "eventId",
@@ -1586,12 +1586,6 @@
             "fieldPath": "elapsedRealtimeNanos",
             "columnName": "elapsedRealtimeNanos",
             "affinity": "INTEGER"
-          },
-          {
-            "fieldPath": "temporaryLatitude",
-            "columnName": "temporaryLatitude",
-            "affinity": "REAL",
-            "notNull": true
           },
           {
             "fieldPath": "category",
@@ -1750,7 +1744,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '1cb8a963e18c8c9325be004851b86071')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f31a54b4ada7e1d0a7c1be05c13bc26c')"
     ]
   }
 }
