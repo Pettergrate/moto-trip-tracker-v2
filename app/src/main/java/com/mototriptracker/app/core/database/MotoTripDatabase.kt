@@ -2,8 +2,11 @@ package com.mototriptracker.app.core.database
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
+import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.database.entity.CaptureEventEntity
+import com.mototriptracker.app.core.database.entity.DiagnosticEventEntity
 import com.mototriptracker.app.core.database.entity.LocationGapEntity
 import com.mototriptracker.app.core.database.entity.ManualPauseIntervalEntity
 import com.mototriptracker.app.core.database.entity.MarkerEntity
@@ -24,15 +27,15 @@ import com.mototriptracker.app.core.database.entity.TripTagEntity
 
 /**
  * Room source of truth (ADR-003). Schema v1 — FND-003, covering the full
- * conceptual model from docs/03-architecture/domain-data-model.md (F0.7).
- * schemaVersion bumps and migrations are a separate, later concern (F0.8
- * §16-17) once a v2 is actually needed.
+ * conceptual model from docs/03-architecture/domain-data-model.md (F0.7),
+ * plus DIA-001's DiagnosticEventEntity. schemaVersion bumps and migrations
+ * are a separate, later concern (F0.8 §16-17) once a v2 is actually needed
+ * — still pre-release, so DIA-001 adds its table to v1 rather than forcing
+ * a migration nothing yet needs.
  *
- * Only TripCaptureDao exists so far, to prove and exercise the
- * single-active-capture invariant (FND-003's specific acceptance
- * criterion). Other DAOs are added by the tasks that need them
- * (TRK-*, PRC-*, EDT-*, HIS-*, FAV-*, etc.) rather than pre-built here
- * without a caller.
+ * Only TripCaptureDao and DiagnosticEventDao exist so far. Other DAOs are
+ * added by the tasks that need them (TRK-*, PRC-*, EDT-*, HIS-*, FAV-*,
+ * etc.) rather than pre-built here without a caller.
  */
 @Database(
     entities = [
@@ -53,11 +56,14 @@ import com.mototriptracker.app.core.database.entity.TripTagEntity
         TagEntity::class,
         TripTagEntity::class,
         MarkerEntity::class,
-        MotorcycleEntity::class
+        MotorcycleEntity::class,
+        DiagnosticEventEntity::class
     ],
     version = 1,
     exportSchema = true
 )
+@TypeConverters(DiagnosticMetadataConverters::class)
 abstract class MotoTripDatabase : RoomDatabase() {
     abstract fun tripCaptureDao(): TripCaptureDao
+    abstract fun diagnosticEventDao(): DiagnosticEventDao
 }

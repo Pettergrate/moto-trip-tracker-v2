@@ -152,6 +152,18 @@ Re-verified with `./gradlew assembleDebug testDebugUnitTest`: 17/17 tests still 
 
 **Acceptance:** event schema exists; ordinary GPS points do not generate event spam; release logging does not expose coordinates.
 
+**Status: Done (2026-09-16).** `DiagnosticEventEntity` (19th table, still schema v1 — pre-release, so no migration ceremony needed for adding it) implements F0.13 §4's full field contract, plus `DiagnosticCategory`/`DiagnosticSeverity` (F0.13 §5/§6, in `core/model`) and a minimal `DiagnosticEventDao` (insert + the reads needed to prove persistence — no Debug Screen/export query needs pre-built without a caller). `metadata` (F0.13 §4: "mapa pequeño y allowlisted") persists via `DiagnosticMetadataConverters`, a `Map<String,String>` <-> TEXT converter using plain `java.net.URLEncoder`/`URLDecoder` — no JSON library dependency added for a handful of short key-value pairs.
+
+Deliberately **no foreign key** from `DiagnosticEventEntity` to `TripCaptureEntity`/`TripEntity`: `captureId`/`tripId` are correlation hints, not referential constraints, because diagnostic data has its own independent retention policy (F0.13 §12: ~14 days/~20,000 events) that must stay decoupled from domain data's lifecycle in both directions.
+
+Two of the three acceptance criteria are structural and verified directly:
+- **"event schema exists"** — `DiagnosticEventDaoTest` round-trips a full event (with metadata) and an empty-metadata event through a real Room database.
+- **"release logging does not expose coordinates"** — enforced at the type level, the same way `DomainBoundaryTest` enforces ADR-013: `DiagnosticEventPrivacyTest` reflects over `DiagnosticEventEntity`'s fields and fails the build if any name matches `latitude`/`longitude`/`notes`/`name`. Verified it actually catches a violation (temporarily added a `temporaryLatitude` field, confirmed the test failed, removed it) rather than trusting the entity has no such field by inspection alone.
+
+The third — **"ordinary GPS points do not generate event spam"** — is a documented contract for future producers (F0.13 §3.1: don't insert one of these per accepted RawTrackPoint), not something this task can operationally verify: there is no producer yet (`TRK-002`/`PRC-001` will be the first ones). Said so directly rather than claiming a test proves a rule nothing yet exercises.
+
+Verified with `./gradlew assembleDebug testDebugUnitTest`: 30/30 tests pass across the whole suite (up from 27); schema export confirms 19 tables including `diagnostic_event`.
+
 ---
 
 ### CAP-001 — Capability resolver
