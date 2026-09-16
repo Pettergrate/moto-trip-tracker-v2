@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -28,6 +29,31 @@
             android:name=".tracking.service.TrackingForegroundService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!--
+          TRK-004: WorkManager's default on-demand initializer runs as a
+          ContentProvider, which is created before Application.onCreate() -
+          before Hilt has injected HiltWorkerFactory into MotoTripApplication.
+          Verified on-device: the default initializer silently used a plain
+          Configuration (no custom worker factory), so @HiltWorker classes
+          like TripProcessingWorker failed with
+          "NoSuchMethodException: ...<init>[Context, WorkerParameters]" -
+          WorkManager's reflection-based default factory can't build a class
+          with extra Hilt-injected constructor parameters. Disabling this and
+          calling WorkManager.initialize() manually from onCreate() (after
+          injection has happened) is the documented fix for this exact
+          Hilt/WorkManager ordering problem.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
     </application>
 

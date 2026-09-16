@@ -10,8 +10,13 @@ import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.LocationSample
 import com.mototriptracker.app.core.notification.TrackingNotificationController
 import com.mototriptracker.app.testing.FakeLocationGateway
+import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
+import com.mototriptracker.app.tracking.location.LocationGateway
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -48,6 +53,7 @@ import org.robolectric.shadows.ShadowNotificationManager
 class TrackingForegroundServiceTest {
 
     private lateinit var db: MotoTripDatabase
+    private val processingScheduler = FakeProcessingScheduler()
 
     @Before
     fun setUp() {
@@ -73,10 +79,15 @@ class TrackingForegroundServiceTest {
         // different database than the one it asserts against.
         controller.create()
         service.coordinator = TrackingSessionCoordinator(
+            database = db,
             tripCaptureDao = db.tripCaptureDao(),
             diagnosticEventDao = db.diagnosticEventDao(),
             rawTrackPointDao = db.rawTrackPointDao(),
+            captureEventDao = db.captureEventDao(),
+            tripDao = db.tripDao(),
+            tripPartDao = db.tripPartDao(),
             locationGateway = FakeLocationGateway(locationSamples),
+            processingScheduler = processingScheduler,
             clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L),
             idGenerator = FakeIdGenerator(prefix = "capture")
         )
@@ -188,5 +199,87 @@ class TrackingForegroundServiceTest {
             !shadowService.isStoppedBySelf
         )
         assertEquals(1, db.rawTrackPointDao().findAllByCapture(captureId).size)
+    }
+
+    @Test
+    fun actionFinishCompletesTheCaptureAndStopsTheService() = runBlocking {
+        val controller = buildServiceController()
+        controller.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+        val captureId = requireNotNull(db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE)).id
+
+        controller.withIntent(TrackingForegroundService.createFinishIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+        controller.get().lastUncaughtCommandError?.let { throw it }
+
+        val capture = requireNotNull(db.tripCaptureDao().findById(captureId))
+        assertEquals(CaptureStatus.COMPLETED, capture.status)
+        assertNotNull(
+            "expected a Finished result, got ${controller.get().lastFinishResult}",
+            controller.get().lastFinishResult as? TrackingSessionCoordinator.FinishResult.Finished
+        )
+        assertEquals(1, processingScheduler.enqueuedRequests.size)
+
+        val shadowService = shadowOf(controller.get())
+        assertTrue("service should stop itself after Finish", shadowService.isStoppedBySelf)
+    }
+
+    @Test
+    fun actionFinishStopsLocationRecordingBeforeFinishingTheCapture() = runBlocking {
+        // A gateway that never completes on its own (unlike the finite
+        // FakeLocationGateway used elsewhere) - if Finish didn't actually
+        // cancel it first, this test would hang forever joining it.
+        val neverEndingSamples = object : LocationGateway {
+            override fun locationUpdates(): Flow<LocationSample> = flow { awaitCancellation() }
+        }
+        val controller = Robolectric.buildService(TrackingForegroundService::class.java)
+        val service = controller.get()
+        controller.create()
+        service.coordinator = TrackingSessionCoordinator(
+            database = db,
+            tripCaptureDao = db.tripCaptureDao(),
+            diagnosticEventDao = db.diagnosticEventDao(),
+            rawTrackPointDao = db.rawTrackPointDao(),
+            captureEventDao = db.captureEventDao(),
+            tripDao = db.tripDao(),
+            tripPartDao = db.tripPartDao(),
+            locationGateway = neverEndingSamples,
+            processingScheduler = processingScheduler,
+            clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L),
+            idGenerator = FakeIdGenerator(prefix = "capture")
+        )
+        service.notificationController = TrackingNotificationController(ApplicationProvider.getApplicationContext())
+        service.dispatchers = AndroidDispatcherProvider()
+
+        controller.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+        assertTrue("recording job should still be active", controller.get().locationRecordingJob?.isActive == true)
+
+        controller.withIntent(TrackingForegroundService.createFinishIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+
+        assertTrue(
+            "the never-ending recording job must have been cancelled by Finish",
+            controller.get().locationRecordingJob?.isActive == false
+        )
+        val shadowService = shadowOf(controller.get())
+        assertTrue(shadowService.isStoppedBySelf)
+    }
+
+    @Test
+    fun actionFinishWithNoActiveCaptureStopsTheServiceWithoutCrashing() = runBlocking {
+        val controller = buildServiceController()
+
+        controller.withIntent(TrackingForegroundService.createFinishIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+        controller.get().lastUncaughtCommandError?.let { throw it }
+
+        val shadowService = shadowOf(controller.get())
+        assertTrue(shadowService.isStoppedBySelf)
     }
 }

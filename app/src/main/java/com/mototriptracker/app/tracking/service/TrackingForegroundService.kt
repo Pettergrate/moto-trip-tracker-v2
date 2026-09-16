@@ -15,16 +15,17 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import androidx.annotation.VisibleForTesting
 
 /**
  * ADR-004: the Android owner of an active capture. Manual Start,
- * sticky-restart rehydration (TRK-001) and location recording for the
- * lifetime of the ACTIVE capture (TRK-002). Pause/Resume/Finish
- * (TRK-003/TRK-004) are separate tasks that extend this class, not
- * duplicated here.
+ * sticky-restart rehydration (TRK-001), location recording for the lifetime
+ * of the ACTIVE capture (TRK-002) and Finish (TRK-004). Pause/Resume
+ * (TRK-003) is a separate task that extends this class, not duplicated
+ * here.
  *
  * `startForeground()` is called synchronously as the very first thing in
  * [onStartCommand], before any suspending work — Android requires it within
@@ -61,6 +62,10 @@ class TrackingForegroundService : Service() {
 
     @VisibleForTesting
     var lastStartResult: TrackingSessionCoordinator.StartResult? = null
+        private set
+
+    @VisibleForTesting
+    var lastFinishResult: TrackingSessionCoordinator.FinishResult? = null
         private set
 
     /**
@@ -104,10 +109,35 @@ class TrackingForegroundService : Service() {
                 lastStartResult = result
                 ensureLocationRecording(result.captureId)
             }
+            ACTION_FINISH -> serviceScope.launch { finishActiveCaptureAndStop() }
             else -> serviceScope.launch { rehydrateOrStop() }
         }
 
         return START_STICKY
+    }
+
+    /**
+     * F0.10 §15.1's ordering: stop collecting new evidence (step 2 — no
+     * buffer to flush per TRK-002's design, so nothing corresponds to step
+     * 3) *before* running the Finish transaction, so `finishCapture`'s
+     * TripPart doesn't race a location update landing after it already read
+     * the capture's last `sequenceNumber`. `cancelAndJoin` (not plain
+     * `cancel`) waits for that in-flight collection to actually stop instead
+     * of racing it. A missing ACTIVE capture (already finished by a prior
+     * command, or a stale/duplicate Finish intent) skips the coordinator
+     * call entirely — REL-INV-007's idempotency is the coordinator's job
+     * once there's a captureId to check against — but the service still
+     * stops itself either way: whatever Finish was asked to do is already
+     * done, so sitting in the foreground afterward has no reason to.
+     */
+    private suspend fun finishActiveCaptureAndStop() {
+        val active = coordinator.findActiveCapture()
+        if (active != null) {
+            locationRecordingJob?.cancelAndJoin()
+            lastFinishResult = coordinator.finishCapture(active.id)
+        }
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     /**
@@ -142,8 +172,12 @@ class TrackingForegroundService : Service() {
     companion object {
         private const val TAG = "TrackingFgService"
         const val ACTION_START = "com.mototriptracker.app.action.START_TRACKING"
+        const val ACTION_FINISH = "com.mototriptracker.app.action.FINISH_TRACKING"
 
         fun createStartIntent(context: Context): Intent =
             Intent(context, TrackingForegroundService::class.java).setAction(ACTION_START)
+
+        fun createFinishIntent(context: Context): Intent =
+            Intent(context, TrackingForegroundService::class.java).setAction(ACTION_FINISH)
     }
 }

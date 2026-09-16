@@ -3,9 +3,12 @@ package com.mototriptracker.app.core.di
 import android.content.Context
 import androidx.room.Room
 import com.mototriptracker.app.core.database.MotoTripDatabase
+import com.mototriptracker.app.core.database.dao.CaptureEventDao
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
+import com.mototriptracker.app.core.database.dao.TripDao
+import com.mototriptracker.app.core.database.dao.TripPartDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -42,4 +45,13 @@ object DatabaseModule {
 
     @Provides
     fun provideRawTrackPointDao(database: MotoTripDatabase): RawTrackPointDao = database.rawTrackPointDao()
+
+    @Provides
+    fun provideCaptureEventDao(database: MotoTripDatabase): CaptureEventDao = database.captureEventDao()
+
+    @Provides
+    fun provideTripDao(database: MotoTripDatabase): TripDao = database.tripDao()
+
+    @Provides
+    fun provideTripPartDao(database: MotoTripDatabase): TripPartDao = database.tripPartDao()
 }

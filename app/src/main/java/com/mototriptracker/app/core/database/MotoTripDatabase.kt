@@ -3,9 +3,12 @@ package com.mototriptracker.app.core.database
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import com.mototriptracker.app.core.database.dao.CaptureEventDao
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
+import com.mototriptracker.app.core.database.dao.TripDao
+import com.mototriptracker.app.core.database.dao.TripPartDao
 import com.mototriptracker.app.core.database.entity.CaptureEventEntity
 import com.mototriptracker.app.core.database.entity.DiagnosticEventEntity
 import com.mototriptracker.app.core.database.entity.LocationGapEntity
@@ -34,9 +37,10 @@ import com.mototriptracker.app.core.database.entity.TripTagEntity
  * — still pre-release, so DIA-001 adds its table to v1 rather than forcing
  * a migration nothing yet needs.
  *
- * TripCaptureDao, DiagnosticEventDao and (TRK-002) RawTrackPointDao exist so
- * far. Other DAOs are added by the tasks that need them (PRC-*, EDT-*,
- * HIS-*, FAV-*, etc.) rather than pre-built here without a caller.
+ * TripCaptureDao, DiagnosticEventDao, RawTrackPointDao (TRK-002) and
+ * CaptureEventDao/TripDao/TripPartDao (TRK-004) exist so far. Other DAOs are
+ * added by the tasks that need them (PRC-*, EDT-*, HIS-*, FAV-*, etc.)
+ * rather than pre-built here without a caller.
  */
 @Database(
     entities = [
@@ -68,4 +72,7 @@ abstract class MotoTripDatabase : RoomDatabase() {
     abstract fun tripCaptureDao(): TripCaptureDao
     abstract fun diagnosticEventDao(): DiagnosticEventDao
     abstract fun rawTrackPointDao(): RawTrackPointDao
+    abstract fun captureEventDao(): CaptureEventDao
+    abstract fun tripDao(): TripDao
+    abstract fun tripPartDao(): TripPartDao
 }

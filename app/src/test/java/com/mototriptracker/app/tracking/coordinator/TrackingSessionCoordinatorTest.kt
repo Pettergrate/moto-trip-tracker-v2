@@ -9,7 +9,10 @@ import com.mototriptracker.app.core.model.DiagnosticCategory
 import com.mototriptracker.app.core.model.DiagnosticSeverity
 import com.mototriptracker.app.core.model.LocationSample
 import com.mototriptracker.app.testing.FakeLocationGateway
+import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -35,12 +38,18 @@ class TrackingSessionCoordinatorTest {
     private lateinit var db: MotoTripDatabase
     private lateinit var coordinator: TrackingSessionCoordinator
     private val clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L)
+    private val processingScheduler = FakeProcessingScheduler()
 
     private fun coordinatorWith(samples: List<LocationSample>) = TrackingSessionCoordinator(
+        database = db,
         tripCaptureDao = db.tripCaptureDao(),
         diagnosticEventDao = db.diagnosticEventDao(),
         rawTrackPointDao = db.rawTrackPointDao(),
+        captureEventDao = db.captureEventDao(),
+        tripDao = db.tripDao(),
+        tripPartDao = db.tripPartDao(),
         locationGateway = FakeLocationGateway(samples),
+        processingScheduler = processingScheduler,
         clock = clock,
         idGenerator = FakeIdGenerator(prefix = "capture")
     )
@@ -157,5 +166,125 @@ class TrackingSessionCoordinatorTest {
         val failureEvent = db.diagnosticEventDao().findAll().single { it.captureId == orphanCaptureId }
         assertEquals(DiagnosticCategory.PERSISTENCE, failureEvent.category)
         assertEquals(DiagnosticSeverity.ERROR, failureEvent.severity)
+    }
+
+    @Test
+    fun finishCaptureCompletesTheCaptureCreatesATripAndEnqueuesProcessing() = runTest {
+        val captureId =
+            (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+
+        val result = coordinator.finishCapture(captureId)
+
+        assertTrue(result is TrackingSessionCoordinator.FinishResult.Finished)
+        val tripId = (result as TrackingSessionCoordinator.FinishResult.Finished).tripId
+
+        val capture = requireNotNull(db.tripCaptureDao().findById(captureId))
+        assertEquals(CaptureStatus.COMPLETED, capture.status)
+        assertEquals(clock.wallClockMillis(), capture.endedAt)
+        assertEquals(0, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+
+        val trip = requireNotNull(db.tripDao().findById(tripId))
+        assertEquals(com.mototriptracker.app.core.model.TripStatus.COMPLETED, trip.status)
+
+        val part = requireNotNull(db.tripPartDao().findByCaptureId(captureId))
+        assertEquals(tripId, part.tripId)
+        assertEquals(capture.startElapsedRealtimeNanos, part.startElapsedRealtimeNanos)
+
+        assertEquals(
+            listOf(FakeProcessingScheduler.EnqueuedRequest(tripId, captureId)),
+            processingScheduler.enqueuedRequests
+        )
+    }
+
+    @Test
+    fun finishCaptureWithNoRawPointsLeavesTripPartSequenceNumbersNull() = runTest {
+        val captureId =
+            (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+
+        coordinator.finishCapture(captureId)
+
+        val part = requireNotNull(db.tripPartDao().findByCaptureId(captureId))
+        assertNull("no points were ever recorded - must stay null, not 0", part.startSequenceNumber)
+        assertNull(part.endSequenceNumber)
+    }
+
+    @Test
+    fun finishCaptureWithRawPointsSetsStartAndEndSequenceNumbers() = runTest {
+        val captureId =
+            (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinatorWith(listOf(sample(1_000L), sample(2_000L), sample(3_000L))).recordLocationUpdates(captureId)
+
+        coordinator.finishCapture(captureId)
+
+        val part = requireNotNull(db.tripPartDao().findByCaptureId(captureId))
+        assertEquals(0L, part.startSequenceNumber)
+        assertEquals(2L, part.endSequenceNumber)
+    }
+
+    @Test
+    fun repeatedFinishIsIdempotentAndDoesNotCreateASecondTripOrEnqueueTwice() = runTest {
+        val captureId =
+            (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        val first = coordinator.finishCapture(captureId) as TrackingSessionCoordinator.FinishResult.Finished
+
+        val second = coordinator.finishCapture(captureId)
+
+        assertTrue(second is TrackingSessionCoordinator.FinishResult.AlreadyFinished)
+        assertEquals(first.tripId, (second as TrackingSessionCoordinator.FinishResult.AlreadyFinished).tripId)
+        assertEquals(1, processingScheduler.enqueuedRequests.size)
+
+        // The second Finish's own diagnostic event must record what was
+        // actually true going into it (COMPLETED), not blindly repeat the
+        // first Finish's ACTIVE -> COMPLETED transition.
+        val secondFinishEvent = db.diagnosticEventDao().findAll().last { it.eventType == "FINISH" }
+        assertEquals(CaptureStatus.COMPLETED.name, secondFinishEvent.stateBefore)
+    }
+
+    @Test
+    fun finishCommandIsRecordedAsADiagnosticEvent() = runTest {
+        val captureId =
+            (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+
+        coordinator.finishCapture(captureId)
+
+        // 1 for Start, 1 for Finish.
+        assertEquals(2, db.diagnosticEventDao().count())
+    }
+
+    @Test
+    fun concurrentFinishAttemptsForTheSameCaptureCreateOnlyOneTrip() = runTest {
+        val captureId =
+            (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+
+        // Mirrors FND-003's concurrent-start proof, but for
+        // database.withTransaction {} rather than a @Transaction DAO method
+        // - a different Room mechanism, verified separately rather than
+        // assumed to behave the same way. A real UuidIdGenerator (not the
+        // colliding-by-design FakeIdGenerator, whose counter restarts at 1
+        // for every new instance) so a genuine double-Trip bug shows up as
+        // two distinct rows instead of a misleading primary-key collision.
+        val jobs = (1..20).map {
+            async {
+                TrackingSessionCoordinator(
+                    database = db,
+                    tripCaptureDao = db.tripCaptureDao(),
+                    diagnosticEventDao = db.diagnosticEventDao(),
+                    rawTrackPointDao = db.rawTrackPointDao(),
+                    captureEventDao = db.captureEventDao(),
+                    tripDao = db.tripDao(),
+                    tripPartDao = db.tripPartDao(),
+                    locationGateway = FakeLocationGateway(emptyList()),
+                    processingScheduler = FakeProcessingScheduler(),
+                    clock = clock,
+                    idGenerator = com.mototriptracker.app.core.common.UuidIdGenerator()
+                ).finishCapture(captureId)
+            }
+        }
+        val results = jobs.awaitAll()
+
+        val finishedCount = results.count { it is TrackingSessionCoordinator.FinishResult.Finished }
+        assertEquals(1, finishedCount)
+        assertEquals(CaptureStatus.COMPLETED, db.tripCaptureDao().findById(captureId)?.status)
+        assertEquals(1, results.map { it.tripId }.distinct().size)
     }
 }
