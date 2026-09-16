@@ -2,9 +2,9 @@
 ## Phase 0 — Master Document
 
 **Project type:** Greenfield Android application  
-**Status:** Phase 0 — Discovery & Design (documentation review complete; implementation not started)  
-**Version:** 0.17
-**Last updated:** 2026-09-15
+**Status:** Phase 0 documentation closed (GO, F0.17); Phase 1 implementation underway — Wave W0 complete, Wave W1 in progress (`TRK-001` done)  
+**Version:** 0.18
+**Last updated:** 2026-09-16
 
 ---
 
@@ -203,7 +203,7 @@ Source:
 
 The review found no unresolved product or architecture decision blocking W0. It found and corrected one broken reference (`docs/01-product/product-definition.md` did not exist; see the F0.1 note above — it has since been created) and one stale cross-reference in `docs/03-architecture/system-architecture.md` §23. It also flagged, without fixing, a status-label inconsistency between the F0.2/F0.3 source documents (self-declared "Draft baseline") and this master document's document map (which lists them as Closed/Approved) — this is a documentation-coherence recommendation, not a blocker. Detector thresholds, production location sampling profile, map provider, elevation algorithm and diagnostic retention limits remain correctly deferred to their documented gates (`EXP-008`/G4, `MAP-001`, field measurement) and are not frozen by this review.
 
-**Phase 1 progress:** the project owner authorized starting W0 on 2026-09-15. `FND-001` (Android project bootstrap), `FND-002` (architecture/package skeleton + Hilt DI wiring), `FND-003` (Room schema v1 covering all 18 F0.7 entities + migration-test harness, independently reviewed by Codex with fixes applied), `FND-004` (IDs/clocks/version primitives), `TST-001` (deterministic test harness), `CAP-001` (capability resolver — the first real `domain/` logic), `DIA-001` (structured diagnostic event foundation) and `EXP-001` (F0.6 field-test harness shell) are done — **Wave W0 is complete.** See `docs/05-roadmap/phase1-backlog.md` for task-level reports, including dependency-version deviations from F0.8's exact pins discovered by attempting real builds (documented there and in `gradle/libs.versions.toml`). Wave W1 (Manual Recording Vertical Slice, starting with `TRK-001`) has not been started.
+**Phase 1 progress:** the project owner authorized starting W0 on 2026-09-15. `FND-001` (Android project bootstrap), `FND-002` (architecture/package skeleton + Hilt DI wiring), `FND-003` (Room schema v1 covering all 18 F0.7 entities + migration-test harness, independently reviewed by Codex with fixes applied), `FND-004` (IDs/clocks/version primitives), `TST-001` (deterministic test harness), `CAP-001` (capability resolver — the first real `domain/` logic), `DIA-001` (structured diagnostic event foundation) and `EXP-001` (F0.6 field-test harness shell) are done — **Wave W0 is complete.** Wave W1 (Manual Recording Vertical Slice) is underway: `TRK-001` (foreground tracking service + manual start, coordinator delegates the idempotent check-then-insert to `TripCaptureDao`) is done, verified with a full unit-test pass and real on-device confirmation (Honor DNY-NX9, Android 16) of the foreground notification, exactly-one-ACTIVE-capture invariant, Start idempotency and sticky-restart rehydration. See `docs/05-roadmap/phase1-backlog.md` for task-level reports, including dependency-version deviations from F0.8's exact pins discovered by attempting real builds (documented there and in `gradle/libs.versions.toml`).
 
 ## 9. Phase 0 completion condition
 
