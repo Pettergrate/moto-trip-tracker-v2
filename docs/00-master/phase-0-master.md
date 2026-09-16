@@ -203,7 +203,7 @@ Source:
 
 The review found no unresolved product or architecture decision blocking W0. It found and corrected one broken reference (`docs/01-product/product-definition.md` did not exist; see the F0.1 note above — it has since been created) and one stale cross-reference in `docs/03-architecture/system-architecture.md` §23. It also flagged, without fixing, a status-label inconsistency between the F0.2/F0.3 source documents (self-declared "Draft baseline") and this master document's document map (which lists them as Closed/Approved) — this is a documentation-coherence recommendation, not a blocker. Detector thresholds, production location sampling profile, map provider, elevation algorithm and diagnostic retention limits remain correctly deferred to their documented gates (`EXP-008`/G4, `MAP-001`, field measurement) and are not frozen by this review.
 
-**Phase 1 progress (2026-09-15):** the project owner authorized starting W0 the same day. `FND-001` (Android project bootstrap) is done — see `docs/05-roadmap/phase1-backlog.md` for the task-level report, including two dependency-version deviations from F0.8's exact pins discovered by attempting a real build (documented there and in `gradle/libs.versions.toml`).
+**Phase 1 progress (2026-09-15):** the project owner authorized starting W0 the same day. `FND-001` (Android project bootstrap) and `FND-002` (architecture/package skeleton + Hilt DI wiring) are done — see `docs/05-roadmap/phase1-backlog.md` for task-level reports, including dependency-version deviations from F0.8's exact pins discovered by attempting real builds (documented there and in `gradle/libs.versions.toml`).
 
 ## 9. Phase 0 completion condition
 

@@ -1,8 +1,7 @@
 package com.mototriptracker.app
 
 import android.app.Application
+import dagger.hilt.android.HiltAndroidApp
 
-/**
- * FND-001 bootstrap shell. No DI graph yet — Hilt wiring is FND-002 scope.
- */
+@HiltAndroidApp
 class MotoTripApplication : Application()

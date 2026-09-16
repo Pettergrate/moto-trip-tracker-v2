@@ -17,6 +17,19 @@ coreKtx = "1.18.0"
 activityCompose = "1.11.0"
 junit = "4.13.2"
 
+# FND-002: F0.8 pinned Hilt/Dagger 2.57.1, but that release's Gradle plugin
+# fails against AGP 9's new (BaseExtension-free) DSL with
+# "Android BaseExtension not found" (verified by attempting the real build).
+# 2.60.1 is the newest stable release and is the one verified to apply
+# cleanly here; revisit if Hilt ships an AGP-9-specific patch later.
+#
+# KSP has separately decoupled its version string from the Kotlin version it
+# targets (older releases were published as "<kotlin-version>-<ksp-patch>");
+# 2.3.12 is the newest plain KSP release available and is the one verified to
+# work with kotlin=2.3.21 here.
+hilt = "2.60.1"
+ksp = "2.3.12"
+
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
@@ -26,8 +39,12 @@ androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graph
 androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
+hilt-compiler = { group = "com.google.dagger", name = "hilt-compiler", version.ref = "hilt" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }

@@ -41,6 +41,14 @@ None of these are architecture changes; all are routine version-pinning explicit
 
 **Acceptance:** boundaries mirror F0.8; domain does not depend on Android framework types; no speculative multimodule split.
 
+**Status: Done (2026-09-15).** Created the top-level boundary packages from F0.8 §15 (`app/navigation`, `core`, `data`, `domain`, `tracking`, `worker`, `feature`), each with a short `README.md` stating its F0.8 responsibility and which later task populates it — leaf subpackages (e.g. `core/model`, `feature/home`) are intentionally *not* pre-created, to avoid empty structure with no owner; they get created by the task that first needs them. Wired Hilt end-to-end: `MotoTripApplication` (`@HiltAndroidApp`), `MainActivity` (`@AndroidEntryPoint`), and an empty `core/di/AppModule.kt` proving the component graph builds with no bindings yet. Added `architecture/DomainBoundaryTest.kt`, a JVM test that scans `domain/` for `android.*`/`androidx.*` imports and fails the build if any appear — it was verified to actually fail (not just always pass) by temporarily introducing a violating file, then removing it. Single `:app` module unchanged (ADR-012).
+
+Verified with `./gradlew assembleDebug testDebugUnitTest` (both green, including the new architecture test). Not re-verified with a live device install this time — no device was connected when this task ran — but that is not required by this task's acceptance criteria (no product/UI logic changed).
+
+Deviation from F0.8's dependency table, discovered only by attempting a real build:
+- Hilt/Dagger bumped to **2.60.1**, not F0.8's pinned 2.57.1 — that release's Gradle plugin fails to apply against AGP 9's new DSL with `Android BaseExtension not found`. 2.60.1 applies and builds cleanly. Revisit if a 2.57.x patch adds AGP 9 support later.
+- KSP pinned to 2.3.12 (plain version; KSP has decoupled its version string from the Kotlin version it targets since ~2.3.0).
+
 ---
 
 ### FND-003 — Room schema v1 + migration harness
