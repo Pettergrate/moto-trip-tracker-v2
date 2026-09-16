@@ -5,6 +5,9 @@ import androidx.room.Room
 import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.database.dao.CaptureEventDao
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
+import com.mototriptracker.app.core.database.dao.LocationGapDao
+import com.mototriptracker.app.core.database.dao.PointAssessmentDao
+import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.database.dao.TripDao
@@ -54,4 +57,14 @@ object DatabaseModule {
 
     @Provides
     fun provideTripPartDao(database: MotoTripDatabase): TripPartDao = database.tripPartDao()
+
+    @Provides
+    fun providePointAssessmentDao(database: MotoTripDatabase): PointAssessmentDao = database.pointAssessmentDao()
+
+    @Provides
+    fun provideProcessedTrackPointDao(database: MotoTripDatabase): ProcessedTrackPointDao =
+        database.processedTrackPointDao()
+
+    @Provides
+    fun provideLocationGapDao(database: MotoTripDatabase): LocationGapDao = database.locationGapDao()
 }

@@ -19,4 +19,7 @@ interface TripPartDao {
      */
     @Query("SELECT * FROM trip_part WHERE captureId = :captureId LIMIT 1")
     suspend fun findByCaptureId(captureId: String): TripPartEntity?
+
+    @Query("SELECT * FROM trip_part WHERE tripId = :tripId ORDER BY orderIndex ASC")
+    suspend fun findAllByTrip(tripId: String): List<TripPartEntity>
 }

@@ -12,6 +12,10 @@ reaching this layer.
 Subpackages (`detection/`, `processing/`, `trip/`) are created by the tasks
 that need them: `DET-002` onward, `PRC-001` onward, `EDT-001` onward.
 
+`processing/` was added by `PRC-001` — `ProcessingEngine`, the Raw →
+assessment → Processed Track pipeline (F0.5 §16). `PRC-002`/`PRC-003`
+(metrics, elevation) extend this package rather than duplicating it.
+
 `capability/` was added by `CAP-001` — not one of F0.8 §15's originally
 named subpackages, but the natural home for `CapabilityResolver`, the first
 real domain logic in this codebase (everything before it was pure data
