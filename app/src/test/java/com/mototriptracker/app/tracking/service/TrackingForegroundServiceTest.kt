@@ -7,11 +7,14 @@ import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.common.FakeIdGenerator
 import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.model.CaptureStatus
+import com.mototriptracker.app.core.model.LocationSample
 import com.mototriptracker.app.core.notification.TrackingNotificationController
+import com.mototriptracker.app.testing.FakeLocationGateway
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import kotlinx.coroutines.runBlocking
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -56,7 +59,9 @@ class TrackingForegroundServiceTest {
         db.close()
     }
 
-    private fun buildServiceController(): ServiceController<TrackingForegroundService> {
+    private fun buildServiceController(
+        locationSamples: List<LocationSample> = emptyList()
+    ): ServiceController<TrackingForegroundService> {
         val controller = Robolectric.buildService(TrackingForegroundService::class.java)
         val service = controller.get()
         // .create() runs the real Hilt injection first (MotoTripApplication
@@ -70,6 +75,8 @@ class TrackingForegroundServiceTest {
         service.coordinator = TrackingSessionCoordinator(
             tripCaptureDao = db.tripCaptureDao(),
             diagnosticEventDao = db.diagnosticEventDao(),
+            rawTrackPointDao = db.rawTrackPointDao(),
+            locationGateway = FakeLocationGateway(locationSamples),
             clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L),
             idGenerator = FakeIdGenerator(prefix = "capture")
         )
@@ -107,6 +114,33 @@ class TrackingForegroundServiceTest {
     }
 
     @Test
+    fun actionStartAlsoRecordsLocationSamplesIntoRawTrackPoint() = runBlocking {
+        val samples = listOf(
+            LocationSample(
+                wallTimeEpochMs = 2_000L,
+                elapsedRealtimeNanos = 5_000L,
+                receivedAtElapsedRealtimeNanos = 5_000L,
+                latitude = 10.0,
+                longitude = -20.0,
+                horizontalAccuracyM = 5.0f,
+                requestProfileId = "test-profile"
+            )
+        )
+        val controller = buildServiceController(locationSamples = samples)
+
+        controller.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+        controller.get().locationRecordingJob?.join()
+        controller.get().lastUncaughtCommandError?.let { throw it }
+
+        val captureId = requireNotNull(db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE)).id
+        val points = db.rawTrackPointDao().findAllByCapture(captureId)
+        assertEquals(1, points.size)
+        assertEquals(0L, points.single().sequenceNumber)
+    }
+
+    @Test
     fun nullIntentRestartWithNoActiveCaptureStopsTheServiceInsteadOfIdlingInForeground() = runBlocking {
         // No prior ACTION_START in this test: simulates a sticky restart
         // (Intent == null) after the capture it was tracking already ended.
@@ -120,5 +154,39 @@ class TrackingForegroundServiceTest {
             "service should have called stopSelf() — nothing ACTIVE for it to own",
             shadowService.isStoppedBySelf
         )
+    }
+
+    @Test
+    fun nullIntentRestartWithActiveCaptureResumesLocationRecordingInsteadOfStopping() = runBlocking {
+        val firstController = buildServiceController()
+        firstController.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        firstController.get().lastCommandJob?.join()
+        val captureId = requireNotNull(db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE)).id
+
+        // A fresh Service instance, as a real process restart would create,
+        // backed by the same persisted database (TRK-001's rehydration).
+        val restartedSamples = listOf(
+            LocationSample(
+                wallTimeEpochMs = 2_000L,
+                elapsedRealtimeNanos = 9_000L,
+                receivedAtElapsedRealtimeNanos = 9_000L,
+                latitude = 1.0,
+                longitude = 2.0,
+                horizontalAccuracyM = 5.0f,
+                requestProfileId = "test-profile"
+            )
+        )
+        val restartedController = buildServiceController(locationSamples = restartedSamples)
+        restartedController.withIntent(null).startCommand(0, 0)
+        restartedController.get().lastCommandJob?.join()
+        restartedController.get().locationRecordingJob?.join()
+
+        val shadowService = shadowOf(restartedController.get())
+        assertTrue(
+            "service should keep running — a capture is still ACTIVE",
+            !shadowService.isStoppedBySelf
+        )
+        assertEquals(1, db.rawTrackPointDao().findAllByCapture(captureId).size)
     }
 }

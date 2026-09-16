@@ -1,5 +1,8 @@
 package com.mototriptracker.app.core.di
 
+import android.content.Context
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
 import com.mototriptracker.app.core.common.AndroidClock
 import com.mototriptracker.app.core.common.AndroidDispatcherProvider
 import com.mototriptracker.app.core.common.Clock
@@ -8,15 +11,19 @@ import com.mototriptracker.app.core.common.IdGenerator
 import com.mototriptracker.app.core.common.UuidIdGenerator
 import com.mototriptracker.app.experiment.AndroidFieldTestDatasetWriter
 import com.mototriptracker.app.experiment.FieldTestDatasetWriter
+import com.mototriptracker.app.tracking.location.FusedLocationGateway
+import com.mototriptracker.app.tracking.location.LocationGateway
 import dagger.Binds
 import dagger.Module
+import dagger.Provides
 import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 
 /**
  * FND-002 proved the Hilt graph wires up with no bindings. FND-004 added
- * [Clock]/[IdGenerator]; TST-001 added [DispatcherProvider]; EXP-001 adds
- * [FieldTestDatasetWriter] for the F0.6 field-test harness shell.
+ * [Clock]/[IdGenerator]; TST-001 added [DispatcherProvider]; EXP-001 added
+ * [FieldTestDatasetWriter]; TRK-002 adds [LocationGateway].
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -33,4 +40,14 @@ interface AppModule {
 
     @Binds
     fun bindFieldTestDatasetWriter(impl: AndroidFieldTestDatasetWriter): FieldTestDatasetWriter
+
+    @Binds
+    fun bindLocationGateway(impl: FusedLocationGateway): LocationGateway
+
+    companion object {
+        @Provides
+        fun provideFusedLocationProviderClient(
+            @ApplicationContext context: Context
+        ): FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(context)
+    }
 }

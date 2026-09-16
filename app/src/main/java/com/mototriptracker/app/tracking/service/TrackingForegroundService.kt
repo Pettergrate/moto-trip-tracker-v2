@@ -20,10 +20,11 @@ import javax.inject.Inject
 import androidx.annotation.VisibleForTesting
 
 /**
- * ADR-004: the Android owner of an active capture. TRK-001 scope only —
- * manual Start and sticky-restart rehydration. Pause/Resume/Finish
- * (TRK-003/TRK-004) and real location ingestion (TRK-002) are separate
- * tasks that extend this class, not duplicated here.
+ * ADR-004: the Android owner of an active capture. Manual Start,
+ * sticky-restart rehydration (TRK-001) and location recording for the
+ * lifetime of the ACTIVE capture (TRK-002). Pause/Resume/Finish
+ * (TRK-003/TRK-004) are separate tasks that extend this class, not
+ * duplicated here.
  *
  * `startForeground()` is called synchronously as the very first thing in
  * [onStartCommand], before any suspending work — Android requires it within
@@ -63,6 +64,17 @@ class TrackingForegroundService : Service() {
         private set
 
     /**
+     * TRK-002: the long-running location-collection loop, tracked
+     * separately from [lastCommandJob] (which represents a single Start/
+     * rehydrate command, not the ongoing stream it may kick off). Guards
+     * against launching a second overlapping collector if `onStartCommand`
+     * fires again (e.g. a duplicate Start tap) while one is already active.
+     */
+    @VisibleForTesting
+    var locationRecordingJob: Job? = null
+        private set
+
+    /**
      * A `launch`ed child under a bare `SupervisorJob()` silently drops an
      * uncaught exception (`Job.join()` does not rethrow it) — found while
      * writing this service's own test, where a real failure inside
@@ -87,7 +99,11 @@ class TrackingForegroundService : Service() {
         startForeground(NOTIFICATION_ID, notificationController.buildTrackingNotification())
 
         lastCommandJob = when (intent?.action) {
-            ACTION_START -> serviceScope.launch { lastStartResult = coordinator.startManualCapture() }
+            ACTION_START -> serviceScope.launch {
+                val result = coordinator.startManualCapture()
+                lastStartResult = result
+                ensureLocationRecording(result.captureId)
+            }
             else -> serviceScope.launch { rehydrateOrStop() }
         }
 
@@ -99,14 +115,23 @@ class TrackingForegroundService : Service() {
      * null action) must rehydrate from Room, never assume the intent that
      * originally started it is still meaningful. If no capture is ACTIVE
      * anymore, there's nothing for this service to own — stop cleanly
-     * instead of sitting in the foreground for no reason.
+     * instead of sitting in the foreground for no reason. If one is still
+     * ACTIVE, resume recording into it (TRK-002) rather than leaving the
+     * notification up without actually collecting anything.
      */
     private suspend fun rehydrateOrStop() {
         val active = coordinator.findActiveCapture()
         if (active == null) {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
+        } else {
+            ensureLocationRecording(active.id)
         }
+    }
+
+    private fun ensureLocationRecording(captureId: String) {
+        if (locationRecordingJob?.isActive == true) return
+        locationRecordingJob = serviceScope.launch { coordinator.recordLocationUpdates(captureId) }
     }
 
     override fun onDestroy() {

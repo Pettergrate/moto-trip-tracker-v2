@@ -21,4 +21,7 @@ interface DiagnosticEventDao {
 
     @Query("SELECT COUNT(*) FROM diagnostic_event")
     suspend fun count(): Int
+
+    @Query("SELECT * FROM diagnostic_event")
+    suspend fun findAll(): List<DiagnosticEventEntity>
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
+import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import dagger.Module
 import dagger.Provides
@@ -38,4 +39,7 @@ object DatabaseModule {
 
     @Provides
     fun provideDiagnosticEventDao(database: MotoTripDatabase): DiagnosticEventDao = database.diagnosticEventDao()
+
+    @Provides
+    fun provideRawTrackPointDao(database: MotoTripDatabase): RawTrackPointDao = database.rawTrackPointDao()
 }

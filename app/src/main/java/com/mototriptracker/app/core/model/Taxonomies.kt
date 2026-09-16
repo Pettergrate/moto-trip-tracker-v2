@@ -32,3 +32,13 @@ enum class TrackPointDecision { ACCEPTED, SUSPECT, REJECTED }
 
 /** Whether a [TripStopEntity] came from the detector or a manual user action. */
 enum class StopOrigin { DETECTED, USER }
+
+/**
+ * F0.3's detection state machine states, reused (not duplicated) per F0.7 §5:
+ * "no sustituye TripStatus ni CaptureStatus". No state machine exists yet
+ * (DET-family) — TRK-002 uses only [TRACKING], since F0.3 §6 has Manual Start
+ * bypass candidate validation and go straight to actively recording.
+ */
+enum class DetectorState {
+    IDLE, CANDIDATE_START, TRACKING, TEMPORARY_HOLD, MANUAL_PAUSED, CANDIDATE_STOP, FINALIZING
+}
