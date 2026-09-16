@@ -26,7 +26,8 @@ class ReplayDeterminismTest {
             receivedAtElapsedRealtimeNanos = null,
             latitude = 9.93,
             longitude = -84.08,
-            horizontalAccuracyM = 5f
+            horizontalAccuracyM = 5f,
+            requestProfileId = "test-profile"
         ),
         LocationSample(
             wallTimeEpochMs = 2_000L,
@@ -34,7 +35,8 @@ class ReplayDeterminismTest {
             receivedAtElapsedRealtimeNanos = null,
             latitude = 9.931,
             longitude = -84.081,
-            horizontalAccuracyM = 6f
+            horizontalAccuracyM = 6f,
+            requestProfileId = "test-profile"
         )
     )
 
@@ -60,8 +62,14 @@ class ReplayDeterminismTest {
     @Test
     fun activityReplayIsDeterministic() = runTest {
         val samples = listOf(
-            ActivityTransitionSample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedRealtimeNanos = 1_000L),
-            ActivityTransitionSample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedRealtimeNanos = 5_000L)
+            ActivityTransitionSample(
+                ActivityType.IN_VEHICLE, TransitionType.ENTER,
+                elapsedRealtimeNanos = 1_000L, wallTimeEpochMs = 1_000L, source = "test"
+            ),
+            ActivityTransitionSample(
+                ActivityType.IN_VEHICLE, TransitionType.EXIT,
+                elapsedRealtimeNanos = 5_000L, wallTimeEpochMs = 5_000L, source = "test"
+            )
         )
         val source = ActivityReplaySource(samples)
 

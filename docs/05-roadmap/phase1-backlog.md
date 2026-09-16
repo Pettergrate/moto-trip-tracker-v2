@@ -132,6 +132,15 @@ Verified with `./gradlew assembleDebug testDebugUnitTest`: 17/17 tests pass acro
 
 Two self-caught bugs this task, both the same class of mistake as one already found in FND-004: a KDoc comment containing the literal substring `*/` in running text (`"...DET-*/PRC-*..."`, twice) closed a Kotlin block comment early. Both caught immediately by the compiler; grepped the whole `app/src` tree afterward for the same pattern to confirm no third instance existed.
 
+**Follow-up self-audit (2026-09-16):** re-checked `LocationSample`/`ActivityTransitionSample`/`CapabilityInputs` field-by-field against F0.4 §4.1, F0.5 §5, F0.6 §6.3 and F0.11 §18-19 directly (the same discipline the Codex round applied to FND-003's Room entities), rather than continuing straight to `CAP-001`/`DET-*` on unaudited assumptions. Found 3 real bugs, same failure pattern as FND-003 (a field the spec marks required left nullable):
+- `ActivityTransitionSample.wallTimeEpochMs` was nullable; F0.6 §6.3 lists "timestamp / elapsedRealtime" together, neither marked `?`. Fixed to non-null.
+- `ActivityTransitionSample.source` was nullable; F0.6 §6.3 lists it without `?`. Fixed to non-null. (Only `confidence` is actually marked optional there.)
+- `LocationSample.sourceProfileId` was nullable and inconsistently named; F0.5 §5 lists the equivalent field (`requestProfileId/version`) without `?`, and `RawTrackPointEntity` already calls it `requestProfileId`. Renamed and fixed to non-null.
+
+`CapabilityInputs` checked against F0.11 §18's FULL_AUTO_READY/ASSISTED_AUTO/MANUAL/LOCATION_DEGRADED requirements and CAP-001's own stated test matrix — no defect found; every field maps to a named F0.11 dimension and nothing is invented.
+
+Re-verified with `./gradlew assembleDebug testDebugUnitTest`: 17/17 tests still pass after the fixes.
+
 ---
 
 ### DIA-001 — Structured diagnostic event foundation
