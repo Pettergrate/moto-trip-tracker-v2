@@ -451,6 +451,20 @@ Verified with `./gradlew assembleDebug testDebugUnitTest`: 71/71 tests pass (up 
 **Objective:** implement candidate-stop evidence and delayed finalization logic.  
 **Acceptance:** traffic lights/short stops do not end normal Trip fixtures.
 
+**Status: Done (2026-09-17).** `domain/detection/CandidateStopEngine` mirrors `CandidateStartEngine`'s design with the trigger reversed: `IN_VEHICLE` EXIT (not ENTER) opens a candidate. Deliberately leans on Google's own Transition API filtering (F0.4 §4.2: transient `STILL` at a red light is already filtered out before a real EXIT ever fires) rather than re-implementing that filtering here — this engine never sees raw speed at all, only the already-filtered activity signal, which is what makes F0.3 §7 requirement 1 ("zero speed alone MUST NOT finalize a Trip") true by construction rather than by an extra rule.
+
+**No displacement check for confirmation, unlike `CandidateStartEngine` — a deliberate asymmetry, not an oversight:** F0.3 §7 requirement 5 treats *either* staying put *or* walking away as evidence the ride ended, so there's no "insufficient movement" failure mode to guard against the way candidate-start needed one (there, lack of displacement was exactly the false-positive risk). A `WALKING`/`ON_FOOT` ENTER while a candidate is open confirms **immediately** — requirement 5's own wording ("SHOULD contribute to confirming") for the single strongest, still zero-threshold signal available; otherwise, sustained absence of a re-`ENTER` for the grace period confirms (DP-002). An `IN_VEHICLE` ENTER before either abandons the candidate (requirement 4).
+
+**Placeholder grace period (ADR-018 — field-gated, not frozen):** 3 minutes, via an injectable `CandidateStopProfile` (same testability requirement as `CandidateStartEngine`'s profile). F0.3 §7's own opening line — "automatic stop is intentionally more conservative than temporary-stop recognition" — is why this is 12× `CandidateStartProfile`'s 15s start window rather than a symmetric value: 3 minutes comfortably outlasts a traffic light, a stop sign, or brief congestion (§7's own named tolerance list) while staying a bounded wait, not indefinite.
+
+**Grace-period timing works from ordinary location samples, not only from an explicit `TimeTick`:** since `TrackingSessionCoordinator.recordLocationUpdates` keeps recording every ~2s throughout a real Trip (including while stopped, until something actually ends it), real location samples already give this engine plenty of "time has passed" opportunities in the common case; `TimeTick` exists specifically for the GPS-loss-during-a-stop edge case (tunnel, parking garage) where no location sample would otherwise arrive to trigger the check.
+
+**Same "no live caller yet" posture as `DET-001`/`DET-002`:** turning a `Confirmed` decision into an actual Finish is `AUTO-001`'s job. Also assumes its caller only routes events here while a Trip is genuinely being tracked — the mirror image of `CandidateStartEngine`'s IDLE-only assumption — for the same ADR-013-boundary reason (no `TripCaptureDao` dependency for no real benefit).
+
+**Verified:** 14 new deterministic tests covering every scenario this task and F0.3 §7 name directly — the traffic-light case (short stop under the grace period stays open, neither confirmed nor abandoned) is this task's own acceptance criterion, tested explicitly by name. 124/124 tests pass (up from 110). No on-device verification, same reasoning as `DET-002` — nothing calls this engine yet.
+
+---
+
 ### DET-004 — Temporary-stop hysteresis
 **Objective:** implement temporary hold/churn protection.  
 **Acceptance:** congestion/semáforo replay stays one Trip.
