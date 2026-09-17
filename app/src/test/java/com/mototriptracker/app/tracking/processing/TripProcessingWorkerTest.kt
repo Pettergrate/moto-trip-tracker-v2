@@ -21,6 +21,7 @@ import com.mototriptracker.app.core.model.LocationProfileVersion
 import com.mototriptracker.app.core.model.StartSource
 import com.mototriptracker.app.core.model.TripStatus
 import com.mototriptracker.app.domain.processing.ProcessingEngine
+import com.mototriptracker.app.domain.processing.TripMetricsCalculator
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -65,7 +66,7 @@ class TripProcessingWorkerTest {
         db.tripPartDao().insert(
             TripPartEntity(
                 id = "part-1", tripId = tripId, captureId = captureId, orderIndex = 0,
-                startElapsedRealtimeNanos = 0L, endElapsedRealtimeNanos = null,
+                startElapsedRealtimeNanos = 0L, endElapsedRealtimeNanos = 10_000_000_000L,
                 startSequenceNumber = null, endSequenceNumber = null
             )
         )
@@ -101,8 +102,10 @@ class TripProcessingWorkerTest {
                 pointAssessmentDao = db.pointAssessmentDao(),
                 processedTrackPointDao = db.processedTrackPointDao(),
                 locationGapDao = db.locationGapDao(),
+                tripStatisticsDao = db.tripStatisticsDao(),
                 diagnosticEventDao = db.diagnosticEventDao(),
                 processingEngine = ProcessingEngine(FakeIdGenerator(prefix = "gap")),
+                metricsCalculator = TripMetricsCalculator(),
                 clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L),
                 idGenerator = UuidIdGenerator()
             )
@@ -124,6 +127,9 @@ class TripProcessingWorkerTest {
         val version = TripProcessingWorker.CURRENT_PROCESSING_VERSION
         assertEquals(2, db.pointAssessmentDao().findAllByCaptureAndVersion(captureId, version).size)
         assertEquals(2, db.processedTrackPointDao().findAllByTripAndVersion(tripId, version).size)
+        val statistics = requireNotNull(db.tripStatisticsDao().findByTripAndVersion(tripId, version))
+        assertEquals(2, statistics.validPointCount)
+        assertEquals(10_000L, statistics.totalDurationMs)
     }
 
     @Test
@@ -155,8 +161,10 @@ class TripProcessingWorkerTest {
                 pointAssessmentDao = db.pointAssessmentDao(),
                 processedTrackPointDao = db.processedTrackPointDao(),
                 locationGapDao = db.locationGapDao(),
+                tripStatisticsDao = db.tripStatisticsDao(),
                 diagnosticEventDao = db.diagnosticEventDao(),
                 processingEngine = ProcessingEngine(FakeIdGenerator(prefix = "gap")),
+                metricsCalculator = TripMetricsCalculator(),
                 clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L),
                 idGenerator = UuidIdGenerator()
             )

@@ -12,6 +12,7 @@ import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.database.dao.TripDao
 import com.mototriptracker.app.core.database.dao.TripPartDao
+import com.mototriptracker.app.core.database.dao.TripStatisticsDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -67,4 +68,7 @@ object DatabaseModule {
 
     @Provides
     fun provideLocationGapDao(database: MotoTripDatabase): LocationGapDao = database.locationGapDao()
+
+    @Provides
+    fun provideTripStatisticsDao(database: MotoTripDatabase): TripStatisticsDao = database.tripStatisticsDao()
 }

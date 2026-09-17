@@ -12,6 +12,7 @@ import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.database.dao.TripDao
 import com.mototriptracker.app.core.database.dao.TripPartDao
+import com.mototriptracker.app.core.database.dao.TripStatisticsDao
 import com.mototriptracker.app.core.database.entity.CaptureEventEntity
 import com.mototriptracker.app.core.database.entity.DiagnosticEventEntity
 import com.mototriptracker.app.core.database.entity.LocationGapEntity
@@ -42,9 +43,10 @@ import com.mototriptracker.app.core.database.entity.TripTagEntity
  *
  * TripCaptureDao, DiagnosticEventDao, RawTrackPointDao (TRK-002),
  * CaptureEventDao/TripDao/TripPartDao (TRK-004) and
- * PointAssessmentDao/ProcessedTrackPointDao/LocationGapDao (PRC-001) exist
- * so far. Other DAOs are added by the tasks that need them (EDT-*, HIS-*,
- * FAV-*, etc.) rather than pre-built here without a caller.
+ * PointAssessmentDao/ProcessedTrackPointDao/LocationGapDao/TripStatisticsDao
+ * (PRC-001/PRC-002) exist so far. Other DAOs are added by the tasks that
+ * need them (EDT-*, HIS-*, FAV-*, etc.) rather than pre-built here without a
+ * caller.
  */
 @Database(
     entities = [
@@ -82,4 +84,5 @@ abstract class MotoTripDatabase : RoomDatabase() {
     abstract fun pointAssessmentDao(): PointAssessmentDao
     abstract fun processedTrackPointDao(): ProcessedTrackPointDao
     abstract fun locationGapDao(): LocationGapDao
+    abstract fun tripStatisticsDao(): TripStatisticsDao
 }

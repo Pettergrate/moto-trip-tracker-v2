@@ -337,6 +337,22 @@ Verified with `./gradlew assembleDebug testDebugUnitTest`: 71/71 tests pass (up 
 
 **Acceptance:** deterministic golden tests; max speed rejects documented spike cases; display polyline is not metric source.
 
+**Status: Done, fully verified including on-device (2026-09-16).** `domain/processing/TripMetricsCalculator` takes `ProcessingEngine.Result` (PRC-001) directly — no second pass over raw evidence, no re-deciding what's accepted — and computes `TripStatisticsEntity` for FR-MET-001/002/005/006/007. Wired into `TripProcessingWorker` right after `ProcessingEngine.process(...)`, upserted (not delete-then-insert: `TripStatisticsEntity`'s primary key is exactly `(tripId, processingVersion)`, so there's only ever one row to replace) inside the same short transaction as PRC-001's derived tables.
+
+**Distance:** haversine (pure Kotlin, no `android.location.Location.distanceBetween()` — ADR-013) summed between consecutive `ProcessedTrackPointEntity`s, *except* the edge landing on a `GAP_BOUNDARY` point — ADR-016/F0.5 §11.3's "a gap must not silently inflate distance" applied literally: the edge before/after a gap is fine, only the one edge spanning it is excluded.
+
+**Max speed (FR-MET-006's "clearly invalid GPS spikes MUST NOT be presented"):** the one rejection this task makes needs zero invented numbers, matching PRC-001's own posture — a point's own reported `speedMps` is excluded from the max-speed pool if that point is a gap boundary (the exact teleport-like case F0.5 §12.3 names), full stop. No accuracy cutoff, no acceleration-plausibility check, no persistence-confirmation window — those all need F0.6 field data this project doesn't have yet. Average speed is `distanceM / totalDurationMs`, `null` only when duration is zero.
+
+**Left deliberately `null`, not computed with a guessed threshold:** `movingDurationMs`/`stoppedDurationMs`/`averageMovingSpeedMps` — FR-MET-003/004 themselves say "when technically reliable," and any moving/stopped split needs a speed cutoff; GPS jitter means even a parked, stationary phone rarely reports exactly `0.0 m/s`, so there is no zero-threshold way to do this split (unlike the gap-boundary exclusion above). That's `DET`-family territory once `EXP-003` closes a real value. `minElevationM`/`maxElevationM`/`ascentM`/`descentM` are `PRC-003`'s job, not duplicated here. `manualPauseDurationMs` is a true `0` (not unknown) — no `ManualPauseIntervalEntity` producer exists yet (`TRK-003`), so none can structurally exist yet.
+
+**Total duration** sums each `TripPart`'s own `(endElapsedRealtimeNanos − startElapsedRealtimeNanos)` rather than spanning first-part-start to last-part-end — correct once a Trip has multiple parts with a real break between them (future merge scenarios), and for today's always-one-part Trips it's the same number either way. Throws (loudly, not a silent 0) if a part has no `endElapsedRealtimeNanos` — that would mean metrics ran on a Trip that was never actually finished, a real invariant violation worth surfacing rather than reporting a fabricated duration.
+
+**New:** `TripStatisticsDao` (`@Upsert`, matching the entity's actual single-row-per-version key — no delete-then-insert needed here unlike PRC-001's per-row derived tables).
+
+**Verified:** `TripMetricsCalculatorTest` (13 cases) includes an independently-computed-expected-value haversine check (not just "doesn't crash"), the gap-boundary distance/speed exclusions, multi-part duration summation, the zero-duration→null-average-speed edge case, and the loud failure on a not-actually-finished `TripPart`. `TripProcessingWorkerTest` now also asserts a real `TripStatistics` row lands with the right `validPointCount`/`totalDurationMs`. 83/83 tests pass (up from 71).
+
+**On-device (Honor DNY-NX9):** two separate Start→Finish cycles produced entirely honest results neither test suite could stage: an 8s indoor capture landed exactly 1 raw fix (`distanceM=0`, `maxSpeedMps=null` — correctly nothing to compare), and a 20s capture landed 2 fixes with *identical* coordinates and `speedMps=null` on both (a real, stable-but-weak indoor fix, `horizontalAccuracyM≈300`) — `distanceM=0`/`maxSpeedMps=null` again, correctly reflecting that literally no evidence of movement or speed existed, not a bug in the haversine math (that exactness is what the unit tests already prove with known coordinates). This is the concrete, real-world version of the "no fabrication" principle this task is built around.
+
 ---
 
 ### PRC-003 — Elevation baseline

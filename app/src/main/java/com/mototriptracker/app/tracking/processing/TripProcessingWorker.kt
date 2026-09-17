@@ -15,6 +15,7 @@ import com.mototriptracker.app.core.database.dao.PointAssessmentDao
 import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripPartDao
+import com.mototriptracker.app.core.database.dao.TripStatisticsDao
 import com.mototriptracker.app.core.database.entity.DiagnosticEventEntity
 import com.mototriptracker.app.core.model.DetectorVersion
 import com.mototriptracker.app.core.model.DiagnosticCategory
@@ -22,18 +23,20 @@ import com.mototriptracker.app.core.model.DiagnosticSeverity
 import com.mototriptracker.app.core.model.LocationProfileVersion
 import com.mototriptracker.app.core.model.ProcessingVersion
 import com.mototriptracker.app.domain.processing.ProcessingEngine
+import com.mototriptracker.app.domain.processing.TripMetricsCalculator
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 
 /**
- * PRC-001: runs [ProcessingEngine] over a finished Trip's raw evidence and
- * publishes the derived tables. F0.10 §16.3's ordering: read Raw + compute
- * outside any transaction (pure CPU, safe here because nothing writes to a
- * COMPLETED capture's raw points anymore — TRK-002 only records while
- * ACTIVE), then one short transaction to delete-then-insert each
- * (captureId|tripId, processingVersion)'s derived rows, so re-running this
- * worker for the same version is a clean replace, not a duplicate-row error
- * (F0.10 §16.2's reproducibility requirement).
+ * Runs [ProcessingEngine] (PRC-001) and [TripMetricsCalculator] (PRC-002)
+ * over a finished Trip's raw evidence and publishes the derived tables.
+ * F0.10 §16.3's ordering: read Raw + compute outside any transaction (pure
+ * CPU, safe here because nothing writes to a COMPLETED capture's raw points
+ * anymore — TRK-002 only records while ACTIVE), then one short transaction
+ * to delete-then-insert (or upsert, for the single-row-per-key statistics)
+ * each (captureId|tripId, processingVersion)'s derived rows, so re-running
+ * this worker for the same version is a clean replace, not a duplicate-row
+ * error (F0.10 §16.2's reproducibility requirement).
  */
 @HiltWorker
 class TripProcessingWorker @AssistedInject constructor(
@@ -45,8 +48,10 @@ class TripProcessingWorker @AssistedInject constructor(
     private val pointAssessmentDao: PointAssessmentDao,
     private val processedTrackPointDao: ProcessedTrackPointDao,
     private val locationGapDao: LocationGapDao,
+    private val tripStatisticsDao: TripStatisticsDao,
     private val diagnosticEventDao: DiagnosticEventDao,
     private val processingEngine: ProcessingEngine,
+    private val metricsCalculator: TripMetricsCalculator,
     private val clock: Clock,
     private val idGenerator: IdGenerator
 ) : CoroutineWorker(context, params) {
@@ -60,6 +65,9 @@ class TripProcessingWorker @AssistedInject constructor(
 
         val rawPointsByCapture = parts.associate { part -> part.captureId to rawTrackPointDao.findAllByCapture(part.captureId) }
         val outcome = processingEngine.process(tripId, CURRENT_PROCESSING_VERSION, parts, rawPointsByCapture)
+        val statistics = metricsCalculator.calculate(
+            tripId, CURRENT_PROCESSING_VERSION, clock.wallClockMillis(), parts, outcome, rawPointsByCapture
+        )
 
         database.withTransaction {
             for (sourceCaptureId in rawPointsByCapture.keys) {
@@ -71,6 +79,7 @@ class TripProcessingWorker @AssistedInject constructor(
             pointAssessmentDao.insertAll(outcome.assessments)
             processedTrackPointDao.insertAll(outcome.processedPoints)
             locationGapDao.insertAll(outcome.gaps)
+            tripStatisticsDao.upsert(statistics)
         }
 
         diagnosticEventDao.insert(
@@ -91,7 +100,9 @@ class TripProcessingWorker @AssistedInject constructor(
                 metadata = mapOf(
                     "acceptedPoints" to outcome.processedPoints.size.toString(),
                     "rejectedPoints" to (outcome.assessments.size - outcome.processedPoints.size).toString(),
-                    "gapCount" to outcome.gaps.size.toString()
+                    "gapCount" to outcome.gaps.size.toString(),
+                    "distanceM" to statistics.distanceM.toString(),
+                    "totalDurationMs" to statistics.totalDurationMs.toString()
                 ),
                 appVersion = BuildConfig.VERSION_NAME,
                 schemaVersion = 1,
