@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.WorkManager
+import com.mototriptracker.app.tracking.activityrecognition.ActivityRecognitionRegistrar
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -28,11 +29,16 @@ import javax.inject.Inject
 class MotoTripApplication : Application() {
 
     @Inject lateinit var workerFactory: HiltWorkerFactory
+    @Inject lateinit var activityRecognitionRegistrar: ActivityRecognitionRegistrar
 
     override fun onCreate() {
         super.onCreate()
         if (!WorkManager.isInitialized()) {
             WorkManager.initialize(this, Configuration.Builder().setWorkerFactory(workerFactory).build())
         }
+        // DET-001/ADR-007: registration doesn't survive reboot/update either
+        // (BootReceiver handles those separately) - this is just the
+        // normal-start/first-run case, same idempotent call.
+        activityRecognitionRegistrar.register()
     }
 }

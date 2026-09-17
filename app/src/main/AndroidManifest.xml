@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="false"
@@ -29,6 +31,34 @@
             android:name=".tracking.service.TrackingForegroundService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!--
+          DET-001/ADR-007: the PendingIntent target for Activity Recognition
+          Transition updates. Not exported - Play Services invokes it via
+          the PendingIntent our own process created and handed over, which
+          works regardless of this component's exported flag (the same
+          mechanism notification action buttons use), not via an arbitrary
+          external Intent send.
+        -->
+        <receiver
+            android:name=".tracking.receiver.ActivityTransitionReceiver"
+            android:exported="false" />
+
+        <!--
+          DET-001/F0.4 §4.5 (AND-007): re-registers Activity Recognition
+          after reboot/app-update, since Google documents that registration
+          doesn't survive either. Exported=true is the standard, broadly
+          accepted pattern for a BOOT_COMPLETED receiver (a system-sent
+          broadcast); onReceive() itself still checks the action.
+        -->
+        <receiver
+            android:name=".tracking.receiver.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!--
           TRK-004: WorkManager's default on-demand initializer runs as a

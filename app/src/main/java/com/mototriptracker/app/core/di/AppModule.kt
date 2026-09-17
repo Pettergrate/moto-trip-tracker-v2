@@ -1,6 +1,8 @@
 package com.mototriptracker.app.core.di
 
 import android.content.Context
+import com.google.android.gms.location.ActivityRecognition
+import com.google.android.gms.location.ActivityRecognitionClient
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.mototriptracker.app.core.common.AndroidClock
@@ -60,5 +62,9 @@ interface AppModule {
         @Provides
         fun provideWorkManager(@ApplicationContext context: Context): WorkManager =
             WorkManager.getInstance(context)
+
+        @Provides
+        fun provideActivityRecognitionClient(@ApplicationContext context: Context): ActivityRecognitionClient =
+            ActivityRecognition.getClient(context)
     }
 }
