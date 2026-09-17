@@ -435,6 +435,18 @@ Verified with `./gradlew assembleDebug testDebugUnitTest`: 71/71 tests pass (up 
 **Constraints:** ADR-007/013/018.  
 **Acceptance:** deterministic replay tests; no single sample starts a Trip by itself.
 
+**Status: Done (2026-09-16).** `domain/detection/CandidateStartEngine` — the `detection/` subpackage the domain README already reserved for this task — is a pure, stateful reducer over a merged `DetectionEvent` stream (DET-001's `ActivityTransitionSample` + TRK-002's `LocationSample`, plus a synthetic `TimeTick` so a stalled candidate can still time out with no new sample ever arriving). `IN_VEHICLE` ENTER (ADR-007's passive trigger) only *opens* a candidate; confirming it (DP-001/DP-002) needs both sustained time **and** real straight-line displacement from the candidate's anchor point (the first location fix received after opening) — activity evidence alone, or a single GPS jump alone, can never confirm (SCN-015, SCN-025). Displacement is anchor-to-current, not summed path distance, specifically so ordinary jitter while essentially stationary can't accumulate into a false confirmation.
+
+**Placeholder thresholds (ADR-018 — not frozen until `EXP-008`/G4), passed as a constructor `CandidateStartProfile` rather than hardcoded, per F0.12 §4/TST-UNIT-002's explicit "must be testable with injected profiles":** 15s minimum confirmation duration, 40m minimum displacement, 120s maximum candidate window. The 40m/15s pairing is sized against F0.3 §6's own "slow parking-lot departure shouldn't need unrealistically high speed" requirement: at ~10 km/h (2.8 m/s) — a genuinely slow departure — 15s covers ~42m, just past the threshold; a normal urban departure clears it several times over. Neither number has field validation yet.
+
+**No live caller yet, deliberately — the same posture `CAP-001`'s `CapabilityResolver` had before `AUTO-001` existed to consume it:** turning a `Confirmed` decision into an actual auto-started capture (via `TrackingSessionCoordinator`), gated by `CapabilityResolver`'s mode, is `AUTO-001`'s job. This engine also assumes its future caller only routes events to it while the system is actually IDLE (F0.3 §4: CANDIDATE_START is only reachable from IDLE) — it has no way to know a real capture is already active elsewhere, and giving it that knowledge would mean depending on `TripCaptureDao` for no real benefit, breaking ADR-013's boundary. Because nothing calls this yet, there is nothing to verify on-device for this task — unlike every `tracking/`-package task so far, this is pure domain logic verified entirely by deterministic tests, matching ADR-018's own design ("lógica crítica se prueba con replay... los thresholds no se congelan hasta el gate físico").
+
+**Extracted `domain/GeoMath.kt`** (`haversineMeters`) rather than duplicating PRC-001's `TripMetricsCalculator`'s copy of the exact same formula — a real, immediate duplication once this task needed the same distance math, not a speculative shared-utility refactor.
+
+**Verified:** 16 new deterministic tests (13 for the engine's own state transitions — every scenario TST-UNIT-002 names: remains idle, opens a candidate, confirms, abandons via exit, abandons via timeout with and without further samples, duplicate/repeated inputs, reopening after abandon/confirm — plus 3 for `GeoMath` including a value cross-checked against an independently-written second implementation of the same formula, not just "doesn't crash"). 110/110 tests pass (up from 94).
+
+---
+
 ### DET-003 — Candidate Stop engine
 **Objective:** implement candidate-stop evidence and delayed finalization logic.  
 **Acceptance:** traffic lights/short stops do not end normal Trip fixtures.
