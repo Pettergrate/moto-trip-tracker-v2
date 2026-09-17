@@ -3,16 +3,26 @@ package com.mototriptracker.app.tracking.coordinator
 import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.common.FakeIdGenerator
+import com.mototriptracker.app.core.model.ActivityTransitionSample
+import com.mototriptracker.app.core.model.ActivityType
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.DetectorState
 import com.mototriptracker.app.core.model.DiagnosticCategory
 import com.mototriptracker.app.core.model.DiagnosticSeverity
+import com.mototriptracker.app.core.model.EndSource
 import com.mototriptracker.app.core.model.LocationSample
+import com.mototriptracker.app.core.model.StartSource
+import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.testing.FakeLocationGateway
 import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
+import com.mototriptracker.app.tracking.location.LocationGateway
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -286,5 +296,125 @@ class TrackingSessionCoordinatorTest {
         assertEquals(1, finishedCount)
         assertEquals(CaptureStatus.COMPLETED, db.tripCaptureDao().findById(captureId)?.status)
         assertEquals(1, results.map { it.tripId }.distinct().size)
+    }
+
+    // --- AUTO-001: runAutoDetection ------------------------------------
+    //
+    // Cross-source ordering (activity vs. location vs. the internal ticker)
+    // is made deterministic here by driving both replay flows through real
+    // `delay()` calls under `runTest`'s virtual-time scheduler, rather than
+    // `ActivityReplaySource`/`LocationReplaySource`'s instant `.asFlow()` -
+    // those two sources have no way to interleave predictably against each
+    // other otherwise. The ticker itself fires throughout every case here on
+    // the shared, never-advanced [clock]; since its `TimeTick`s always carry
+    // the same tiny constant `elapsedRealtimeNanos`, they never spuriously
+    // expire/confirm anything - the engines' own exhaustive `TimeTick` test
+    // suites (`CandidateStartEngineTest`/`CandidateStopEngineTest`) already
+    // cover that logic in isolation, so it isn't re-proven here.
+
+    private fun coordinatorWithLocationFlow(locationFlow: Flow<LocationSample>) = TrackingSessionCoordinator(
+        database = db,
+        tripCaptureDao = db.tripCaptureDao(),
+        diagnosticEventDao = db.diagnosticEventDao(),
+        rawTrackPointDao = db.rawTrackPointDao(),
+        captureEventDao = db.captureEventDao(),
+        tripDao = db.tripDao(),
+        tripPartDao = db.tripPartDao(),
+        locationGateway = object : LocationGateway {
+            override fun locationUpdates(): Flow<LocationSample> = locationFlow
+        },
+        processingScheduler = processingScheduler,
+        clock = clock,
+        // A distinct prefix from the shared `coordinator`'s "capture-N" -
+        // some of these tests (the race-lost one) have both write to the
+        // same db, and a fresh FakeIdGenerator restarting at 1 would
+        // otherwise collide with an ID `coordinator` already inserted.
+        idGenerator = FakeIdGenerator(prefix = "auto-capture")
+    )
+
+    private fun <T> timedFlow(vararg entries: Pair<Long, T>): Flow<T> = flow {
+        var previousMs = 0L
+        for ((atMs, value) in entries) {
+            delay(atMs - previousMs)
+            previousMs = atMs
+            emit(value)
+        }
+    }
+
+    private fun activitySample(type: ActivityType, transition: TransitionType, elapsedNanos: Long) = ActivityTransitionSample(
+        activityType = type,
+        transitionType = transition,
+        elapsedRealtimeNanos = elapsedNanos,
+        wallTimeEpochMs = elapsedNanos / 1_000_000,
+        source = "test"
+    )
+
+    @Test
+    fun runAutoDetectionAbandonsWhenInVehicleExitArrivesBeforeConfirming() = runTest {
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            5_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 5_000_000_000L)
+        )
+
+        val outcome = coordinatorWithLocationFlow(emptyFlow()).runAutoDetection(activityFlow)
+
+        assertEquals(TrackingSessionCoordinator.AutoDetectionOutcome.CandidateAbandoned, outcome)
+        assertEquals(0, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+    }
+
+    @Test
+    fun runAutoDetectionAbandonsWhenAnotherCaptureAlreadyWonTheRace() = runTest {
+        coordinator.startManualCapture()
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L)
+        )
+        val locationFlow = timedFlow(
+            1L to sample(elapsedNanos = 1_000_000L),
+            20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0)
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow)
+
+        assertEquals(TrackingSessionCoordinator.AutoDetectionOutcome.CandidateAbandoned, outcome)
+        assertEquals(1, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+    }
+
+    @Test
+    fun runAutoDetectionConfirmsStartsAnAutoCaptureThenAutoFinishesOnWalkingAway() = runTest {
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            28_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 28_000_000_000L),
+            30_000L to activitySample(ActivityType.WALKING, TransitionType.ENTER, elapsedNanos = 30_000_000_000L)
+        )
+        val locationFlow = timedFlow(
+            // Anchor - candidate not yet open when captured, so never persisted (documented v1 loss).
+            1L to sample(elapsedNanos = 1_000_000L),
+            // >=15s and >=40m from the anchor - confirms the start.
+            20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0),
+            // Arrives once a real capture exists - this one IS persisted.
+            25_000L to sample(elapsedNanos = 25_000_000_000L, lat = 10.0011, lon = -20.0)
+        )
+        var startedCaptureId: String? = null
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(
+            activityEvents = activityFlow,
+            onCaptureStarted = { startedCaptureId = it }
+        )
+
+        assertTrue(outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
+        val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+        assertEquals(startedCaptureId, tripCompleted.captureId)
+
+        val capture = requireNotNull(db.tripCaptureDao().findById(tripCompleted.captureId))
+        assertEquals(StartSource.AUTO, capture.startSource)
+        assertEquals(CaptureStatus.COMPLETED, capture.status)
+        assertEquals(EndSource.AUTO, capture.endSource)
+
+        val points = db.rawTrackPointDao().findAllByCapture(tripCompleted.captureId)
+        assertEquals(1, points.size)
+        assertEquals(25_000_000_000L, points.single().elapsedRealtimeNanos)
+
+        val trip = requireNotNull(db.tripDao().findById(tripCompleted.tripId))
+        assertEquals(com.mototriptracker.app.core.model.TripStatus.COMPLETED, trip.status)
     }
 }

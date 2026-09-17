@@ -30,6 +30,25 @@ class TrackingNotificationController @Inject constructor(
             .build()
     }
 
+    /**
+     * AUTO-001/F0.9 §5.3: CANDIDATE_START "no necesita una pantalla modal...
+     * puede mostrarse discretamente" - a distinct, honest notification for
+     * the window before a Trip is actually confirmed, so a candidate that
+     * gets abandoned a few seconds later was never mislabelled as "recording
+     * your trip". Same channel/ID as [buildTrackingNotification] - the
+     * service swaps one for the other in place once a candidate confirms.
+     */
+    fun buildValidatingCandidateNotification(): Notification {
+        ensureChannel()
+        return NotificationCompat.Builder(context, CHANNEL_ID)
+            .setContentTitle(context.getString(R.string.tracking_notification_title))
+            .setContentText(context.getString(R.string.validating_candidate_notification_text))
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return

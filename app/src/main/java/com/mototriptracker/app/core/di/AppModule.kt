@@ -13,6 +13,8 @@ import com.mototriptracker.app.core.common.IdGenerator
 import com.mototriptracker.app.core.common.UuidIdGenerator
 import com.mototriptracker.app.experiment.AndroidFieldTestDatasetWriter
 import com.mototriptracker.app.experiment.FieldTestDatasetWriter
+import com.mototriptracker.app.tracking.capability.AndroidCapabilityInputsProvider
+import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.tracking.location.FusedLocationGateway
 import com.mototriptracker.app.tracking.location.LocationGateway
 import com.mototriptracker.app.tracking.processing.ProcessingScheduler
@@ -29,7 +31,7 @@ import dagger.hilt.components.SingletonComponent
  * FND-002 proved the Hilt graph wires up with no bindings. FND-004 added
  * [Clock]/[IdGenerator]; TST-001 added [DispatcherProvider]; EXP-001 added
  * [FieldTestDatasetWriter]; TRK-002 added [LocationGateway]; TRK-004 adds
- * [ProcessingScheduler].
+ * [ProcessingScheduler]; AUTO-001 adds [CapabilityInputsProvider].
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -52,6 +54,9 @@ interface AppModule {
 
     @Binds
     fun bindProcessingScheduler(impl: WorkManagerProcessingScheduler): ProcessingScheduler
+
+    @Binds
+    fun bindCapabilityInputsProvider(impl: AndroidCapabilityInputsProvider): CapabilityInputsProvider
 
     companion object {
         @Provides

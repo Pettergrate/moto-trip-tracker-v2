@@ -8,6 +8,7 @@ import android.util.Log
 import com.mototriptracker.app.core.common.DispatcherProvider
 import com.mototriptracker.app.core.notification.TrackingNotificationController
 import com.mototriptracker.app.core.notification.TrackingNotificationController.Companion.NOTIFICATION_ID
+import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -23,9 +24,10 @@ import androidx.annotation.VisibleForTesting
 /**
  * ADR-004: the Android owner of an active capture. Manual Start,
  * sticky-restart rehydration (TRK-001), location recording for the lifetime
- * of the ACTIVE capture (TRK-002) and Finish (TRK-004). Pause/Resume
- * (TRK-003) is a separate task that extends this class, not duplicated
- * here.
+ * of the ACTIVE capture (TRK-002), Finish (TRK-004) and automatic
+ * candidate-validation/auto-finish (AUTO-001, `ACTION_AUTO_DETECT`).
+ * Pause/Resume (TRK-003) is a separate task that extends this class, not
+ * duplicated here.
  *
  * `startForeground()` is called synchronously as the very first thing in
  * [onStartCommand], before any suspending work — Android requires it within
@@ -41,6 +43,7 @@ class TrackingForegroundService : Service() {
     @Inject lateinit var coordinator: TrackingSessionCoordinator
     @Inject lateinit var notificationController: TrackingNotificationController
     @Inject lateinit var dispatchers: DispatcherProvider
+    @Inject lateinit var activityTransitionBus: ActivityTransitionBus
 
     private lateinit var serviceScope: CoroutineScope
 
@@ -68,6 +71,10 @@ class TrackingForegroundService : Service() {
     var lastFinishResult: TrackingSessionCoordinator.FinishResult? = null
         private set
 
+    @VisibleForTesting
+    var lastAutoDetectionOutcome: TrackingSessionCoordinator.AutoDetectionOutcome? = null
+        private set
+
     /**
      * TRK-002: the long-running location-collection loop, tracked
      * separately from [lastCommandJob] (which represents a single Start/
@@ -77,6 +84,17 @@ class TrackingForegroundService : Service() {
      */
     @VisibleForTesting
     var locationRecordingJob: Job? = null
+        private set
+
+    /**
+     * AUTO-001: mirrors [locationRecordingJob]'s dedupe guard - a second
+     * `IN_VEHICLE ENTER` broadcast arriving while a candidate is still being
+     * validated (nothing ACTIVE yet, so `ActivityTransitionReceiver` would
+     * otherwise ask to start this again) must not spin up a second, racing
+     * `runAutoDetection` collector against the same engines/location stream.
+     */
+    @VisibleForTesting
+    var autoDetectionJob: Job? = null
         private set
 
     /**
@@ -101,7 +119,12 @@ class TrackingForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, notificationController.buildTrackingNotification())
+        val initialNotification = if (intent?.action == ACTION_AUTO_DETECT) {
+            notificationController.buildValidatingCandidateNotification()
+        } else {
+            notificationController.buildTrackingNotification()
+        }
+        startForeground(NOTIFICATION_ID, initialNotification)
 
         lastCommandJob = when (intent?.action) {
             ACTION_START -> serviceScope.launch {
@@ -110,6 +133,7 @@ class TrackingForegroundService : Service() {
                 ensureLocationRecording(result.captureId)
             }
             ACTION_FINISH -> serviceScope.launch { finishActiveCaptureAndStop() }
+            ACTION_AUTO_DETECT -> ensureAutoDetection()
             else -> serviceScope.launch { rehydrateOrStop() }
         }
 
@@ -164,6 +188,32 @@ class TrackingForegroundService : Service() {
         locationRecordingJob = serviceScope.launch { coordinator.recordLocationUpdates(captureId) }
     }
 
+    /**
+     * AUTO-001: launches (or reuses) the single coroutine that owns
+     * candidate-start validation through candidate-stop monitoring for one
+     * automatic session - see `TrackingSessionCoordinator.runAutoDetection`.
+     * `onCaptureStarted` swaps the notification from "validating a
+     * candidate" to the normal tracking text at the exact moment a real
+     * capture is confirmed (re-calling `startForeground` with the same ID
+     * updates the existing notification in place).
+     */
+    private fun ensureAutoDetection(): Job {
+        autoDetectionJob?.takeIf { it.isActive }?.let { return it }
+        return serviceScope.launch { runAutoDetectionAndStop() }.also { autoDetectionJob = it }
+    }
+
+    private suspend fun runAutoDetectionAndStop() {
+        val outcome = coordinator.runAutoDetection(
+            activityEvents = activityTransitionBus.events,
+            onCaptureStarted = {
+                startForeground(NOTIFICATION_ID, notificationController.buildTrackingNotification())
+            }
+        )
+        lastAutoDetectionOutcome = outcome
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onDestroy() {
         serviceScope.cancel()
         super.onDestroy()
@@ -173,11 +223,15 @@ class TrackingForegroundService : Service() {
         private const val TAG = "TrackingFgService"
         const val ACTION_START = "com.mototriptracker.app.action.START_TRACKING"
         const val ACTION_FINISH = "com.mototriptracker.app.action.FINISH_TRACKING"
+        const val ACTION_AUTO_DETECT = "com.mototriptracker.app.action.AUTO_DETECT"
 
         fun createStartIntent(context: Context): Intent =
             Intent(context, TrackingForegroundService::class.java).setAction(ACTION_START)
 
         fun createFinishIntent(context: Context): Intent =
             Intent(context, TrackingForegroundService::class.java).setAction(ACTION_FINISH)
+
+        fun createAutoDetectIntent(context: Context): Intent =
+            Intent(context, TrackingForegroundService::class.java).setAction(ACTION_AUTO_DETECT)
     }
 }

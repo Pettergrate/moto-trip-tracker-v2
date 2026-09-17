@@ -17,6 +17,7 @@ import com.mototriptracker.app.core.database.entity.RawTrackPointEntity
 import com.mototriptracker.app.core.database.entity.TripCaptureEntity
 import com.mototriptracker.app.core.database.entity.TripEntity
 import com.mototriptracker.app.core.database.entity.TripPartEntity
+import com.mototriptracker.app.core.model.ActivityTransitionSample
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.DetectorState
 import com.mototriptracker.app.core.model.DetectorVersion
@@ -28,21 +29,34 @@ import com.mototriptracker.app.core.model.LocationSample
 import com.mototriptracker.app.core.model.ProcessingVersion
 import com.mototriptracker.app.core.model.StartSource
 import com.mototriptracker.app.core.model.TripStatus
+import com.mototriptracker.app.domain.detection.CandidateStartDecision
+import com.mototriptracker.app.domain.detection.CandidateStartEngine
+import com.mototriptracker.app.domain.detection.CandidateStopDecision
+import com.mototriptracker.app.domain.detection.CandidateStopEngine
+import com.mototriptracker.app.domain.detection.DetectionEvent
 import com.mototriptracker.app.tracking.location.LocationGateway
 import com.mototriptracker.app.tracking.processing.ProcessingScheduler
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import java.util.TimeZone
 import javax.inject.Inject
 
 /**
  * The only thing that may create/reuse the active [TripCaptureEntity]
- * (TRK-001), persist [LocationSample]s into Raw Track (TRK-002) or finish a
- * capture into a logical Trip (TRK-004) — F0.8 §6: "TrackingSessionCoordinator
- * coordina detector, location, persistencia y lifecycle de captura". No
- * Android dependency (ADR-013) — `TrackingForegroundService` is the
- * Android-owning caller (ADR-004); this class is plain, testable logic
- * against the same seams every other task uses (Clock, IdGenerator, DAOs,
- * [LocationGateway], [ProcessingScheduler]).
+ * (TRK-001), persist [LocationSample]s into Raw Track (TRK-002), finish a
+ * capture into a logical Trip (TRK-004), or run a whole automatic
+ * candidate-start-to-candidate-stop session end to end ([runAutoDetection],
+ * AUTO-001) — F0.8 §6: "TrackingSessionCoordinator coordina detector,
+ * location, persistencia y lifecycle de captura". No Android dependency
+ * (ADR-013) — `TrackingForegroundService` is the Android-owning caller
+ * (ADR-004); this class is plain, testable logic against the same seams
+ * every other task uses (Clock, IdGenerator, DAOs, [LocationGateway],
+ * [ProcessingScheduler]).
  *
  * `detectorVersion`/`locationProfileVersion` are stamped as `DetectorVersion(0)`/
  * `LocationProfileVersion(0)` — explicit placeholders. No real detector or
@@ -77,13 +91,29 @@ class TrackingSessionCoordinator @Inject constructor(
         data class AlreadyFinished(override val captureId: String, override val tripId: String) : FinishResult
     }
 
+    /** AUTO-001: [runAutoDetection]'s own outcome, distinct from [StartResult]/[FinishResult]. */
+    sealed interface AutoDetectionOutcome {
+        /** Nothing was ever confirmed - the candidate opened (or never did) and closed with no Trip created. */
+        data object CandidateAbandoned : AutoDetectionOutcome
+        data class TripCompleted(val captureId: String, val tripId: String) : AutoDetectionOutcome
+    }
+
     /**
      * ADR-020/REL-INV-001: idempotent by construction — delegates the actual
      * check-then-insert to [TripCaptureDao.startCaptureIfNoneActive], which
      * already runs it in one transaction (see that DAO for why a raw DB
      * constraint isn't used instead).
      */
-    suspend fun startManualCapture(): StartResult {
+    suspend fun startManualCapture(): StartResult = startCapture(StartSource.MANUAL)
+
+    /**
+     * AUTO-001: the same transactional start path as [startManualCapture],
+     * stamped [StartSource.AUTO] - used only by [runAutoDetection] once
+     * `CandidateStartEngine` actually confirms.
+     */
+    suspend fun startAutoCapture(): StartResult = startCapture(StartSource.AUTO)
+
+    private suspend fun startCapture(source: StartSource): StartResult {
         val wallNow = clock.wallClockMillis()
         val elapsedNow = clock.elapsedRealtimeNanos()
         val newCapture = TripCaptureEntity(
@@ -94,7 +124,7 @@ class TrackingSessionCoordinator @Inject constructor(
             startElapsedRealtimeNanos = elapsedNow,
             endElapsedRealtimeNanos = null,
             localTimeZoneId = TimeZone.getDefault().id,
-            startSource = StartSource.MANUAL,
+            startSource = source,
             endSource = null,
             detectorVersion = DetectorVersion(0),
             locationProfileVersion = LocationProfileVersion(0),
@@ -112,7 +142,7 @@ class TrackingSessionCoordinator @Inject constructor(
             StartResult.AlreadyActive(existing.id)
         }
 
-        logUserStartCommand(result)
+        logStartCommand(source, result)
         return result
     }
 
@@ -152,7 +182,7 @@ class TrackingSessionCoordinator @Inject constructor(
      * actually needing it would be exactly the kind of unrequested schema
      * this project avoids.
      */
-    suspend fun finishCapture(captureId: String): FinishResult {
+    suspend fun finishCapture(captureId: String, endSource: EndSource = EndSource.MANUAL): FinishResult {
         val result = database.withTransaction {
             val capture = requireNotNull(tripCaptureDao.findById(captureId)) {
                 "finishCapture called with an unknown captureId: $captureId"
@@ -188,7 +218,7 @@ class TrackingSessionCoordinator @Inject constructor(
                 id = captureId,
                 endedAt = wallNow,
                 endElapsedRealtimeNanos = elapsedNow,
-                endSource = EndSource.MANUAL,
+                endSource = endSource,
                 updatedAt = wallNow
             )
 
@@ -225,12 +255,114 @@ class TrackingSessionCoordinator @Inject constructor(
             FinishResult.Finished(captureId, tripId)
         }
 
-        logUserFinishCommand(result)
+        logFinishCommand(endSource, result)
         if (result is FinishResult.Finished) {
             processingScheduler.enqueueTripProcessing(result.tripId, result.captureId)
         }
         return result
     }
+
+    /**
+     * AUTO-001: `DET-002`/`DET-003`'s engines wired to a real Start/Finish.
+     * The caller (`ActivityTransitionReceiver`/`TrackingForegroundService`)
+     * already checked `CapabilityResolver` before ever invoking this - this
+     * method has no mode awareness of its own, matching
+     * `CandidateStartEngine`/`CandidateStopEngine`'s own "caller decides when
+     * to route events here" posture.
+     *
+     * One continuous coroutine spans BOTH candidate-start validation and,
+     * once confirmed, candidate-stop monitoring, deliberately: the same live
+     * [locationGateway] subscription that validates the candidate keeps
+     * flowing straight into Raw Track persistence with no re-subscribe gap.
+     * DP-008 ("high-detail location tracking SHOULD be activated only when a
+     * Trip is being validated OR recorded") is this task's justification for
+     * reusing the one TRACKING-grade profile for both phases rather than
+     * building a separate, lighter "burst" profile - a documented v1
+     * simplification, not an oversight.
+     *
+     * The merged ticker closes a real gap `CandidateStopEngineTest` names
+     * directly: grace-period/candidate-window expiry must stay reachable
+     * during a total, sustained GPS loss (tunnel, parking garage) where no
+     * location sample would otherwise arrive to trigger the check.
+     *
+     * Two known, deliberately accepted v1 gaps, not silently dropped:
+     * - F0.3 §6 requirement 5 ("SHOULD not lose a large initial route
+     *   section"): samples evaluated during candidate validation are never
+     *   retroactively persisted once confirmed - only samples from the
+     *   moment of confirmation onward are. Buffering/backdating them would
+     *   need real sample-retention/replay machinery this task doesn't build.
+     * - If the process dies mid-flight, `TrackingForegroundService`'s
+     *   existing sticky-restart path (`rehydrateOrStop`) resumes plain Raw
+     *   Track recording for an already-confirmed AUTO capture (no data loss)
+     *   but does not resume automatic candidate-stop monitoring for it - the
+     *   trip remains finishable manually. Re-entering just the stop-
+     *   monitoring phase after a restart is deferred past this task.
+     */
+    suspend fun runAutoDetection(
+        activityEvents: Flow<ActivityTransitionSample>,
+        onCaptureStarted: suspend (captureId: String) -> Unit = {}
+    ): AutoDetectionOutcome {
+        val activityFlow: Flow<DetectionEvent> = activityEvents.map { DetectionEvent.Activity(it) }
+        val locationFlow: Flow<DetectionEvent> = locationGateway.locationUpdates().map { DetectionEvent.Location(it) }
+        val tickerFlow: Flow<DetectionEvent> = flow {
+            while (true) {
+                delay(TICKER_INTERVAL_MS)
+                emit(DetectionEvent.TimeTick(clock.elapsedRealtimeNanos()))
+            }
+        }
+
+        val startEngine = CandidateStartEngine()
+        var stopEngine: CandidateStopEngine? = null
+        var activeCaptureId: String? = null
+        var nextSequenceNumber = 0L
+
+        try {
+            merge(activityFlow, locationFlow, tickerFlow).collect { event ->
+                val captureId = activeCaptureId
+                if (captureId == null) {
+                    when (val decision = startEngine.accept(event)) {
+                        is CandidateStartDecision.Confirmed -> {
+                            when (val started = startAutoCapture()) {
+                                is StartResult.Started -> {
+                                    activeCaptureId = started.captureId
+                                    nextSequenceNumber = (rawTrackPointDao.maxSequenceNumber(started.captureId) ?: -1) + 1
+                                    stopEngine = CandidateStopEngine()
+                                    onCaptureStarted(started.captureId)
+                                }
+                                // Another Start (most likely manual - DP-005 "manual
+                                // intent wins") raced in first; nothing to do here.
+                                is StartResult.AlreadyActive -> throw StopAutoDetection(AutoDetectionOutcome.CandidateAbandoned)
+                            }
+                        }
+                        CandidateStartDecision.Abandoned -> throw StopAutoDetection(AutoDetectionOutcome.CandidateAbandoned)
+                        CandidateStartDecision.NoChange, CandidateStartDecision.CandidateOpened -> Unit
+                    }
+                } else {
+                    if (event is DetectionEvent.Location) {
+                        try {
+                            rawTrackPointDao.insert(event.sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
+                            nextSequenceNumber++
+                        } catch (error: Exception) {
+                            logRawTrackPointPersistenceFailure(captureId, error)
+                        }
+                    }
+                    when (val decision = checkNotNull(stopEngine).accept(event)) {
+                        is CandidateStopDecision.Confirmed -> {
+                            val result = finishCapture(captureId, EndSource.AUTO)
+                            throw StopAutoDetection(AutoDetectionOutcome.TripCompleted(captureId, result.tripId))
+                        }
+                        CandidateStopDecision.NoChange, CandidateStopDecision.CandidateOpened, CandidateStopDecision.Abandoned -> Unit
+                    }
+                }
+            }
+            return AutoDetectionOutcome.CandidateAbandoned
+        } catch (stop: StopAutoDetection) {
+            return stop.outcome
+        }
+    }
+
+    /** A structured way to unwind out of [runAutoDetection]'s `collect` early with a known result. */
+    private class StopAutoDetection(val outcome: AutoDetectionOutcome) : CancellationException()
 
     /**
      * TRK-002: collects [locationGateway]'s stream for the lifetime of the
@@ -314,7 +446,12 @@ class TrackingSessionCoordinator @Inject constructor(
         )
     }
 
-    private suspend fun logUserFinishCommand(result: FinishResult) {
+    /**
+     * `DETECTOR` for an auto-triggered command, `USER_COMMAND` for a manual
+     * one - AUTO-001 is the first caller where [endSource] can actually be
+     * [EndSource.AUTO], so this category split didn't need to exist before.
+     */
+    private suspend fun logFinishCommand(endSource: EndSource, result: FinishResult) {
         val (reasonCode, stateBefore) = when (result) {
             is FinishResult.Finished -> "NEW_TRIP" to CaptureStatus.ACTIVE.name
             is FinishResult.AlreadyFinished -> "ALREADY_FINISHED" to CaptureStatus.COMPLETED.name
@@ -324,7 +461,7 @@ class TrackingSessionCoordinator @Inject constructor(
                 eventId = idGenerator.newId(),
                 occurredAt = clock.wallClockMillis(),
                 elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
-                category = DiagnosticCategory.USER_COMMAND,
+                category = if (endSource == EndSource.AUTO) DiagnosticCategory.DETECTOR else DiagnosticCategory.USER_COMMAND,
                 eventType = "FINISH",
                 severity = DiagnosticSeverity.INFO,
                 source = "tracking-service",
@@ -344,7 +481,8 @@ class TrackingSessionCoordinator @Inject constructor(
         )
     }
 
-    private suspend fun logUserStartCommand(result: StartResult) {
+    /** Same [DiagnosticCategory.DETECTOR]/[DiagnosticCategory.USER_COMMAND] split as [logFinishCommand], keyed off [source] instead. */
+    private suspend fun logStartCommand(source: StartSource, result: StartResult) {
         val (captureId, reasonCode) = when (result) {
             is StartResult.Started -> result.captureId to "NEW_CAPTURE"
             is StartResult.AlreadyActive -> result.captureId to "ALREADY_ACTIVE"
@@ -354,7 +492,7 @@ class TrackingSessionCoordinator @Inject constructor(
                 eventId = idGenerator.newId(),
                 occurredAt = clock.wallClockMillis(),
                 elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
-                category = DiagnosticCategory.USER_COMMAND,
+                category = if (source == StartSource.AUTO) DiagnosticCategory.DETECTOR else DiagnosticCategory.USER_COMMAND,
                 eventType = "START",
                 severity = DiagnosticSeverity.INFO,
                 source = "tracking-service",
@@ -372,5 +510,16 @@ class TrackingSessionCoordinator @Inject constructor(
                 processingVersion = ProcessingVersion(0)
             )
         )
+    }
+
+    companion object {
+        /**
+         * AUTO-001: well under both engines' shortest threshold
+         * (`CandidateStartProfile`'s 15s confirmation window) - just frequent
+         * enough that a total, sustained GPS loss still lets a stale
+         * candidate/grace-period expire in bounded time instead of hanging
+         * until a location fix eventually returns.
+         */
+        private const val TICKER_INTERVAL_MS = 15_000L
     }
 }

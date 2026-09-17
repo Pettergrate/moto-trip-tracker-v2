@@ -1,26 +1,35 @@
 package com.mototriptracker.app.tracking.service
 
+import android.app.Notification
 import android.app.NotificationManager
 import androidx.test.core.app.ApplicationProvider
 import com.mototriptracker.app.core.common.AndroidDispatcherProvider
 import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.common.FakeIdGenerator
 import com.mototriptracker.app.core.database.MotoTripDatabase
+import com.mototriptracker.app.core.model.ActivityTransitionSample
+import com.mototriptracker.app.core.model.ActivityType
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.LocationSample
+import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.core.notification.TrackingNotificationController
 import com.mototriptracker.app.testing.FakeLocationGateway
 import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
+import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.tracking.location.LocationGateway
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -95,6 +104,7 @@ class TrackingForegroundServiceTest {
             ApplicationProvider.getApplicationContext()
         )
         service.dispatchers = AndroidDispatcherProvider()
+        service.activityTransitionBus = ActivityTransitionBus()
         return controller
     }
 
@@ -281,5 +291,106 @@ class TrackingForegroundServiceTest {
 
         val shadowService = shadowOf(controller.get())
         assertTrue(shadowService.isStoppedBySelf)
+    }
+
+    // --- AUTO-001: ACTION_AUTO_DETECT ------------------------------------
+    //
+    // `TrackingSessionCoordinatorTest` already exhaustively covers
+    // `runAutoDetection`'s own decision logic (confirm/abandon/auto-finish)
+    // using a deterministic, virtual-time-scheduled activity Flow. This
+    // service, real-dispatcher test only needs to prove the plumbing around
+    // it: the right notification for the right phase, no duplicate
+    // collector, and that a real live `ActivityTransitionBus` emission
+    // actually reaches it. A full confirm-then-auto-finish run isn't
+    // exercised here deliberately - the ticker's `delay(15_000L)` is a real
+    // wall-clock wait under `runBlocking` (unlike the coordinator test's
+    // virtual time), so waiting out a real confirmation window here would
+    // make this suite slow for no extra coverage; the abandon path below
+    // resolves immediately (no delay involved) and is enough to prove the
+    // bus is wired correctly end to end.
+
+    private fun activitySample(type: ActivityType, transition: TransitionType, elapsedNanos: Long) = ActivityTransitionSample(
+        activityType = type,
+        transitionType = transition,
+        elapsedRealtimeNanos = elapsedNanos,
+        wallTimeEpochMs = elapsedNanos / 1_000_000,
+        source = "test"
+    )
+
+    @Test
+    fun actionAutoDetectShowsAValidatingNotificationInsteadOfTheTrackingOne() = runBlocking {
+        val controller = buildServiceController()
+
+        controller.withIntent(TrackingForegroundService.createAutoDetectIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+
+        val manager = ApplicationProvider.getApplicationContext<android.content.Context>()
+            .getSystemService(NotificationManager::class.java)
+        val notification = (shadowOf(manager) as ShadowNotificationManager)
+            .getNotification(TrackingNotificationController.NOTIFICATION_ID)
+        assertNotNull(notification)
+        assertNotEquals(
+            "a candidate being validated must not show the 'recording your trip' text",
+            "Recording your trip",
+            notification.extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+        )
+
+        controller.destroy()
+        Unit
+    }
+
+    @Test
+    fun aSecondAutoDetectCommandWhileOneIsRunningReusesTheSameJob() = runBlocking {
+        val controller = buildServiceController()
+
+        controller.withIntent(TrackingForegroundService.createAutoDetectIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        val firstJob = controller.get().autoDetectionJob
+
+        controller.withIntent(TrackingForegroundService.createAutoDetectIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        val secondJob = controller.get().autoDetectionJob
+
+        assertNotNull(firstJob)
+        assertTrue("the dedupe guard must reuse the same Job, not launch a second collector", firstJob === secondJob)
+
+        controller.destroy()
+        Unit
+    }
+
+    @Test
+    fun actionAutoDetectStopsTheServiceWhenARealBusDeliveredCandidateIsAbandoned() = runBlocking {
+        val controller = buildServiceController()
+
+        controller.withIntent(TrackingForegroundService.createAutoDetectIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+
+        val bus = controller.get().activityTransitionBus
+        withTimeout(5_000) { bus.subscriptionCount.first { it > 0 } }
+        bus.emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L))
+        bus.emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 1_000_000L))
+
+        controller.get().autoDetectionJob?.join()
+
+        assertEquals(
+            TrackingSessionCoordinator.AutoDetectionOutcome.CandidateAbandoned,
+            controller.get().lastAutoDetectionOutcome
+        )
+        assertEquals(0, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+        assertTrue(shadowOf(controller.get()).isStoppedBySelf)
+    }
+
+    @Test
+    fun actionAutoDetectDoesNotStartAnAutoCaptureWhenNoCandidateEverArrives() = runBlocking {
+        val controller = buildServiceController()
+
+        controller.withIntent(TrackingForegroundService.createAutoDetectIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        val bus = controller.get().activityTransitionBus
+        withTimeout(5_000) { bus.subscriptionCount.first { it > 0 } }
+
+        assertNull(db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE))
+        controller.destroy()
+        Unit
     }
 }
