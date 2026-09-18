@@ -29,11 +29,18 @@ class TripMetricsCalculatorTest {
         calculator = TripMetricsCalculator()
     }
 
-    private fun rawPoint(sequenceNumber: Long, elapsedNanos: Long, speedMps: Float? = null) = RawTrackPointEntity(
+    private fun rawPoint(
+        sequenceNumber: Long,
+        elapsedNanos: Long,
+        speedMps: Float? = null,
+        altitudeEllipsoidM: Double? = null,
+        altitudeMslM: Double? = null,
+        verticalAccuracyM: Float? = null
+    ) = RawTrackPointEntity(
         captureId = captureId, sequenceNumber = sequenceNumber, capturedAt = elapsedNanos / 1_000_000,
         elapsedRealtimeNanos = elapsedNanos, receivedAtElapsedRealtimeNanos = elapsedNanos,
         latitude = 10.0, longitude = -20.0, horizontalAccuracyM = 5.0f,
-        altitudeEllipsoidM = null, altitudeMslM = null, verticalAccuracyM = null,
+        altitudeEllipsoidM = altitudeEllipsoidM, altitudeMslM = altitudeMslM, verticalAccuracyM = verticalAccuracyM,
         speedMps = speedMps, speedAccuracyMps = null, bearingDeg = null, bearingAccuracyDeg = null,
         provider = "fused", isMock = false, requestProfileId = "test-profile",
         callbackBatchId = null, detectorStateSnapshot = "TRACKING"
@@ -303,5 +310,66 @@ class TripMetricsCalculatorTest {
         val result = ProcessingEngine.Result(assessments = emptyList(), processedPoints = emptyList(), gaps = emptyList())
 
         calculator.calculate(tripId, version, 0L, listOf(part(0L, null)), result, emptyMap())
+    }
+
+    // --- PRC-003: elevation -----------------------------------------------
+
+    @Test
+    fun elevationRangeAndAscentComeFromMslAltitudeWhenAvailable() {
+        val points = listOf(processedPoint(0, 0, 10.0, -20.0), processedPoint(1, 1, 10.001, -20.001), processedPoint(2, 2, 10.002, -20.002))
+        val result = ProcessingEngine.Result(
+            assessments = points.map { assessment(it.sourceSequenceNumber!!, TrackPointDecision.ACCEPTED) },
+            processedPoints = points,
+            gaps = emptyList()
+        )
+        val rawPoints = listOf(
+            rawPoint(0, 0L, altitudeMslM = 100.0),
+            rawPoint(1, 1_000_000_000L, altitudeMslM = 110.0),
+            rawPoint(2, 2_000_000_000L, altitudeMslM = 120.0)
+        )
+
+        val stats = calculator.calculate(tripId, version, 0L, listOf(part(0L, 2_000_000_000L)), result, mapOf(captureId to rawPoints))
+
+        assertEquals(100.0, stats.minElevationM!!, 0.0001)
+        assertEquals(120.0, stats.maxElevationM!!, 0.0001)
+        assertEquals(20.0, stats.ascentM!!, 0.0001)
+        assertEquals(0.0, stats.descentM!!, 0.0001)
+    }
+
+    @Test
+    fun elevationFallsBackToEllipsoidAltitudeWhenMslIsMissing() {
+        val points = listOf(processedPoint(0, 0, 10.0, -20.0))
+        val result = ProcessingEngine.Result(
+            assessments = listOf(assessment(0, TrackPointDecision.ACCEPTED)),
+            processedPoints = points,
+            gaps = emptyList()
+        )
+        val rawPoints = listOf(rawPoint(0, 0L, altitudeEllipsoidM = 250.0, altitudeMslM = null))
+
+        val stats = calculator.calculate(tripId, version, 0L, listOf(part(0L, 1_000_000_000L)), result, mapOf(captureId to rawPoints))
+
+        assertEquals(250.0, stats.minElevationM!!, 0.0001)
+        assertEquals(250.0, stats.maxElevationM!!, 0.0001)
+    }
+
+    @Test
+    fun pointWithPoorVerticalAccuracyIsExcludedFromTheElevationRange() {
+        val points = listOf(processedPoint(0, 0, 10.0, -20.0), processedPoint(1, 1, 10.001, -20.001))
+        val result = ProcessingEngine.Result(
+            assessments = points.map { assessment(it.sourceSequenceNumber!!, TrackPointDecision.ACCEPTED) },
+            processedPoints = points,
+            gaps = emptyList()
+        )
+        val rawPoints = listOf(
+            rawPoint(0, 0L, altitudeMslM = 100.0, verticalAccuracyM = 5.0f),
+            // Default ElevationProfile.maxVerticalAccuracyM is 20.0 - this point's own reported
+            // accuracy is known and worse than that, so it must not distort the range.
+            rawPoint(1, 1_000_000_000L, altitudeMslM = 9_999.0, verticalAccuracyM = 50.0f)
+        )
+
+        val stats = calculator.calculate(tripId, version, 0L, listOf(part(0L, 1_000_000_000L)), result, mapOf(captureId to rawPoints))
+
+        assertEquals(100.0, stats.minElevationM!!, 0.0001)
+        assertEquals(100.0, stats.maxElevationM!!, 0.0001)
     }
 }

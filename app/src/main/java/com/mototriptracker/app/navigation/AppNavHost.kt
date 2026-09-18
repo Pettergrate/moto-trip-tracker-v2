@@ -70,7 +70,7 @@ fun AppNavHost() {
             when (destination) {
                 Destination.Home -> NavEntry(destination) {
                     MainTabScaffold(current = destination, onTabSelected = ::navigateToTab, onSettingsClick = ::navigateToSettings) {
-                        HomeScreen(onViewActiveTrip = ::navigateToActiveTrip)
+                        HomeScreen(onViewActiveTrip = ::navigateToActiveTrip, onOpenTripDetail = ::navigateToTripDetail)
                     }
                 }
 

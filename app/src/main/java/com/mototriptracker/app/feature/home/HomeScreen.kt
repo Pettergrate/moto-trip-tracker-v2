@@ -1,5 +1,6 @@
 package com.mototriptracker.app.feature.home
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -30,6 +31,7 @@ import com.mototriptracker.app.feature.common.formatDurationCompact
 @Composable
 fun HomeScreen(
     onViewActiveTrip: () -> Unit,
+    onOpenTripDetail: (String) -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -44,7 +46,8 @@ fun HomeScreen(
         onStartTripClick = viewModel::onStartTripClick,
         onPauseClick = viewModel::onPauseClick,
         onResumeClick = viewModel::onResumeClick,
-        onViewActiveTrip = onViewActiveTrip
+        onViewActiveTrip = onViewActiveTrip,
+        onOpenTripDetail = onOpenTripDetail
     )
 }
 
@@ -54,7 +57,8 @@ private fun HomeContent(
     onStartTripClick: () -> Unit,
     onPauseClick: () -> Unit,
     onResumeClick: () -> Unit,
-    onViewActiveTrip: () -> Unit
+    onViewActiveTrip: () -> Unit,
+    onOpenTripDetail: (String) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -84,7 +88,7 @@ private fun HomeContent(
             item { Text("No trips yet", style = MaterialTheme.typography.bodyMedium) }
         } else {
             items(uiState.recentTrips, key = { it.tripId }) { trip ->
-                RecentTripRow(trip)
+                RecentTripRow(trip, onClick = { onOpenTripDetail(trip.tripId) })
             }
         }
     }
@@ -139,8 +143,8 @@ private fun ActiveTripCard(
 }
 
 @Composable
-private fun RecentTripRow(trip: RecentTripUi) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+private fun RecentTripRow(trip: RecentTripUi, onClick: () -> Unit) {
+    Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(trip.displayName, style = MaterialTheme.typography.titleSmall)
             val distanceText = trip.distanceMeters?.let { formatDistanceKm(it) } ?: "—"

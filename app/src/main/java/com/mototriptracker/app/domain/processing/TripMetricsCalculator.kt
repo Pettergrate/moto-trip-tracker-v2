@@ -19,8 +19,11 @@ import javax.inject.Inject
  * moving/stopped split needs a speed threshold, and GPS jitter means even a
  * stationary phone rarely reports exactly 0 m/s — no F0.6-validated cutoff
  * exists yet (that's `DET`-family territory), so this doesn't invent one.
- * [minElevationM]/[maxElevationM]/[ascentM]/[descentM] are `PRC-003`'s job,
- * not duplicated here. `manualPauseDurationMs` (`TRK-003`) sums every closed
+ * [minElevationM]/[maxElevationM]/[ascentM]/[descentM] come from
+ * `PRC-003`'s [ElevationCalculator] - a separate, independently-testable
+ * pure algorithm rather than more inline logic here, since hysteresis-based
+ * ascent/descent is a genuinely different kind of computation from a
+ * running sum. `manualPauseDurationMs` (`TRK-003`) sums every closed
  * [ManualPauseIntervalEntity] for the Trip's captures - `totalDurationMs`
  * deliberately stays the full wall-clock span unchanged, so a caller wanting
  * "riding time" computes `totalDurationMs - manualPauseDurationMs` itself
@@ -30,6 +33,14 @@ import javax.inject.Inject
  * not `android.location.Location.distanceBetween()`.
  */
 class TripMetricsCalculator @Inject constructor() {
+
+    // Not a Hilt-injected constructor parameter: Dagger resolves every
+    // `@Inject constructor` parameter through the dependency graph and
+    // ignores Kotlin default values, so a second constructor parameter here
+    // would need its own `@Provides` binding for no real benefit - the
+    // detection engines' own profile classes (`CandidateStopProfile` et al.)
+    // are likewise never Hilt-injected, only ever constructed directly.
+    private val elevationProfile = ElevationProfile()
 
     fun calculate(
         tripId: String,
@@ -44,10 +55,12 @@ class TripMetricsCalculator @Inject constructor() {
 
         var distanceM = 0.0
         val speedSamplesMps = mutableListOf<Float>()
+        val elevationSamples = mutableListOf<ElevationSample>()
         var previous: ProcessedTrackPointEntity? = null
 
         for (current in processingResult.processedPoints) {
             val isGapBoundary = current.pointRole == ProcessingEngine.POINT_ROLE_GAP_BOUNDARY
+            val raw = rawBySourceKey[current.sourceCaptureId to current.sourceSequenceNumber]
 
             // ADR-016/F0.5 §11.3: a gap must not silently inflate distance —
             // the edge landing on a gap-boundary point is excluded, not the
@@ -61,12 +74,18 @@ class TripMetricsCalculator @Inject constructor() {
             // rejection this task can make with zero invented numbers, the
             // same posture PRC-001 took for point assessment.
             if (!isGapBoundary) {
-                val raw = rawBySourceKey[current.sourceCaptureId to current.sourceSequenceNumber]
                 raw?.speedMps?.let { speedSamplesMps += it }
             }
 
+            elevationSamples += ElevationSample(
+                elevationMeters = raw?.let { selectElevationMeters(it) },
+                isGapBoundary = isGapBoundary
+            )
+
             previous = current
         }
+
+        val elevationMetrics = ElevationCalculator.compute(elevationSamples, elevationProfile)
 
         val totalDurationMs = parts.sumOf { part ->
             val endNanos = checkNotNull(part.endElapsedRealtimeNanos) {
@@ -101,10 +120,10 @@ class TripMetricsCalculator @Inject constructor() {
             maxSpeedMps = maxSpeedMps,
             averageSpeedMps = averageSpeedMps,
             averageMovingSpeedMps = null,
-            minElevationM = null,
-            maxElevationM = null,
-            ascentM = null,
-            descentM = null,
+            minElevationM = elevationMetrics.minElevationM,
+            maxElevationM = elevationMetrics.maxElevationM,
+            ascentM = elevationMetrics.ascentM,
+            descentM = elevationMetrics.descentM,
             validPointCount = processingResult.processedPoints.size,
             suspectPointCount = 0,
             rejectedPointCount = rejectedPointCount,
@@ -112,4 +131,16 @@ class TripMetricsCalculator @Inject constructor() {
         )
     }
 
+    /**
+     * GPS-010: prefer MSL altitude over the WGS84 ellipsoid when available.
+     * A sample is discarded only when its own vertical accuracy is *known*
+     * and worse than [ElevationProfile.maxVerticalAccuracyM] - a device that
+     * never reports vertical accuracy at all isn't punished harder than one
+     * honest enough to report poor accuracy.
+     */
+    private fun selectElevationMeters(raw: RawTrackPointEntity): Double? {
+        val verticalAccuracy = raw.verticalAccuracyM
+        if (verticalAccuracy != null && verticalAccuracy.toDouble() > elevationProfile.maxVerticalAccuracyM) return null
+        return raw.altitudeMslM ?: raw.altitudeEllipsoidM
+    }
 }
