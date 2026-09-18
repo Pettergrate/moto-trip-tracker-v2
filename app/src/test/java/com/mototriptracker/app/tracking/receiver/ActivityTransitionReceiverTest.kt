@@ -12,6 +12,7 @@ import com.mototriptracker.app.core.model.ActivityTransitionSample
 import com.mototriptracker.app.core.model.ActivityType
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.DetectorVersion
+import com.mototriptracker.app.core.model.EndSource
 import com.mototriptracker.app.core.model.LocationProfileVersion
 import com.mototriptracker.app.core.model.StartSource
 import com.mototriptracker.app.core.model.TransitionType
@@ -178,5 +179,45 @@ class ActivityTransitionReceiverTest {
         )
 
         assertNotNull(nextStartedServiceAction())
+    }
+
+    // --- DET-006: post-Finish auto-start suppression ---------------------
+
+    private fun mostRecentlyEndedCapture(endElapsedRealtimeNanos: Long) = activeCapture().copy(
+        status = CaptureStatus.COMPLETED,
+        endedAt = endElapsedRealtimeNanos / 1_000_000,
+        endElapsedRealtimeNanos = endElapsedRealtimeNanos,
+        endSource = EndSource.MANUAL
+    )
+
+    @Test
+    fun doesNotStartAutoDetectionWithinThePostFinishSuppressionWindow() = runTest {
+        db.tripCaptureDao().insert(mostRecentlyEndedCapture(endElapsedRealtimeNanos = 1_000L))
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+        receiver.clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L) // "now" is right after the Finish
+
+        receiver.maybeStartAutoDetection(
+            ApplicationProvider.getApplicationContext(),
+            listOf(sample(ActivityType.IN_VEHICLE, TransitionType.ENTER))
+        )
+
+        assertNull(
+            "a rider still moving right after Finish must not immediately get a new candidate Trip",
+            nextStartedServiceAction()
+        )
+    }
+
+    @Test
+    fun startsAutoDetectionOnceThePostFinishSuppressionWindowHasElapsed() = runTest {
+        db.tripCaptureDao().insert(mostRecentlyEndedCapture(endElapsedRealtimeNanos = 1_000L))
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+        receiver.clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L + 121_000_000_000L) // 121s later
+
+        receiver.maybeStartAutoDetection(
+            ApplicationProvider.getApplicationContext(),
+            listOf(sample(ActivityType.IN_VEHICLE, TransitionType.ENTER))
+        )
+
+        assertEquals(TrackingForegroundService.ACTION_AUTO_DETECT, nextStartedServiceAction())
     }
 }

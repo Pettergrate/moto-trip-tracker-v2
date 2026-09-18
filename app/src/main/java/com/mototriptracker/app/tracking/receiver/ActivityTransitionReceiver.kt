@@ -16,6 +16,7 @@ import com.mototriptracker.app.core.model.CapabilityMode
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.domain.capability.CapabilityResolver
+import com.mototriptracker.app.domain.detection.PostFinishSuppression
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionRecorder
 import com.mototriptracker.app.tracking.activityrecognition.mapActivityType
@@ -94,6 +95,13 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
      * ("is a capture already active?") plus a fresh [CapabilityResolver]
      * read, not a flag this receiver remembers across calls — the service it
      * starts is the one that owns any actual state.
+     *
+     * DET-006/F0.3 §9: also refuses to start while the most recently ended
+     * capture is still inside [PostFinishSuppression]'s window — "a rider
+     * may press Finish while the device is still moving; without
+     * protection, the detector could immediately create a new candidate
+     * Trip." A Manual Start is never gated by this at all, since it never
+     * goes through this receiver (DP-005: manual intent wins regardless).
      */
     @VisibleForTesting
     internal suspend fun maybeStartAutoDetection(context: Context, samples: List<ActivityTransitionSample>) {
@@ -105,6 +113,9 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
 
         val mode = CapabilityResolver.resolve(capabilityInputsProvider.current())
         if (mode != CapabilityMode.FULL_AUTO && mode != CapabilityMode.ASSISTED_AUTO) return
+
+        val lastEnded = tripCaptureDao.findMostRecentlyEnded()
+        if (PostFinishSuppression.isSuppressed(lastEnded?.endElapsedRealtimeNanos, clock.elapsedRealtimeNanos())) return
 
         context.startForegroundService(TrackingForegroundService.createAutoDetectIntent(context))
     }

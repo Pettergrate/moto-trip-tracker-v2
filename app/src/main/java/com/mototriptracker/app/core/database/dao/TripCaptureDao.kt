@@ -21,6 +21,16 @@ interface TripCaptureDao {
     suspend fun countByStatus(status: CaptureStatus): Int
 
     /**
+     * DET-006/F0.3 §9: the reference point for post-Finish auto-start
+     * suppression - whichever capture (COMPLETED or ABORTED) ended most
+     * recently, regardless of how. Ordered by `endElapsedRealtimeNanos`
+     * (GPS-004: elapsed-realtime is the authoritative clock for "how much
+     * time has passed" math), not `endedAt`.
+     */
+    @Query("SELECT * FROM trip_capture WHERE status != :activeStatus ORDER BY endElapsedRealtimeNanos DESC LIMIT 1")
+    suspend fun findMostRecentlyEnded(activeStatus: CaptureStatus = CaptureStatus.ACTIVE): TripCaptureEntity?
+
+    /**
      * Do not call directly outside [startCaptureIfNoneActive]: inserting
      * here bypasses the ADR-020 single-active-capture guard. Kotlin doesn't
      * allow narrowing this below `public` on a Room `@Dao` interface member
