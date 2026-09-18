@@ -6,6 +6,7 @@ import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.database.dao.CaptureEventDao
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
 import com.mototriptracker.app.core.database.dao.LocationGapDao
+import com.mototriptracker.app.core.database.dao.ManualPauseIntervalDao
 import com.mototriptracker.app.core.database.dao.PointAssessmentDao
 import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
@@ -71,4 +72,7 @@ object DatabaseModule {
 
     @Provides
     fun provideTripStatisticsDao(database: MotoTripDatabase): TripStatisticsDao = database.tripStatisticsDao()
+
+    @Provides
+    fun provideManualPauseIntervalDao(database: MotoTripDatabase): ManualPauseIntervalDao = database.manualPauseIntervalDao()
 }

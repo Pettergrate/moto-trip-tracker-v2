@@ -7,12 +7,14 @@ import com.mototriptracker.app.core.common.IdGenerator
 import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.database.dao.CaptureEventDao
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
+import com.mototriptracker.app.core.database.dao.ManualPauseIntervalDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.database.dao.TripDao
 import com.mototriptracker.app.core.database.dao.TripPartDao
 import com.mototriptracker.app.core.database.entity.CaptureEventEntity
 import com.mototriptracker.app.core.database.entity.DiagnosticEventEntity
+import com.mototriptracker.app.core.database.entity.ManualPauseIntervalEntity
 import com.mototriptracker.app.core.database.entity.RawTrackPointEntity
 import com.mototriptracker.app.core.database.entity.TripCaptureEntity
 import com.mototriptracker.app.core.database.entity.TripEntity
@@ -49,9 +51,10 @@ import javax.inject.Inject
 /**
  * The only thing that may create/reuse the active [TripCaptureEntity]
  * (TRK-001), persist [LocationSample]s into Raw Track (TRK-002), finish a
- * capture into a logical Trip (TRK-004), or run a whole automatic
- * candidate-start-to-candidate-stop session end to end ([runAutoDetection],
- * AUTO-001) — F0.8 §6: "TrackingSessionCoordinator coordina detector,
+ * capture into a logical Trip (TRK-004), pause/resume it ([pauseCapture]/
+ * [resumeCapture], TRK-003), or run a whole automatic candidate-start-to-
+ * candidate-stop session end to end ([runAutoDetection], AUTO-001) — F0.8
+ * §6: "TrackingSessionCoordinator coordina detector,
  * location, persistencia y lifecycle de captura". No Android dependency
  * (ADR-013) — `TrackingForegroundService` is the Android-owning caller
  * (ADR-004); this class is plain, testable logic against the same seams
@@ -73,6 +76,7 @@ class TrackingSessionCoordinator @Inject constructor(
     private val captureEventDao: CaptureEventDao,
     private val tripDao: TripDao,
     private val tripPartDao: TripPartDao,
+    private val manualPauseIntervalDao: ManualPauseIntervalDao,
     private val locationGateway: LocationGateway,
     private val processingScheduler: ProcessingScheduler,
     private val clock: Clock,
@@ -96,6 +100,20 @@ class TrackingSessionCoordinator @Inject constructor(
         /** Nothing was ever confirmed - the candidate opened (or never did) and closed with no Trip created. */
         data object CandidateAbandoned : AutoDetectionOutcome
         data class TripCompleted(val captureId: String, val tripId: String) : AutoDetectionOutcome
+    }
+
+    /** TRK-003: [pauseCapture]'s outcome. */
+    sealed interface PauseResult {
+        data class Paused(val captureId: String, val pauseId: String) : PauseResult
+        data class AlreadyPaused(val captureId: String, val pauseId: String) : PauseResult
+        data object NoActiveCapture : PauseResult
+    }
+
+    /** TRK-003: [resumeCapture]'s outcome. */
+    sealed interface ResumeResult {
+        data class Resumed(val captureId: String) : ResumeResult
+        data class AlreadyResumed(val captureId: String) : ResumeResult
+        data object NoActiveCapture : ResumeResult
     }
 
     /**
@@ -150,6 +168,79 @@ class TrackingSessionCoordinator @Inject constructor(
     suspend fun findActiveCapture(): TripCaptureEntity? = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE)
 
     /**
+     * F0.3 §8: "Pause is available from the active-trip UI and notification
+     * ... the Trip remains logically active ... the pause start timestamp is
+     * persisted." No `CaptureStatus` change - an open [ManualPauseIntervalEntity]
+     * row (`endedAt IS NULL`) is what "paused" means, exactly as F0.7 §6.4
+     * already documented on that entity, so [findActiveCapture] and
+     * everything built on `CaptureStatus.ACTIVE` keeps working unchanged.
+     *
+     * Wrapped in a transaction: two concurrent Pause commands both seeing
+     * "no open pause" and both inserting would otherwise leave two open
+     * pause rows for the same capture (REL-INV-008), unlike Resume's
+     * idempotent `UPDATE`, which two concurrent callers can safely repeat.
+     */
+    suspend fun pauseCapture(): PauseResult {
+        val result = database.withTransaction {
+            val active = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) ?: return@withTransaction PauseResult.NoActiveCapture
+            val existingOpenPause = manualPauseIntervalDao.findOpenByCapture(active.id)
+            if (existingOpenPause != null) {
+                return@withTransaction PauseResult.AlreadyPaused(active.id, existingOpenPause.id)
+            }
+
+            val wallNow = clock.wallClockMillis()
+            val elapsedNow = clock.elapsedRealtimeNanos()
+            val pauseId = idGenerator.newId()
+            manualPauseIntervalDao.insert(
+                ManualPauseIntervalEntity(
+                    id = pauseId,
+                    captureId = active.id,
+                    startedAt = wallNow,
+                    endedAt = null,
+                    startElapsedRealtimeNanos = elapsedNow,
+                    endElapsedRealtimeNanos = null,
+                    startReason = "USER_COMMAND",
+                    endReason = null
+                )
+            )
+            PauseResult.Paused(active.id, pauseId)
+        }
+
+        logPauseCommand(result)
+        return result
+    }
+
+    /**
+     * Closes the open pause interval, if any - [recordLocationUpdates] and
+     * [runAutoDetection] both resume normal behavior on their own the next
+     * time they check, since neither holds any pause-specific state of its
+     * own; they just stop seeing an open pause row.
+     */
+    suspend fun resumeCapture(): ResumeResult {
+        val active = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE)
+        if (active == null) {
+            logResumeCommand(null, ResumeResult.NoActiveCapture)
+            return ResumeResult.NoActiveCapture
+        }
+
+        val openPause = manualPauseIntervalDao.findOpenByCapture(active.id)
+        val result = if (openPause == null) {
+            ResumeResult.AlreadyResumed(active.id)
+        } else {
+            manualPauseIntervalDao.closePause(
+                id = openPause.id,
+                endedAt = clock.wallClockMillis(),
+                endElapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                endReason = "USER_COMMAND"
+            )
+            ResumeResult.Resumed(active.id)
+        }
+
+        logResumeCommand(active.id, result)
+        return result
+    }
+
+    /**
      * F0.10 §15.1's Finish transaction, minus the steps the caller owns
      * (stopping the location stream and the foreground service itself —
      * ADR-004 keeps the Service as the Android-lifecycle owner, this stays
@@ -167,11 +258,11 @@ class TrackingSessionCoordinator @Inject constructor(
      * without writing anything — safe to call from a retried/duplicate
      * Finish command (F0.10 §15.3).
      *
-     * F0.10 §15.1 also says to "cerrar pausa abierta si aplica" before
-     * completing the capture. No producer of `ManualPauseIntervalEntity`
-     * exists yet (`TRK-003`), so no pause can structurally be open right
-     * now — nothing to close. `TRK-003` must extend this transaction with
-     * that step when it lands, not silently rely on this comment.
+     * F0.10 §15.1's "cerrar pausa abierta si aplica" (TRK-003): if an open
+     * pause exists for this capture, it's closed inside this same
+     * transaction with `endReason = "CAPTURE_FINISHED"` — F0.3 §8's own
+     * "Finish is available while paused" requirement, satisfied without a
+     * separate Resume call the user never made.
      *
      * "marcar processing PENDING" (F0.10 §15.1 step 4) is satisfied by
      * [ProcessingScheduler.enqueueTripProcessing] itself rather than a new
@@ -197,6 +288,15 @@ class TrackingSessionCoordinator @Inject constructor(
 
             val wallNow = clock.wallClockMillis()
             val elapsedNow = clock.elapsedRealtimeNanos()
+
+            manualPauseIntervalDao.findOpenByCapture(captureId)?.let { openPause ->
+                manualPauseIntervalDao.closePause(
+                    id = openPause.id,
+                    endedAt = wallNow,
+                    endElapsedRealtimeNanos = elapsedNow,
+                    endReason = "CAPTURE_FINISHED"
+                )
+            }
 
             val nextEventIndex = (captureEventDao.maxEventIndex(captureId) ?: -1) + 1
             captureEventDao.insert(
@@ -297,6 +397,10 @@ class TrackingSessionCoordinator @Inject constructor(
      *   but does not resume automatic candidate-stop monitoring for it - the
      *   trip remains finishable manually. Re-entering just the stop-
      *   monitoring phase after a restart is deferred past this task.
+     *
+     * TRK-003: once a real capture is active, every event is also checked
+     * against [ManualPauseIntervalDao.findOpenByCapture] before persistence/
+     * stop-evaluation - see the inline comment at that check for why.
      */
     suspend fun runAutoDetection(
         activityEvents: Flow<ActivityTransitionSample>,
@@ -337,7 +441,7 @@ class TrackingSessionCoordinator @Inject constructor(
                         CandidateStartDecision.Abandoned -> throw StopAutoDetection(AutoDetectionOutcome.CandidateAbandoned)
                         CandidateStartDecision.NoChange, CandidateStartDecision.CandidateOpened -> Unit
                     }
-                } else {
+                } else if (manualPauseIntervalDao.findOpenByCapture(captureId) == null) {
                     if (event is DetectionEvent.Location) {
                         try {
                             rawTrackPointDao.insert(event.sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
@@ -354,6 +458,12 @@ class TrackingSessionCoordinator @Inject constructor(
                         CandidateStopDecision.NoChange, CandidateStopDecision.CandidateOpened, CandidateStopDecision.Abandoned -> Unit
                     }
                 }
+                // else: TRK-003/F0.3 §8 - "automatic stop detection should not
+                // silently close a manually paused Trip." Neither persisting
+                // nor evaluating the stop engine while an open pause exists -
+                // the event is simply not seen, freezing the stop engine's own
+                // grace-period clock rather than letting it tick during a
+                // pause the user explicitly asked for (DP-005).
             }
             return AutoDetectionOutcome.CandidateAbandoned
         } catch (stop: StopAutoDetection) {
@@ -383,10 +493,20 @@ class TrackingSessionCoordinator @Inject constructor(
      * logged as a [DiagnosticCategory.PERSISTENCE]/ERROR event per F0.8 §9's
      * "no debe quedar invisible" rule, then skipped — retrying/buffering
      * failed writes is REC-006's job, not this one's.
+     *
+     * TRK-003/F0.3 §8: a sample arriving while an open pause exists for
+     * [captureId] is neither persisted nor advances `sequenceNumber` -
+     * "detailed movement during the pause is excluded from normal Trip
+     * distance/route by default" and "missed route geometry during manual
+     * pause should be treated as genuinely missing rather than
+     * reconstructed." The collector itself keeps running (not cancelled) so
+     * a future `DET-005` forgotten-pause monitor has a live stream to watch
+     * without needing its own separate subscription.
      */
     suspend fun recordLocationUpdates(captureId: String) {
         var nextSequenceNumber = (rawTrackPointDao.maxSequenceNumber(captureId) ?: -1) + 1
         locationGateway.locationUpdates().collect { sample ->
+            if (manualPauseIntervalDao.findOpenByCapture(captureId) != null) return@collect
             try {
                 rawTrackPointDao.insert(sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
                 nextSequenceNumber++
@@ -501,6 +621,69 @@ class TrackingSessionCoordinator @Inject constructor(
                 correlationId = null,
                 stateBefore = null,
                 stateAfter = "ACTIVE",
+                reasonCode = reasonCode,
+                metadata = emptyMap(),
+                appVersion = BuildConfig.VERSION_NAME,
+                schemaVersion = 1,
+                detectorVersion = DetectorVersion(0),
+                locationProfileVersion = LocationProfileVersion(0),
+                processingVersion = ProcessingVersion(0)
+            )
+        )
+    }
+
+    /** Pause is always user-initiated (F0.3 §8) - no `DETECTOR`/`USER_COMMAND` split needed here, unlike Start/Finish. */
+    private suspend fun logPauseCommand(result: PauseResult) {
+        val (captureId, reasonCode) = when (result) {
+            is PauseResult.Paused -> result.captureId to "NEW_PAUSE"
+            is PauseResult.AlreadyPaused -> result.captureId to "ALREADY_PAUSED"
+            PauseResult.NoActiveCapture -> null to "NO_ACTIVE_CAPTURE"
+        }
+        diagnosticEventDao.insert(
+            DiagnosticEventEntity(
+                eventId = idGenerator.newId(),
+                occurredAt = clock.wallClockMillis(),
+                elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                category = DiagnosticCategory.USER_COMMAND,
+                eventType = "PAUSE",
+                severity = DiagnosticSeverity.INFO,
+                source = "tracking-service",
+                captureId = captureId,
+                tripId = null,
+                correlationId = null,
+                stateBefore = null,
+                stateAfter = null,
+                reasonCode = reasonCode,
+                metadata = emptyMap(),
+                appVersion = BuildConfig.VERSION_NAME,
+                schemaVersion = 1,
+                detectorVersion = DetectorVersion(0),
+                locationProfileVersion = LocationProfileVersion(0),
+                processingVersion = ProcessingVersion(0)
+            )
+        )
+    }
+
+    private suspend fun logResumeCommand(captureId: String?, result: ResumeResult) {
+        val reasonCode = when (result) {
+            is ResumeResult.Resumed -> "RESUMED"
+            is ResumeResult.AlreadyResumed -> "ALREADY_RESUMED"
+            ResumeResult.NoActiveCapture -> "NO_ACTIVE_CAPTURE"
+        }
+        diagnosticEventDao.insert(
+            DiagnosticEventEntity(
+                eventId = idGenerator.newId(),
+                occurredAt = clock.wallClockMillis(),
+                elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                category = DiagnosticCategory.USER_COMMAND,
+                eventType = "RESUME",
+                severity = DiagnosticSeverity.INFO,
+                source = "tracking-service",
+                captureId = captureId,
+                tripId = null,
+                correlationId = null,
+                stateBefore = null,
+                stateAfter = null,
                 reasonCode = reasonCode,
                 metadata = emptyMap(),
                 appVersion = BuildConfig.VERSION_NAME,

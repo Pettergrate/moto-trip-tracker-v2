@@ -95,6 +95,7 @@ class TrackingForegroundServiceTest {
             captureEventDao = db.captureEventDao(),
             tripDao = db.tripDao(),
             tripPartDao = db.tripPartDao(),
+            manualPauseIntervalDao = db.manualPauseIntervalDao(),
             locationGateway = FakeLocationGateway(locationSamples),
             processingScheduler = processingScheduler,
             clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L),
@@ -255,6 +256,7 @@ class TrackingForegroundServiceTest {
             captureEventDao = db.captureEventDao(),
             tripDao = db.tripDao(),
             tripPartDao = db.tripPartDao(),
+            manualPauseIntervalDao = db.manualPauseIntervalDao(),
             locationGateway = neverEndingSamples,
             processingScheduler = processingScheduler,
             clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L),
@@ -392,5 +394,62 @@ class TrackingForegroundServiceTest {
         assertNull(db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE))
         controller.destroy()
         Unit
+    }
+
+    // --- TRK-003: ACTION_PAUSE / ACTION_RESUME ---------------------------
+
+    @Test
+    fun actionPauseCreatesAnOpenPauseForTheActiveCapture() = runBlocking {
+        val controller = buildServiceController()
+        controller.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+        val captureId = requireNotNull(db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE)).id
+
+        controller.withIntent(TrackingForegroundService.createPauseIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+        controller.get().lastUncaughtCommandError?.let { throw it }
+
+        assertNotNull(
+            "expected a Paused result, got ${controller.get().lastPauseResult}",
+            controller.get().lastPauseResult as? TrackingSessionCoordinator.PauseResult.Paused
+        )
+        assertNotNull(db.manualPauseIntervalDao().findOpenByCapture(captureId))
+    }
+
+    @Test
+    fun actionResumeClosesTheOpenPause() = runBlocking {
+        val controller = buildServiceController()
+        controller.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+        val captureId = requireNotNull(db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE)).id
+        controller.withIntent(TrackingForegroundService.createPauseIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+
+        controller.withIntent(TrackingForegroundService.createResumeIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+        controller.get().lastUncaughtCommandError?.let { throw it }
+
+        assertEquals(
+            TrackingSessionCoordinator.ResumeResult.Resumed(captureId),
+            controller.get().lastResumeResult
+        )
+        assertNull(db.manualPauseIntervalDao().findOpenByCapture(captureId))
+    }
+
+    @Test
+    fun actionPauseWithNoActiveCaptureIsANoOpAndDoesNotCrash() = runBlocking {
+        val controller = buildServiceController()
+
+        controller.withIntent(TrackingForegroundService.createPauseIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+        controller.get().lastUncaughtCommandError?.let { throw it }
+
+        assertEquals(TrackingSessionCoordinator.PauseResult.NoActiveCapture, controller.get().lastPauseResult)
     }
 }

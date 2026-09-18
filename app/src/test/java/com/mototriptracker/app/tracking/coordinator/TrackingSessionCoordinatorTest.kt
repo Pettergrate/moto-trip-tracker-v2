@@ -17,15 +17,18 @@ import com.mototriptracker.app.testing.FakeLocationGateway
 import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.location.LocationGateway
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -58,6 +61,7 @@ class TrackingSessionCoordinatorTest {
         captureEventDao = db.captureEventDao(),
         tripDao = db.tripDao(),
         tripPartDao = db.tripPartDao(),
+        manualPauseIntervalDao = db.manualPauseIntervalDao(),
         locationGateway = FakeLocationGateway(samples),
         processingScheduler = processingScheduler,
         clock = clock,
@@ -283,6 +287,7 @@ class TrackingSessionCoordinatorTest {
                     captureEventDao = db.captureEventDao(),
                     tripDao = db.tripDao(),
                     tripPartDao = db.tripPartDao(),
+                    manualPauseIntervalDao = db.manualPauseIntervalDao(),
                     locationGateway = FakeLocationGateway(emptyList()),
                     processingScheduler = FakeProcessingScheduler(),
                     clock = clock,
@@ -320,6 +325,7 @@ class TrackingSessionCoordinatorTest {
         captureEventDao = db.captureEventDao(),
         tripDao = db.tripDao(),
         tripPartDao = db.tripPartDao(),
+        manualPauseIntervalDao = db.manualPauseIntervalDao(),
         locationGateway = object : LocationGateway {
             override fun locationUpdates(): Flow<LocationSample> = locationFlow
         },
@@ -472,6 +478,174 @@ class TrackingSessionCoordinatorTest {
         assertEquals(
             listOf(25_000_000_000L, 31_000_000_000L, 36_000_000_000L, 41_000_000_000L),
             points.map { it.elapsedRealtimeNanos }
+        )
+    }
+
+    // --- TRK-003: pauseCapture/resumeCapture ----------------------------
+
+    @Test
+    fun pauseCaptureCreatesAnOpenManualPauseIntervalForTheActiveCapture() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+
+        val result = coordinator.pauseCapture()
+
+        assertTrue(result is TrackingSessionCoordinator.PauseResult.Paused)
+        val paused = result as TrackingSessionCoordinator.PauseResult.Paused
+        assertEquals(captureId, paused.captureId)
+        val openPause = requireNotNull(db.manualPauseIntervalDao().findOpenByCapture(captureId))
+        assertEquals(paused.pauseId, openPause.id)
+        assertNull(openPause.endedAt)
+    }
+
+    @Test
+    fun pauseCaptureWithNoActiveCaptureReturnsNoActiveCapture() = runTest {
+        val result = coordinator.pauseCapture()
+
+        assertEquals(TrackingSessionCoordinator.PauseResult.NoActiveCapture, result)
+    }
+
+    @Test
+    fun pausingAnAlreadyPausedCaptureIsIdempotentAndDoesNotCreateASecondOpenPause() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        val first = coordinator.pauseCapture() as TrackingSessionCoordinator.PauseResult.Paused
+
+        val second = coordinator.pauseCapture()
+
+        assertTrue(second is TrackingSessionCoordinator.PauseResult.AlreadyPaused)
+        assertEquals(first.pauseId, (second as TrackingSessionCoordinator.PauseResult.AlreadyPaused).pauseId)
+        assertEquals(1, db.manualPauseIntervalDao().findAllByCapture(captureId).size)
+    }
+
+    @Test
+    fun resumeCaptureClosesTheOpenPauseInterval() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        val paused = coordinator.pauseCapture() as TrackingSessionCoordinator.PauseResult.Paused
+
+        val result = coordinator.resumeCapture()
+
+        assertEquals(TrackingSessionCoordinator.ResumeResult.Resumed(captureId), result)
+        assertNull(db.manualPauseIntervalDao().findOpenByCapture(captureId))
+        val closed = db.manualPauseIntervalDao().findAllByCapture(captureId).single { it.id == paused.pauseId }
+        assertNotNull(closed.endedAt)
+    }
+
+    @Test
+    fun resumeCaptureWithNoActiveCaptureReturnsNoActiveCapture() = runTest {
+        val result = coordinator.resumeCapture()
+
+        assertEquals(TrackingSessionCoordinator.ResumeResult.NoActiveCapture, result)
+    }
+
+    @Test
+    fun resumingWhenNotCurrentlyPausedIsIdempotent() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+
+        val result = coordinator.resumeCapture()
+
+        assertEquals(TrackingSessionCoordinator.ResumeResult.AlreadyResumed(captureId), result)
+    }
+
+    @Test
+    fun finishCaptureClosesAnOpenPauseAsPartOfTheSameTransaction() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinator.pauseCapture()
+
+        coordinator.finishCapture(captureId)
+
+        val pause = db.manualPauseIntervalDao().findAllByCapture(captureId).single()
+        assertNotNull("Finish must close any still-open pause (F0.3 SS8: 'Finish is available while paused')", pause.endedAt)
+        assertEquals("CAPTURE_FINISHED", pause.endReason)
+    }
+
+    @Test
+    fun recordLocationUpdatesSkipsPersistingSamplesWhileAnOpenPauseExists() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinator.pauseCapture()
+
+        coordinatorWith(listOf(sample(1_000L), sample(2_000L))).recordLocationUpdates(captureId)
+
+        assertEquals(0, db.rawTrackPointDao().countByCapture(captureId))
+
+        coordinator.resumeCapture()
+        coordinatorWith(listOf(sample(3_000L))).recordLocationUpdates(captureId)
+
+        assertEquals(1, db.rawTrackPointDao().countByCapture(captureId))
+    }
+
+    @Test
+    fun recordLocationUpdatesSkipsOnlyTheSamplesThatArriveWhileGenuinelyPaused() = runTest {
+        // A racing, separately-`launch`ed coroutine timing Pause/Resume via
+        // `delay()` against this flow was tried first and was genuinely
+        // flaky: Room's suspend DAO calls run on their own real executor,
+        // not `runTest`'s virtual dispatcher, so a concurrent coroutine's
+        // virtual-time delays don't reliably happen-before its Room writes
+        // relative to this flow's own progress. Sequencing the pause/resume
+        // calls *inside* the flow itself sidesteps that entirely: `emit`
+        // doesn't return until the collector has finished with that item, so
+        // everything here is strictly ordered with no race at all.
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        val locationFlow = flow {
+            emit(sample(elapsedNanos = 1_000L))
+            coordinator.pauseCapture()
+            emit(sample(elapsedNanos = 2_000L)) // lands inside the pause window
+            emit(sample(elapsedNanos = 3_000L)) // lands inside the pause window
+            coordinator.resumeCapture()
+            emit(sample(elapsedNanos = 4_000L))
+        }
+
+        coordinatorWithLocationFlow(locationFlow).recordLocationUpdates(captureId)
+
+        val points = db.rawTrackPointDao().findAllByCapture(captureId)
+        assertEquals(listOf(1_000L, 4_000L), points.map { it.elapsedRealtimeNanos })
+    }
+
+    @Test
+    fun runAutoDetectionDoesNotPersistOrAutoFinishWhileManuallyPaused() = runTest {
+        // TRK-003/F0.3 SS8: "automatic stop detection should not silently
+        // close a manually paused Trip." The EXIT/WALKING pair below would
+        // normally auto-finish immediately (walking-away confirms with no
+        // grace period) - since it's emitted only after Pause is already
+        // durably applied, it must be completely ignored; only the real stop
+        // emitted after Resume actually finishes the trip. `confirmed` makes
+        // the activity flow wait for the location-driven confirm (and this
+        // test's own Pause call inside `onCaptureStarted`) before emitting
+        // the in-pause events - the same in-flow-sequencing fix as the
+        // `recordLocationUpdates` test above, needed here because two
+        // separate flows (activity/location) are involved.
+        val confirmed = CompletableDeferred<Unit>()
+        val activityFlow = flow {
+            emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L))
+            confirmed.await()
+            emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 25_000_000_000L))
+            emit(activitySample(ActivityType.WALKING, TransitionType.ENTER, elapsedNanos = 26_000_000_000L))
+            coordinator.resumeCapture()
+            emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 40_000_000_000L))
+            emit(activitySample(ActivityType.WALKING, TransitionType.ENTER, elapsedNanos = 41_000_000_000L))
+        }
+        val locationFlow = flowOf(
+            sample(elapsedNanos = 1_000_000L),
+            sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0), // confirms the start
+            sample(elapsedNanos = 30_000_000_000L) // arrives once paused - must not persist
+        )
+        var startedCaptureId: String? = null
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(
+            activityEvents = activityFlow,
+            onCaptureStarted = {
+                startedCaptureId = it
+                coordinator.pauseCapture()
+                confirmed.complete(Unit)
+            }
+        )
+
+        assertTrue(outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
+        val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+        assertEquals(startedCaptureId, tripCompleted.captureId)
+
+        val points = db.rawTrackPointDao().findAllByCapture(tripCompleted.captureId)
+        assertTrue(
+            "the sample arriving during the pause must not be persisted",
+            points.none { it.elapsedRealtimeNanos == 30_000_000_000L }
         )
     }
 }

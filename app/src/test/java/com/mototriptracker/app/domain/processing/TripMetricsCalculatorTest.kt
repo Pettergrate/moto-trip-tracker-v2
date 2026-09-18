@@ -1,6 +1,7 @@
 package com.mototriptracker.app.domain.processing
 
 import com.mototriptracker.app.core.database.entity.LocationGapEntity
+import com.mototriptracker.app.core.database.entity.ManualPauseIntervalEntity
 import com.mototriptracker.app.core.database.entity.PointAssessmentEntity
 import com.mototriptracker.app.core.database.entity.ProcessedTrackPointEntity
 import com.mototriptracker.app.core.database.entity.RawTrackPointEntity
@@ -60,6 +61,12 @@ class TripMetricsCalculatorTest {
     private fun assessment(sequenceNumber: Long, decision: TrackPointDecision) = PointAssessmentEntity(
         captureId = captureId, sequenceNumber = sequenceNumber, processingVersion = version,
         decision = decision, reasonCodes = decision.name
+    )
+
+    private fun pause(id: String, startNanos: Long, endNanos: Long?) = ManualPauseIntervalEntity(
+        id = id, captureId = captureId, startedAt = startNanos / 1_000_000, endedAt = endNanos?.let { it / 1_000_000 },
+        startElapsedRealtimeNanos = startNanos, endElapsedRealtimeNanos = endNanos,
+        startReason = "USER_COMMAND", endReason = endNanos?.let { "USER_COMMAND" }
     )
 
     private fun expectedHaversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
@@ -137,7 +144,7 @@ class TripMetricsCalculatorTest {
     }
 
     @Test
-    fun manualPauseDurationIsAlwaysZeroAndMovingStoppedStayNull() {
+    fun manualPauseDurationIsZeroWithNoPausesAndMovingStoppedStayNull() {
         val result = ProcessingEngine.Result(assessments = emptyList(), processedPoints = emptyList(), gaps = emptyList())
 
         val stats = calculator.calculate(tripId, version, 0L, listOf(part(0L, 1_000_000_000L)), result, emptyMap())
@@ -146,6 +153,38 @@ class TripMetricsCalculatorTest {
         assertNull(stats.movingDurationMs)
         assertNull(stats.stoppedDurationMs)
         assertNull(stats.averageMovingSpeedMps)
+    }
+
+    @Test
+    fun manualPauseDurationSumsEveryClosedPauseAcrossCapturesWithoutChangingTotalDuration() {
+        // TRK-003: totalDurationMs stays the full wall-clock span - a caller
+        // wanting "riding time" computes totalDurationMs - manualPauseDurationMs
+        // itself, this class doesn't redefine "total" to exclude pauses.
+        val result = ProcessingEngine.Result(assessments = emptyList(), processedPoints = emptyList(), gaps = emptyList())
+        val pausesByCapture = mapOf(
+            captureId to listOf(
+                pause(id = "pause-1", startNanos = 1_000_000_000L, endNanos = 4_000_000_000L), // 3s
+                pause(id = "pause-2", startNanos = 6_000_000_000L, endNanos = 7_500_000_000L) // 1.5s
+            )
+        )
+
+        val stats = calculator.calculate(
+            tripId, version, 0L, listOf(part(0L, 10_000_000_000L)), result, emptyMap(), pausesByCapture
+        )
+
+        assertEquals(4_500L, stats.manualPauseDurationMs)
+        assertEquals(10_000L, stats.totalDurationMs)
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun manualPauseDurationRejectsAnOpenPauseAsAnInconsistentState() {
+        // finishCapture always closes an open pause before a Trip can exist,
+        // so an open one reaching this class would mean that invariant broke
+        // somewhere - fail loudly rather than silently under-counting.
+        val result = ProcessingEngine.Result(assessments = emptyList(), processedPoints = emptyList(), gaps = emptyList())
+        val pausesByCapture = mapOf(captureId to listOf(pause(id = "pause-1", startNanos = 1_000_000_000L, endNanos = null)))
+
+        calculator.calculate(tripId, version, 0L, listOf(part(0L, 10_000_000_000L)), result, emptyMap(), pausesByCapture)
     }
 
     @Test

@@ -6,6 +6,7 @@ import androidx.room.TypeConverters
 import com.mototriptracker.app.core.database.dao.CaptureEventDao
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
 import com.mototriptracker.app.core.database.dao.LocationGapDao
+import com.mototriptracker.app.core.database.dao.ManualPauseIntervalDao
 import com.mototriptracker.app.core.database.dao.PointAssessmentDao
 import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
@@ -85,4 +86,5 @@ abstract class MotoTripDatabase : RoomDatabase() {
     abstract fun processedTrackPointDao(): ProcessedTrackPointDao
     abstract fun locationGapDao(): LocationGapDao
     abstract fun tripStatisticsDao(): TripStatisticsDao
+    abstract fun manualPauseIntervalDao(): ManualPauseIntervalDao
 }

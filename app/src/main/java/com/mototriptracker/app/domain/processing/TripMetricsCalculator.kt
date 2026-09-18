@@ -1,5 +1,6 @@
 package com.mototriptracker.app.domain.processing
 
+import com.mototriptracker.app.core.database.entity.ManualPauseIntervalEntity
 import com.mototriptracker.app.core.database.entity.ProcessedTrackPointEntity
 import com.mototriptracker.app.core.database.entity.RawTrackPointEntity
 import com.mototriptracker.app.core.database.entity.TripPartEntity
@@ -19,9 +20,11 @@ import javax.inject.Inject
  * stationary phone rarely reports exactly 0 m/s — no F0.6-validated cutoff
  * exists yet (that's `DET`-family territory), so this doesn't invent one.
  * [minElevationM]/[maxElevationM]/[ascentM]/[descentM] are `PRC-003`'s job,
- * not duplicated here. `manualPauseDurationMs` is a true `0`, not an unknown
- * — no `ManualPauseIntervalEntity` producer exists yet (`TRK-003`), so none
- * can structurally exist.
+ * not duplicated here. `manualPauseDurationMs` (`TRK-003`) sums every closed
+ * [ManualPauseIntervalEntity] for the Trip's captures - `totalDurationMs`
+ * deliberately stays the full wall-clock span unchanged, so a caller wanting
+ * "riding time" computes `totalDurationMs - manualPauseDurationMs` itself
+ * rather than this class silently redefining what "total" means.
  *
  * No Android dependency (ADR-013) — distance uses a plain-Kotlin haversine,
  * not `android.location.Location.distanceBetween()`.
@@ -34,7 +37,8 @@ class TripMetricsCalculator @Inject constructor() {
         computedAt: Long,
         parts: List<TripPartEntity>,
         processingResult: ProcessingEngine.Result,
-        rawPointsByCapture: Map<String, List<RawTrackPointEntity>>
+        rawPointsByCapture: Map<String, List<RawTrackPointEntity>>,
+        pausesByCapture: Map<String, List<ManualPauseIntervalEntity>> = emptyMap()
     ): TripStatisticsEntity {
         val rawBySourceKey = rawPointsByCapture.values.flatten().associateBy { it.captureId to it.sequenceNumber }
 
@@ -74,6 +78,15 @@ class TripMetricsCalculator @Inject constructor() {
         val maxSpeedMps = speedSamplesMps.maxOrNull()?.toDouble()
         val averageSpeedMps = if (totalDurationMs > 0) distanceM / (totalDurationMs / 1000.0) else null
 
+        // TRK-003: every pause reaching here is already closed -
+        // finishCapture closes any open one before a Trip can exist at all.
+        val manualPauseDurationMs = pausesByCapture.values.flatten().sumOf { pause ->
+            val endNanos = checkNotNull(pause.endElapsedRealtimeNanos) {
+                "ManualPauseInterval ${pause.id} has no endElapsedRealtimeNanos - finishCapture should have closed it"
+            }
+            (endNanos - pause.startElapsedRealtimeNanos) / 1_000_000
+        }
+
         val rejectedPointCount = processingResult.assessments.size - processingResult.processedPoints.size
 
         return TripStatisticsEntity(
@@ -84,7 +97,7 @@ class TripMetricsCalculator @Inject constructor() {
             totalDurationMs = totalDurationMs,
             movingDurationMs = null,
             stoppedDurationMs = null,
-            manualPauseDurationMs = 0L,
+            manualPauseDurationMs = manualPauseDurationMs,
             maxSpeedMps = maxSpeedMps,
             averageSpeedMps = averageSpeedMps,
             averageMovingSpeedMps = null,

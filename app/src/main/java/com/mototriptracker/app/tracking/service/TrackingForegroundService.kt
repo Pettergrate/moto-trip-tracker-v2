@@ -24,10 +24,9 @@ import androidx.annotation.VisibleForTesting
 /**
  * ADR-004: the Android owner of an active capture. Manual Start,
  * sticky-restart rehydration (TRK-001), location recording for the lifetime
- * of the ACTIVE capture (TRK-002), Finish (TRK-004) and automatic
- * candidate-validation/auto-finish (AUTO-001, `ACTION_AUTO_DETECT`).
- * Pause/Resume (TRK-003) is a separate task that extends this class, not
- * duplicated here.
+ * of the ACTIVE capture (TRK-002), Finish (TRK-004), Pause/Resume (TRK-003,
+ * `ACTION_PAUSE`/`ACTION_RESUME`) and automatic candidate-validation/
+ * auto-finish (AUTO-001, `ACTION_AUTO_DETECT`).
  *
  * `startForeground()` is called synchronously as the very first thing in
  * [onStartCommand], before any suspending work — Android requires it within
@@ -73,6 +72,14 @@ class TrackingForegroundService : Service() {
 
     @VisibleForTesting
     var lastAutoDetectionOutcome: TrackingSessionCoordinator.AutoDetectionOutcome? = null
+        private set
+
+    @VisibleForTesting
+    var lastPauseResult: TrackingSessionCoordinator.PauseResult? = null
+        private set
+
+    @VisibleForTesting
+    var lastResumeResult: TrackingSessionCoordinator.ResumeResult? = null
         private set
 
     /**
@@ -133,6 +140,8 @@ class TrackingForegroundService : Service() {
                 ensureLocationRecording(result.captureId)
             }
             ACTION_FINISH -> serviceScope.launch { finishActiveCaptureAndStop() }
+            ACTION_PAUSE -> serviceScope.launch { lastPauseResult = coordinator.pauseCapture() }
+            ACTION_RESUME -> serviceScope.launch { lastResumeResult = coordinator.resumeCapture() }
             ACTION_AUTO_DETECT -> ensureAutoDetection()
             else -> serviceScope.launch { rehydrateOrStop() }
         }
@@ -223,6 +232,8 @@ class TrackingForegroundService : Service() {
         private const val TAG = "TrackingFgService"
         const val ACTION_START = "com.mototriptracker.app.action.START_TRACKING"
         const val ACTION_FINISH = "com.mototriptracker.app.action.FINISH_TRACKING"
+        const val ACTION_PAUSE = "com.mototriptracker.app.action.PAUSE_TRACKING"
+        const val ACTION_RESUME = "com.mototriptracker.app.action.RESUME_TRACKING"
         const val ACTION_AUTO_DETECT = "com.mototriptracker.app.action.AUTO_DETECT"
 
         fun createStartIntent(context: Context): Intent =
@@ -230,6 +241,12 @@ class TrackingForegroundService : Service() {
 
         fun createFinishIntent(context: Context): Intent =
             Intent(context, TrackingForegroundService::class.java).setAction(ACTION_FINISH)
+
+        fun createPauseIntent(context: Context): Intent =
+            Intent(context, TrackingForegroundService::class.java).setAction(ACTION_PAUSE)
+
+        fun createResumeIntent(context: Context): Intent =
+            Intent(context, TrackingForegroundService::class.java).setAction(ACTION_RESUME)
 
         fun createAutoDetectIntent(context: Context): Intent =
             Intent(context, TrackingForegroundService::class.java).setAction(ACTION_AUTO_DETECT)

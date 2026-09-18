@@ -11,6 +11,7 @@ import com.mototriptracker.app.core.common.IdGenerator
 import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
 import com.mototriptracker.app.core.database.dao.LocationGapDao
+import com.mototriptracker.app.core.database.dao.ManualPauseIntervalDao
 import com.mototriptracker.app.core.database.dao.PointAssessmentDao
 import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
@@ -45,6 +46,7 @@ class TripProcessingWorker @AssistedInject constructor(
     private val database: MotoTripDatabase,
     private val tripPartDao: TripPartDao,
     private val rawTrackPointDao: RawTrackPointDao,
+    private val manualPauseIntervalDao: ManualPauseIntervalDao,
     private val pointAssessmentDao: PointAssessmentDao,
     private val processedTrackPointDao: ProcessedTrackPointDao,
     private val locationGapDao: LocationGapDao,
@@ -64,9 +66,10 @@ class TripProcessingWorker @AssistedInject constructor(
         if (parts.isEmpty()) return Result.failure()
 
         val rawPointsByCapture = parts.associate { part -> part.captureId to rawTrackPointDao.findAllByCapture(part.captureId) }
+        val pausesByCapture = parts.associate { part -> part.captureId to manualPauseIntervalDao.findAllByCapture(part.captureId) }
         val outcome = processingEngine.process(tripId, CURRENT_PROCESSING_VERSION, parts, rawPointsByCapture)
         val statistics = metricsCalculator.calculate(
-            tripId, CURRENT_PROCESSING_VERSION, clock.wallClockMillis(), parts, outcome, rawPointsByCapture
+            tripId, CURRENT_PROCESSING_VERSION, clock.wallClockMillis(), parts, outcome, rawPointsByCapture, pausesByCapture
         )
 
         database.withTransaction {
