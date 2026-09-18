@@ -47,4 +47,25 @@ class TrackingNotificationControllerTest {
     fun postForgottenPauseReminderNeverReusesTheOngoingTrackingNotificationId() {
         assertTrue(TrackingNotificationController.REMINDER_NOTIFICATION_ID != TrackingNotificationController.NOTIFICATION_ID)
     }
+
+    /** DET-007: same shape, distinct content from the pause reminder. */
+    @Test
+    fun postForgottenFinishReminderPostsARealDismissibleNotification() {
+        controller.postForgottenFinishReminder()
+
+        val manager = ApplicationProvider.getApplicationContext<android.content.Context>()
+            .getSystemService(NotificationManager::class.java)
+        val notification = (shadowOf(manager) as ShadowNotificationManager)
+            .getNotification(TrackingNotificationController.REMINDER_NOTIFICATION_ID)
+
+        assertNotNull("expected a reminder notification to be posted", notification)
+        assertEquals(
+            "Still recording?",
+            notification.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+        )
+        assertTrue(
+            "a one-shot reminder must be dismissible, not an ongoing notification",
+            (notification.flags and Notification.FLAG_ONGOING_EVENT) == 0
+        )
+    }
 }

@@ -262,6 +262,18 @@ The suppression should end after evidence shows that the previous motorized move
 
 Exact timeout/logic remains a research question.
 
+### Forgotten-finish scenario (added post-launch, DET-007)
+
+Not originally scoped by this document - surfaced by real on-device dogfooding during `UI-001`'s own field use (2026-09-18): a manually-started capture has no automatic stop of any kind (unlike an auto-started one, which `CandidateStopEngine` already finishes on a real stop), so a rider who simply forgets to press Finish keeps recording indefinitely. The observed real trip's distance stayed correct (raw point-to-point summation doesn't inflate from GPS jitter while parked), but its duration and average speed were both meaningless for the extra stationary time.
+
+If the phone detects a manually-started, non-paused capture has been stationary far longer than a normal stop:
+
+- the app MAY issue a high-priority but non-distracting reminder, mirroring §8's forgotten-pause reminder;
+- it MUST NOT auto-finish the Trip - manual ownership stays authoritative (DP-005), the same as the forgotten-pause case;
+- the reminder may recur for a later, independent stationary period in the same still-active capture (unlike the forgotten-pause reminder's one-shot-per-pause scope), since a long ride can plausibly include more than one genuinely-forgotten-length stop.
+
+Exact stationary duration/displacement thresholds remain a research question, same posture as this document's other placeholder thresholds (ADR-018).
+
 ---
 
 ## 10. Auto Tracking setting
@@ -443,6 +455,7 @@ The following scenarios must exist in field/synthetic validation before automati
 | SCN-026 | Multiple stop/start blocks in city | One logical Trip when continuous travel context exists |
 | SCN-027 | Active Trip then Auto Tracking disabled | Active Trip remains coherent; no silent data loss |
 | SCN-028 | Manual Start with Auto Tracking disabled | Trip records normally |
+| SCN-029 | Manually-started ride, rider forgets to press Finish and parks for a long time | Reminder eventually issued; distance/duration stay honest, no auto-finish |
 
 ---
 

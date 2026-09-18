@@ -71,6 +71,29 @@ class TrackingNotificationController @Inject constructor(
         NotificationManagerCompat.from(context).notify(REMINDER_NOTIFICATION_ID, notification)
     }
 
+    /**
+     * DET-007: the mirror reminder to [postForgottenPauseReminder], for a
+     * manually-started capture that's been stationary far longer than a
+     * normal stop - see `ForgottenFinishEngine`'s own KDoc for why this gap
+     * exists at all. Shares [REMINDER_CHANNEL_ID]/[REMINDER_NOTIFICATION_ID]
+     * with the pause reminder rather than adding a third channel: the two
+     * are mutually exclusive for a given capture (a capture is either paused
+     * or not), so there's nothing to gain from separating them, and the
+     * channel's own display name was generalized to "Trip reminders" to stay
+     * honest about covering both.
+     */
+    fun postForgottenFinishReminder() {
+        ensureReminderChannel()
+        val notification = NotificationCompat.Builder(context, REMINDER_CHANNEL_ID)
+            .setContentTitle(context.getString(R.string.forgotten_finish_reminder_title))
+            .setContentText(context.getString(R.string.forgotten_finish_reminder_text))
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context).notify(REMINDER_NOTIFICATION_ID, notification)
+    }
+
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return

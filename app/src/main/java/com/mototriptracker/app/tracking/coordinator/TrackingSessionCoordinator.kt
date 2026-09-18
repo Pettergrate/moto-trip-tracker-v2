@@ -36,6 +36,8 @@ import com.mototriptracker.app.domain.detection.CandidateStartEngine
 import com.mototriptracker.app.domain.detection.CandidateStopDecision
 import com.mototriptracker.app.domain.detection.CandidateStopEngine
 import com.mototriptracker.app.domain.detection.DetectionEvent
+import com.mototriptracker.app.domain.detection.ForgottenFinishDecision
+import com.mototriptracker.app.domain.detection.ForgottenFinishEngine
 import com.mototriptracker.app.domain.detection.ForgottenPauseDecision
 import com.mototriptracker.app.domain.detection.ForgottenPauseEngine
 import com.mototriptracker.app.tracking.location.LocationGateway
@@ -528,6 +530,32 @@ class TrackingSessionCoordinator @Inject constructor(
     }
 
     /**
+     * DET-007: [ForgottenFinishEngine] only ever needs one instance for the
+     * whole not-paused lifetime of a manual capture (unlike
+     * [ForgottenPauseWatch], which needs a fresh engine per bounded pause
+     * episode) - it already resets its own "stationary episode" internally
+     * on real movement. The one thing an engine instance can't know on its
+     * own is that a pause happened: without [onPaused] discarding it, the
+     * first sample after a long Resume would see an anchor whose age spans
+     * the entire pause and could immediately misfire as "stationary too
+     * long," when the rider was just deliberately, briefly stopped.
+     */
+    private class ForgottenFinishWatch {
+        private var engine = ForgottenFinishEngine()
+
+        suspend fun onSample(sample: LocationSample, onWarning: suspend (ForgottenFinishDecision.WarningIssued) -> Unit) {
+            when (val decision = engine.accept(sample)) {
+                is ForgottenFinishDecision.WarningIssued -> onWarning(decision)
+                ForgottenFinishDecision.NoChange -> Unit
+            }
+        }
+
+        fun onPaused() {
+            engine = ForgottenFinishEngine()
+        }
+    }
+
+    /**
      * TRK-002: collects [locationGateway]'s stream for the lifetime of the
      * caller's coroutine (cancelled by the service on `onDestroy`, per
      * ADR-004 — there is no explicit stop call here). F0.8 §9's pipeline:
@@ -564,10 +592,16 @@ class TrackingSessionCoordinator @Inject constructor(
      */
     suspend fun recordLocationUpdates(
         captureId: String,
-        onForgottenPauseWarning: suspend () -> Unit = {}
+        onForgottenPauseWarning: suspend () -> Unit = {},
+        onForgottenFinishWarning: suspend () -> Unit = {}
     ) {
         var nextSequenceNumber = (rawTrackPointDao.maxSequenceNumber(captureId) ?: -1) + 1
         val forgottenPauseWatch = ForgottenPauseWatch()
+        // DET-007: only relevant here, not `runAutoDetection` - an
+        // AUTO-started capture already gets a real stop-and-finish from
+        // `CandidateStopEngine`. A manual capture has no such safety net,
+        // which is the actual gap this closes.
+        val forgottenFinishWatch = ForgottenFinishWatch()
         locationGateway.locationUpdates().collect { sample ->
             val openPause = manualPauseIntervalDao.findOpenByCapture(captureId)
             if (openPause == null) {
@@ -578,7 +612,12 @@ class TrackingSessionCoordinator @Inject constructor(
                 } catch (error: Exception) {
                     logRawTrackPointPersistenceFailure(captureId, error)
                 }
+                forgottenFinishWatch.onSample(sample) { decision ->
+                    logForgottenFinishWarning(captureId, decision)
+                    onForgottenFinishWarning()
+                }
             } else {
+                forgottenFinishWatch.onPaused()
                 forgottenPauseWatch.onPausedSample(openPause.id, sample) { decision ->
                     logForgottenPauseWarning(captureId, openPause.id, decision)
                     onForgottenPauseWarning()
@@ -757,6 +796,33 @@ class TrackingSessionCoordinator @Inject constructor(
                 stateBefore = null,
                 stateAfter = null,
                 reasonCode = "SUSTAINED_MOVEMENT_WHILE_PAUSED",
+                metadata = emptyMap(),
+                appVersion = BuildConfig.VERSION_NAME,
+                schemaVersion = 1,
+                detectorVersion = DetectorVersion(0),
+                locationProfileVersion = LocationProfileVersion(0),
+                processingVersion = ProcessingVersion(0)
+            )
+        )
+    }
+
+    /** DET-007: mirrors [logForgottenPauseWarning] - `correlationId` has no pause to reference here, so it's left null. */
+    private suspend fun logForgottenFinishWarning(captureId: String, decision: ForgottenFinishDecision.WarningIssued) {
+        diagnosticEventDao.insert(
+            DiagnosticEventEntity(
+                eventId = idGenerator.newId(),
+                occurredAt = clock.wallClockMillis(),
+                elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                category = DiagnosticCategory.DETECTOR,
+                eventType = "FORGOTTEN_FINISH_WARNING",
+                severity = DiagnosticSeverity.WARN,
+                source = "tracking-service",
+                captureId = captureId,
+                tripId = null,
+                correlationId = null,
+                stateBefore = null,
+                stateAfter = null,
+                reasonCode = "SUSTAINED_NON_MOVEMENT_WHILE_ACTIVE",
                 metadata = emptyMap(),
                 appVersion = BuildConfig.VERSION_NAME,
                 schemaVersion = 1,

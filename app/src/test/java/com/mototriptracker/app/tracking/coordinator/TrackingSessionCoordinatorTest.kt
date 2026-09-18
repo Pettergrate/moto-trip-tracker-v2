@@ -750,4 +750,71 @@ class TrackingSessionCoordinatorTest {
         // the real EXIT/WALKING pair emitted after Resume did.
         assertEquals(EndSource.AUTO, requireNotNull(db.tripCaptureDao().findById(tripCompleted.captureId)).endSource)
     }
+
+    // --- DET-007: forgotten-finish warning -------------------------------
+
+    @Test
+    fun recordLocationUpdatesWarnsOnSustainedStationaryPeriodWhileActiveAndKeepsPersistingNormally() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        var warned = false
+
+        coordinatorWith(
+            listOf(
+                sample(elapsedNanos = 0L), // anchors the forgotten-finish watch
+                sample(elapsedNanos = 601_000_000_000L) // same spot, 601s later - past the default 600s bar
+            )
+        ).recordLocationUpdates(captureId, onForgottenFinishWarning = { warned = true })
+
+        assertTrue("expected a forgotten-finish warning", warned)
+        // Unlike the paused case (DET-005), this capture was never paused -
+        // both samples must still be persisted normally; a warning is a
+        // nudge, never a reason to stop recording (DP-005).
+        assertEquals(2, db.rawTrackPointDao().countByCapture(captureId))
+        assertEquals(CaptureStatus.ACTIVE, requireNotNull(db.tripCaptureDao().findById(captureId)).status)
+        val warningEvent = db.diagnosticEventDao().findAll().single { it.eventType == "FORGOTTEN_FINISH_WARNING" }
+        assertEquals(DiagnosticCategory.DETECTOR, warningEvent.category)
+        assertEquals(DiagnosticSeverity.WARN, warningEvent.severity)
+    }
+
+    @Test
+    fun recordLocationUpdatesDoesNotWarnWhileTheRiderKeepsMoving() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        var warned = false
+
+        coordinatorWith(
+            listOf(
+                sample(elapsedNanos = 0L, lat = 10.0),
+                sample(elapsedNanos = 300_000_000_000L, lat = 10.001), // ~111m - real movement, re-anchors
+                sample(elapsedNanos = 900_000_000_000L, lat = 10.002) // another ~111m - re-anchors again
+            )
+        ).recordLocationUpdates(captureId, onForgottenFinishWarning = { warned = true })
+
+        assertFalse("continuous real movement must never look like a forgotten Finish", warned)
+    }
+
+    @Test
+    fun recordLocationUpdatesDoesNotCarryTheStationaryAnchorAcrossAPause() = runTest {
+        // If a Pause didn't discard this engine's anchor, the first sample
+        // after Resume would inherit an anchor age spanning the entire
+        // pause - the same real bug class TRK-003/DET-005 already fixed
+        // elsewhere in this file (a producer/consumer detail this test now
+        // guards for this engine specifically), just expressed as a stale
+        // timestamp bug rather than a race.
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        var warned = false
+        val locationFlow = flow {
+            emit(sample(elapsedNanos = 0L)) // anchors the finish watch pre-pause
+            coordinator.pauseCapture()
+            emit(sample(elapsedNanos = 650_000_000_000L)) // 650s later, but paused - must not reach the finish watch as a normal sample
+            coordinator.resumeCapture()
+            emit(sample(elapsedNanos = 655_000_000_000L)) // only 5s after the real reset, same spot - must not misfire
+        }
+
+        coordinatorWithLocationFlow(locationFlow).recordLocationUpdates(captureId, onForgottenFinishWarning = { warned = true })
+
+        assertFalse(
+            "a pause must discard the pre-pause stationary anchor, not let its age carry across the gap",
+            warned
+        )
+    }
 }

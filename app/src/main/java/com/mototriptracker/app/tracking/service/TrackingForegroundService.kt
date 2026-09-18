@@ -197,7 +197,8 @@ class TrackingForegroundService : Service() {
         locationRecordingJob = serviceScope.launch {
             coordinator.recordLocationUpdates(
                 captureId,
-                onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() }
+                onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() },
+                onForgottenFinishWarning = { notificationController.postForgottenFinishReminder() }
             )
         }
     }
