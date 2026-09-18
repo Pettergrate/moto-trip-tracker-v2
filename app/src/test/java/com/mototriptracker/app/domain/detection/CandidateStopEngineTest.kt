@@ -181,4 +181,40 @@ class CandidateStopEngineTest {
 
         assertEquals(CandidateStopDecision.CandidateOpened, decision)
     }
+
+    @Test
+    fun repeatedTrafficLightChurnNeverConfirmsAndDoesNotPreventARealStopAfterward() {
+        // DET-004/F0.3 §18 SCN-006 ("heavy congestion, repeated 0-10 km/h
+        // motion") and SCN-026 ("multiple stop/start blocks in city -> one
+        // logical Trip"): dense traffic can make Activity Recognition flap
+        // IN_VEHICLE EXIT/ENTER many times in quick succession. Nothing new
+        // is needed for this - each EXIT/ENTER pair is independent per the
+        // engine's own stateless-between-cycles design (state fully resets
+        // to Tracking on Abandoned) - this test is that claim made explicit
+        // and regression-proof rather than merely inferred from the single-
+        // cycle tests above.
+        var nowNanos = 0L
+        repeat(10) { cycle ->
+            val exitAt = nowNanos
+            val opened = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, exitAt)))
+            assertEquals("cycle $cycle: exit should open a candidate", CandidateStopDecision.CandidateOpened, opened)
+
+            nowNanos += 2_000_000_000L // 2s later - well under the 30s grace period this test's profile uses
+            val abandoned = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.ENTER, nowNanos)))
+            assertEquals("cycle $cycle: re-entering traffic should abandon the candidate", CandidateStopDecision.Abandoned, abandoned)
+            assertFalse(engine.isCandidateOpen)
+
+            nowNanos += 1_000_000_000L
+        }
+
+        // The ride actually ends now - churn beforehand must not have left
+        // any stale state behind that would block or alter this.
+        val realExitAt = nowNanos
+        val realExitDecision = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, realExitAt)))
+        assertEquals(CandidateStopDecision.CandidateOpened, realExitDecision)
+
+        val confirmDecision = engine.accept(DetectionEvent.Location(location(realExitAt + 31_000_000_000L)))
+        assertTrue(confirmDecision is CandidateStopDecision.Confirmed)
+        assertEquals(realExitAt, (confirmDecision as CandidateStopDecision.Confirmed).candidateOpenedAtElapsedRealtimeNanos)
+    }
 }

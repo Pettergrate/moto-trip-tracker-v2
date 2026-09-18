@@ -417,4 +417,61 @@ class TrackingSessionCoordinatorTest {
         val trip = requireNotNull(db.tripDao().findById(tripCompleted.tripId))
         assertEquals(com.mototriptracker.app.core.model.TripStatus.COMPLETED, trip.status)
     }
+
+    @Test
+    fun runAutoDetectionSurvivesRepeatedCongestionChurnAsOneContinuousAutoTripBeforeFinishingOnARealStop() = runTest {
+        // DET-004/F0.3 §18 SCN-006/SCN-026: dense traffic can flap
+        // IN_VEHICLE EXIT/ENTER repeatedly while the ride is genuinely still
+        // going. No new orchestration behavior is needed for this beyond
+        // what DET-002/DET-003/AUTO-001 already do - CandidateStopEngine
+        // resets to Tracking on each Abandoned, and runAutoDetection just
+        // keeps routing events to it - this test proves that end to end
+        // rather than leaving it as an inferred property of the pieces.
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            // Three quick traffic-light-style EXIT/ENTER cycles once tracking.
+            28_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 28_000_000_000L),
+            29_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 29_000_000_000L),
+            33_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 33_000_000_000L),
+            34_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 34_000_000_000L),
+            38_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 38_000_000_000L),
+            39_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 39_000_000_000L),
+            // The ride genuinely ends now.
+            45_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 45_000_000_000L),
+            47_000L to activitySample(ActivityType.WALKING, TransitionType.ENTER, elapsedNanos = 47_000_000_000L)
+        )
+        val locationFlow = timedFlow(
+            1L to sample(elapsedNanos = 1_000_000L),
+            20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0), // confirms the start
+            25_000L to sample(elapsedNanos = 25_000_000_000L),
+            31_000L to sample(elapsedNanos = 31_000_000_000L),
+            36_000L to sample(elapsedNanos = 36_000_000_000L),
+            41_000L to sample(elapsedNanos = 41_000_000_000L)
+        )
+        var startedCaptureId: String? = null
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(
+            activityEvents = activityFlow,
+            onCaptureStarted = { startedCaptureId = it }
+        )
+
+        assertTrue(outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
+        val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+
+        // One continuous capture the whole time - the churn never triggered
+        // a second Start, and only one Trip/TripPart was ever created.
+        assertEquals(1, db.tripCaptureDao().countByStatus(CaptureStatus.COMPLETED))
+        assertEquals(startedCaptureId, tripCompleted.captureId)
+        val capture = requireNotNull(db.tripCaptureDao().findById(tripCompleted.captureId))
+        assertEquals(StartSource.AUTO, capture.startSource)
+        assertEquals(EndSource.AUTO, capture.endSource)
+
+        // Every post-confirmation location sample was persisted without
+        // interruption, including the ones that landed between churn cycles.
+        val points = db.rawTrackPointDao().findAllByCapture(tripCompleted.captureId)
+        assertEquals(
+            listOf(25_000_000_000L, 31_000_000_000L, 36_000_000_000L, 41_000_000_000L),
+            points.map { it.elapsedRealtimeNanos }
+        )
+    }
 }
