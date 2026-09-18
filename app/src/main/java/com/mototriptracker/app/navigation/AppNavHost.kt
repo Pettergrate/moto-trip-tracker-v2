@@ -23,9 +23,10 @@ import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.ui.NavDisplay
 import com.mototriptracker.app.feature.active.ActiveTripScreen
 import com.mototriptracker.app.feature.favorites.FavoritesPlaceholderScreen
-import com.mototriptracker.app.feature.history.HistoryPlaceholderScreen
+import com.mototriptracker.app.feature.history.HistoryScreen
 import com.mototriptracker.app.feature.home.HomeScreen
 import com.mototriptracker.app.feature.settings.SettingsPlaceholderScreen
+import com.mototriptracker.app.feature.tripdetail.TripDetailScreen
 
 /**
  * ADR-011/F0.9 §3: the app shell. `backStack` is a plain
@@ -58,6 +59,10 @@ fun AppNavHost() {
         }
     }
 
+    fun navigateToTripDetail(tripId: String) {
+        backStack.add(Destination.TripDetail(tripId))
+    }
+
     NavDisplay(
         backStack = backStack,
         onBack = { backStack.removeLastOrNull() },
@@ -71,7 +76,7 @@ fun AppNavHost() {
 
                 Destination.History -> NavEntry(destination) {
                     MainTabScaffold(current = destination, onTabSelected = ::navigateToTab, onSettingsClick = ::navigateToSettings) {
-                        HistoryPlaceholderScreen()
+                        HistoryScreen(onOpenTripDetail = ::navigateToTripDetail)
                     }
                 }
 
@@ -87,6 +92,10 @@ fun AppNavHost() {
 
                 Destination.ActiveTrip -> NavEntry(destination) {
                     ActiveTripScreen(onBack = { backStack.removeLastOrNull() })
+                }
+
+                is Destination.TripDetail -> NavEntry(destination) {
+                    TripDetailScreen(tripId = destination.tripId, onBack = { backStack.removeLastOrNull() })
                 }
             }
         }
@@ -136,12 +145,12 @@ private fun Destination.tabLabel(): String = when (this) {
     Destination.Home -> "Home"
     Destination.History -> "History"
     Destination.Favorites -> "Favorites"
-    Destination.Settings, Destination.ActiveTrip -> error("$this is not a bottom-nav tab")
+    Destination.Settings, Destination.ActiveTrip, is Destination.TripDetail -> error("$this is not a bottom-nav tab")
 }
 
 private fun Destination.tabIcon() = when (this) {
     Destination.Home -> Icons.Default.Home
     Destination.History -> Icons.AutoMirrored.Filled.List
     Destination.Favorites -> Icons.Default.Star
-    Destination.Settings, Destination.ActiveTrip -> error("$this is not a bottom-nav tab")
+    Destination.Settings, Destination.ActiveTrip, is Destination.TripDetail -> error("$this is not a bottom-nav tab")
 }

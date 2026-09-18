@@ -19,6 +19,9 @@ sealed interface Destination {
     data object Favorites : Destination
     data object Settings : Destination
     data object ActiveTrip : Destination
+
+    /** HIS-001/F0.9 §9: HIS-02, pushed from History with a specific Trip's ID - the first non-singleton, parameterized destination in this graph. */
+    data class TripDetail(val tripId: String) : Destination
 }
 
 /** The three ADR-011 bottom-nav tabs, in display order. */

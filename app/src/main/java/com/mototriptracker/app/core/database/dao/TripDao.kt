@@ -25,4 +25,25 @@ interface TripDao {
      */
     @Query("SELECT * FROM trip WHERE status = :status AND deletedAt IS NULL ORDER BY createdAt DESC LIMIT :limit")
     fun observeRecent(limit: Int, status: TripStatus = TripStatus.COMPLETED): Flow<List<TripEntity>>
+
+    /** HIS-001/FR-HIS-003: the full chronological history, not Home's 3-row preview - default newest-first per F0.9 §8.1. */
+    @Query("SELECT * FROM trip WHERE status = :status AND deletedAt IS NULL ORDER BY createdAt DESC")
+    fun observeAllDescending(status: TripStatus = TripStatus.COMPLETED): Flow<List<TripEntity>>
+
+    /** HIS-001/FR-HIS-008: the one sort order beyond default chronology this task implements - oldest-first. */
+    @Query("SELECT * FROM trip WHERE status = :status AND deletedAt IS NULL ORDER BY createdAt ASC")
+    fun observeAllAscending(status: TripStatus = TripStatus.COMPLETED): Flow<List<TripEntity>>
+
+    /** HIS-001/F0.9 §9: Trip Detail observes this directly so a rename made elsewhere is reflected without a manual refresh. */
+    @Query("SELECT * FROM trip WHERE id = :id")
+    fun observeById(id: String): Flow<TripEntity?>
+
+    /**
+     * HIS-001/FR-HIS-004. A `null`/blank [name] reverts to the generated
+     * fallback (F0.9 §8.2) rather than persisting an empty string - `name`
+     * is nullable precisely so "no custom name" has one honest
+     * representation, not two (`null` and `""`).
+     */
+    @Query("UPDATE trip SET name = :name, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun rename(id: String, name: String?, updatedAt: Long)
 }

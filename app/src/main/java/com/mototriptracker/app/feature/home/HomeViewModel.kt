@@ -13,14 +13,12 @@ import com.mototriptracker.app.core.model.CapabilityMode
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.domain.capability.CapabilityResolver
 import com.mototriptracker.app.domain.liveDistanceMeters
+import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
 import com.mototriptracker.app.tracking.service.TrackingForegroundService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import javax.inject.Inject
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -150,11 +148,5 @@ class HomeViewModel @Inject constructor(
     companion object {
         private const val RECENT_TRIPS_LIMIT = 3
         private const val STOP_TIMEOUT_MS = 5_000L
-
-        /** F0.9 §8.2's fallback name: "Trip · Sep 15 · 08:42". */
-        fun fallbackTripName(createdAtEpochMs: Long): String {
-            val formatter = SimpleDateFormat("MMM d · HH:mm", Locale.getDefault())
-            return "Trip · ${formatter.format(Date(createdAtEpochMs))}"
-        }
     }
 }
