@@ -36,6 +36,8 @@ import com.mototriptracker.app.domain.detection.CandidateStartEngine
 import com.mototriptracker.app.domain.detection.CandidateStopDecision
 import com.mototriptracker.app.domain.detection.CandidateStopEngine
 import com.mototriptracker.app.domain.detection.DetectionEvent
+import com.mototriptracker.app.domain.detection.ForgottenPauseDecision
+import com.mototriptracker.app.domain.detection.ForgottenPauseEngine
 import com.mototriptracker.app.tracking.location.LocationGateway
 import com.mototriptracker.app.tracking.processing.ProcessingScheduler
 import kotlinx.coroutines.CancellationException
@@ -53,8 +55,9 @@ import javax.inject.Inject
  * (TRK-001), persist [LocationSample]s into Raw Track (TRK-002), finish a
  * capture into a logical Trip (TRK-004), pause/resume it ([pauseCapture]/
  * [resumeCapture], TRK-003), or run a whole automatic candidate-start-to-
- * candidate-stop session end to end ([runAutoDetection], AUTO-001) — F0.8
- * §6: "TrackingSessionCoordinator coordina detector,
+ * candidate-stop session end to end ([runAutoDetection], AUTO-001), or warn
+ * about sustained movement while paused without ever auto-resuming
+ * ([ForgottenPauseWatch], DET-005) — F0.8 §6: "TrackingSessionCoordinator coordina detector,
  * location, persistencia y lifecycle de captura". No Android dependency
  * (ADR-013) — `TrackingForegroundService` is the Android-owning caller
  * (ADR-004); this class is plain, testable logic against the same seams
@@ -401,10 +404,16 @@ class TrackingSessionCoordinator @Inject constructor(
      * TRK-003: once a real capture is active, every event is also checked
      * against [ManualPauseIntervalDao.findOpenByCapture] before persistence/
      * stop-evaluation - see the inline comment at that check for why.
+     *
+     * DET-005: a location sample arriving while paused is routed to a
+     * [ForgottenPauseWatch] instead of being silently ignored - the same
+     * detection [recordLocationUpdates] runs for manually-started captures,
+     * so an auto-started capture that gets manually paused is covered too.
      */
     suspend fun runAutoDetection(
         activityEvents: Flow<ActivityTransitionSample>,
-        onCaptureStarted: suspend (captureId: String) -> Unit = {}
+        onCaptureStarted: suspend (captureId: String) -> Unit = {},
+        onForgottenPauseWarning: suspend () -> Unit = {}
     ): AutoDetectionOutcome {
         val activityFlow: Flow<DetectionEvent> = activityEvents.map { DetectionEvent.Activity(it) }
         val locationFlow: Flow<DetectionEvent> = locationGateway.locationUpdates().map { DetectionEvent.Location(it) }
@@ -419,6 +428,7 @@ class TrackingSessionCoordinator @Inject constructor(
         var stopEngine: CandidateStopEngine? = null
         var activeCaptureId: String? = null
         var nextSequenceNumber = 0L
+        val forgottenPauseWatch = ForgottenPauseWatch()
 
         try {
             merge(activityFlow, locationFlow, tickerFlow).collect { event ->
@@ -441,29 +451,38 @@ class TrackingSessionCoordinator @Inject constructor(
                         CandidateStartDecision.Abandoned -> throw StopAutoDetection(AutoDetectionOutcome.CandidateAbandoned)
                         CandidateStartDecision.NoChange, CandidateStartDecision.CandidateOpened -> Unit
                     }
-                } else if (manualPauseIntervalDao.findOpenByCapture(captureId) == null) {
-                    if (event is DetectionEvent.Location) {
-                        try {
-                            rawTrackPointDao.insert(event.sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
-                            nextSequenceNumber++
-                        } catch (error: Exception) {
-                            logRawTrackPointPersistenceFailure(captureId, error)
+                } else {
+                    val openPause = manualPauseIntervalDao.findOpenByCapture(captureId)
+                    if (openPause == null) {
+                        forgottenPauseWatch.onResumed()
+                        if (event is DetectionEvent.Location) {
+                            try {
+                                rawTrackPointDao.insert(event.sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
+                                nextSequenceNumber++
+                            } catch (error: Exception) {
+                                logRawTrackPointPersistenceFailure(captureId, error)
+                            }
                         }
-                    }
-                    when (val decision = checkNotNull(stopEngine).accept(event)) {
-                        is CandidateStopDecision.Confirmed -> {
-                            val result = finishCapture(captureId, EndSource.AUTO)
-                            throw StopAutoDetection(AutoDetectionOutcome.TripCompleted(captureId, result.tripId))
+                        when (val decision = checkNotNull(stopEngine).accept(event)) {
+                            is CandidateStopDecision.Confirmed -> {
+                                val result = finishCapture(captureId, EndSource.AUTO)
+                                throw StopAutoDetection(AutoDetectionOutcome.TripCompleted(captureId, result.tripId))
+                            }
+                            CandidateStopDecision.NoChange, CandidateStopDecision.CandidateOpened, CandidateStopDecision.Abandoned -> Unit
                         }
-                        CandidateStopDecision.NoChange, CandidateStopDecision.CandidateOpened, CandidateStopDecision.Abandoned -> Unit
+                    } else if (event is DetectionEvent.Location) {
+                        // TRK-003/F0.3 §8: "automatic stop detection should not
+                        // silently close a manually paused Trip" - the stop
+                        // engine never sees this event, freezing its own
+                        // grace-period clock instead of letting it tick during
+                        // a pause the user explicitly asked for (DP-005).
+                        // DET-005 still watches it for forgotten-pause evidence.
+                        forgottenPauseWatch.onPausedSample(openPause.id, event.sample) { decision ->
+                            logForgottenPauseWarning(captureId, openPause.id, decision)
+                            onForgottenPauseWarning()
+                        }
                     }
                 }
-                // else: TRK-003/F0.3 §8 - "automatic stop detection should not
-                // silently close a manually paused Trip." Neither persisting
-                // nor evaluating the stop engine while an open pause exists -
-                // the event is simply not seen, freezing the stop engine's own
-                // grace-period clock rather than letting it tick during a
-                // pause the user explicitly asked for (DP-005).
             }
             return AutoDetectionOutcome.CandidateAbandoned
         } catch (stop: StopAutoDetection) {
@@ -473,6 +492,40 @@ class TrackingSessionCoordinator @Inject constructor(
 
     /** A structured way to unwind out of [runAutoDetection]'s `collect` early with a known result. */
     private class StopAutoDetection(val outcome: AutoDetectionOutcome) : CancellationException()
+
+    /**
+     * DET-005: shared by both [recordLocationUpdates] and [runAutoDetection]
+     * so neither has to duplicate "notice a new pause, run a fresh
+     * [ForgottenPauseEngine] for it, forget it again once resumed." A fresh
+     * engine per pause, exactly like `runAutoDetection` already creates a
+     * fresh [CandidateStopEngine] per capture - this class has no way to
+     * know a pause resumed and a new one later opened are the same episode,
+     * nor should it need to.
+     */
+    private class ForgottenPauseWatch {
+        private var engine: ForgottenPauseEngine? = null
+        private var trackedPauseId: String? = null
+
+        suspend fun onPausedSample(
+            pauseId: String,
+            sample: LocationSample,
+            onWarning: suspend (ForgottenPauseDecision.WarningIssued) -> Unit
+        ) {
+            if (pauseId != trackedPauseId) {
+                trackedPauseId = pauseId
+                engine = ForgottenPauseEngine()
+            }
+            when (val decision = checkNotNull(engine).accept(sample)) {
+                is ForgottenPauseDecision.WarningIssued -> onWarning(decision)
+                ForgottenPauseDecision.NoChange -> Unit
+            }
+        }
+
+        fun onResumed() {
+            trackedPauseId = null
+            engine = null
+        }
+    }
 
     /**
      * TRK-002: collects [locationGateway]'s stream for the lifetime of the
@@ -499,19 +552,37 @@ class TrackingSessionCoordinator @Inject constructor(
      * "detailed movement during the pause is excluded from normal Trip
      * distance/route by default" and "missed route geometry during manual
      * pause should be treated as genuinely missing rather than
-     * reconstructed." The collector itself keeps running (not cancelled) so
-     * a future `DET-005` forgotten-pause monitor has a live stream to watch
-     * without needing its own separate subscription.
+     * reconstructed." The collector itself keeps running (not cancelled) -
+     * DET-005's [ForgottenPauseEngine] watches this same live stream while
+     * paused instead of needing a separate subscription.
+     *
+     * DET-005/F0.3 §8's "forgotten-pause scenario": a paused sample is fed to
+     * [ForgottenPauseWatch] instead of being dropped outright; [onForgottenPauseWarning]
+     * lets the caller (`TrackingForegroundService`) surface a real reminder -
+     * this method itself never resumes anything on its own (DP-005: manual
+     * ownership stays authoritative regardless of what gets detected here).
      */
-    suspend fun recordLocationUpdates(captureId: String) {
+    suspend fun recordLocationUpdates(
+        captureId: String,
+        onForgottenPauseWarning: suspend () -> Unit = {}
+    ) {
         var nextSequenceNumber = (rawTrackPointDao.maxSequenceNumber(captureId) ?: -1) + 1
+        val forgottenPauseWatch = ForgottenPauseWatch()
         locationGateway.locationUpdates().collect { sample ->
-            if (manualPauseIntervalDao.findOpenByCapture(captureId) != null) return@collect
-            try {
-                rawTrackPointDao.insert(sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
-                nextSequenceNumber++
-            } catch (error: Exception) {
-                logRawTrackPointPersistenceFailure(captureId, error)
+            val openPause = manualPauseIntervalDao.findOpenByCapture(captureId)
+            if (openPause == null) {
+                forgottenPauseWatch.onResumed()
+                try {
+                    rawTrackPointDao.insert(sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
+                    nextSequenceNumber++
+                } catch (error: Exception) {
+                    logRawTrackPointPersistenceFailure(captureId, error)
+                }
+            } else {
+                forgottenPauseWatch.onPausedSample(openPause.id, sample) { decision ->
+                    logForgottenPauseWarning(captureId, openPause.id, decision)
+                    onForgottenPauseWarning()
+                }
             }
         }
     }
@@ -654,6 +725,38 @@ class TrackingSessionCoordinator @Inject constructor(
                 stateBefore = null,
                 stateAfter = null,
                 reasonCode = reasonCode,
+                metadata = emptyMap(),
+                appVersion = BuildConfig.VERSION_NAME,
+                schemaVersion = 1,
+                detectorVersion = DetectorVersion(0),
+                locationProfileVersion = LocationProfileVersion(0),
+                processingVersion = ProcessingVersion(0)
+            )
+        )
+    }
+
+    /**
+     * DET-005: [correlationId] links this back to the specific pause episode
+     * it warned about - useful for making sense of a diagnostic export later
+     * without a foreign key entangling diagnostic and domain data (see
+     * [DiagnosticEventEntity]'s own KDoc on why there isn't one).
+     */
+    private suspend fun logForgottenPauseWarning(captureId: String, pauseId: String, decision: ForgottenPauseDecision.WarningIssued) {
+        diagnosticEventDao.insert(
+            DiagnosticEventEntity(
+                eventId = idGenerator.newId(),
+                occurredAt = clock.wallClockMillis(),
+                elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                category = DiagnosticCategory.DETECTOR,
+                eventType = "FORGOTTEN_PAUSE_WARNING",
+                severity = DiagnosticSeverity.WARN,
+                source = "tracking-service",
+                captureId = captureId,
+                tripId = null,
+                correlationId = pauseId,
+                stateBefore = null,
+                stateAfter = null,
+                reasonCode = "SUSTAINED_MOVEMENT_WHILE_PAUSED",
                 metadata = emptyMap(),
                 appVersion = BuildConfig.VERSION_NAME,
                 schemaVersion = 1,

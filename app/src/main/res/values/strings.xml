@@ -4,4 +4,7 @@
     <string name="tracking_notification_title">Moto Trip Tracker</string>
     <string name="tracking_notification_text">Recording your trip</string>
     <string name="validating_candidate_notification_text">Checking for a possible trip…</string>
+    <string name="forgotten_pause_reminder_channel_name">Pause reminders</string>
+    <string name="forgotten_pause_reminder_title">Still paused?</string>
+    <string name="forgotten_pause_reminder_text">You seem to be moving, but your trip is still paused. Resume if you\'re back on the road.</string>
 </resources>

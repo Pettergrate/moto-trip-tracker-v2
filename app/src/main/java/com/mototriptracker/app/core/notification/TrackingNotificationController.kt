@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import com.mototriptracker.app.R
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -49,6 +50,27 @@ class TrackingNotificationController @Inject constructor(
             .build()
     }
 
+    /**
+     * DET-005/F0.3 §8: "the app MAY issue a high-priority but non-distracting
+     * reminder" for sustained movement detected while manually paused. A
+     * separate, dismissible channel/ID from [buildTrackingNotification]'s
+     * ongoing one on purpose - this is a one-shot nudge, not a persistent
+     * FGS notification, and `NotificationManagerCompat.notify` is a documented
+     * safe no-op if `POST_NOTIFICATIONS` isn't granted (API 33+), so no
+     * explicit permission check is needed here.
+     */
+    fun postForgottenPauseReminder() {
+        ensureReminderChannel()
+        val notification = NotificationCompat.Builder(context, REMINDER_CHANNEL_ID)
+            .setContentTitle(context.getString(R.string.forgotten_pause_reminder_title))
+            .setContentText(context.getString(R.string.forgotten_pause_reminder_text))
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context).notify(REMINDER_NOTIFICATION_ID, notification)
+    }
+
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -60,8 +82,21 @@ class TrackingNotificationController @Inject constructor(
         manager.createNotificationChannel(channel)
     }
 
+    private fun ensureReminderChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val channel = NotificationChannel(
+            REMINDER_CHANNEL_ID,
+            context.getString(R.string.forgotten_pause_reminder_channel_name),
+            NotificationManager.IMPORTANCE_HIGH
+        )
+        manager.createNotificationChannel(channel)
+    }
+
     companion object {
         const val CHANNEL_ID = "trip_tracking"
         const val NOTIFICATION_ID = 1001
+        const val REMINDER_CHANNEL_ID = "trip_reminders"
+        const val REMINDER_NOTIFICATION_ID = 1002
     }
 }

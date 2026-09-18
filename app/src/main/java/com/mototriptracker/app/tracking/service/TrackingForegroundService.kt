@@ -194,7 +194,12 @@ class TrackingForegroundService : Service() {
 
     private fun ensureLocationRecording(captureId: String) {
         if (locationRecordingJob?.isActive == true) return
-        locationRecordingJob = serviceScope.launch { coordinator.recordLocationUpdates(captureId) }
+        locationRecordingJob = serviceScope.launch {
+            coordinator.recordLocationUpdates(
+                captureId,
+                onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() }
+            )
+        }
     }
 
     /**
@@ -216,7 +221,8 @@ class TrackingForegroundService : Service() {
             activityEvents = activityTransitionBus.events,
             onCaptureStarted = {
                 startForeground(NOTIFICATION_ID, notificationController.buildTrackingNotification())
-            }
+            },
+            onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() }
         )
         lastAutoDetectionOutcome = outcome
         stopForeground(STOP_FOREGROUND_REMOVE)

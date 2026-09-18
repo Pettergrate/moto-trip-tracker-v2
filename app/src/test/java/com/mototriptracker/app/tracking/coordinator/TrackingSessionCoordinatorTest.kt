@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -647,5 +648,106 @@ class TrackingSessionCoordinatorTest {
             "the sample arriving during the pause must not be persisted",
             points.none { it.elapsedRealtimeNanos == 30_000_000_000L }
         )
+    }
+
+    // --- DET-005: forgotten-pause warning --------------------------------
+
+    @Test
+    fun recordLocationUpdatesWarnsOnSustainedMovementWhilePausedWithoutResumingOrPersisting() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinator.pauseCapture()
+        var warned = false
+
+        coordinatorWith(
+            listOf(
+                sample(elapsedNanos = 0L), // anchors the forgotten-pause watch
+                sample(elapsedNanos = 61_000_000_000L, lat = 10.001) // ~111m, 61s later - warns
+            )
+        ).recordLocationUpdates(captureId, onForgottenPauseWarning = { warned = true })
+
+        assertTrue("expected a forgotten-pause warning", warned)
+        assertEquals(0, db.rawTrackPointDao().countByCapture(captureId))
+        assertNotNull(
+            "manual ownership must remain authoritative - a warning must never auto-resume",
+            db.manualPauseIntervalDao().findOpenByCapture(captureId)
+        )
+        val warningEvent = db.diagnosticEventDao().findAll().single { it.eventType == "FORGOTTEN_PAUSE_WARNING" }
+        assertEquals(DiagnosticCategory.DETECTOR, warningEvent.category)
+        assertEquals(DiagnosticSeverity.WARN, warningEvent.severity)
+    }
+
+    @Test
+    fun recordLocationUpdatesDoesNotWarnForOrdinarySmallMovementWhilePaused() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinator.pauseCapture()
+        var warned = false
+
+        coordinatorWith(
+            listOf(
+                sample(elapsedNanos = 0L),
+                sample(elapsedNanos = 61_000_000_000L, lat = 10.00001) // ~1m - well under the displacement threshold
+            )
+        ).recordLocationUpdates(captureId, onForgottenPauseWarning = { warned = true })
+
+        assertFalse("ordinary walking-around-at-a-stop movement must not trigger a warning", warned)
+    }
+
+    @Test
+    fun runAutoDetectionWarnsOnSustainedMovementWhilePausedWithoutAutoFinishing() = runTest {
+        val confirmed = CompletableDeferred<Unit>()
+        val warningFired = CompletableDeferred<Unit>()
+        val resumed = CompletableDeferred<Unit>()
+        var warned = false
+        // Every step that logically depends on an *earlier* step having
+        // actually been processed by the consumer (not just emitted by some
+        // producer) needs its own explicit gate here: a merged flow's
+        // upstream sources are independently buffered, so a producer can
+        // race arbitrarily far ahead of what the collector has consumed so
+        // far. Two real races were caught and fixed writing this test, not
+        // just one - `resumeCapture()` first raced ahead of `pauseCapture()`
+        // (fixed by gating the location flow's post-confirm emissions on
+        // `confirmed`), then, after that fix, it raced ahead of the 25s/90s
+        // samples actually being consumed and warned about (fixed by adding
+        // `warningFired`, completed from `onForgottenPauseWarning` itself -
+        // a genuine consumer-side event, not a guess at timing).
+        val activityFlow = flow {
+            emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L))
+            confirmed.await()
+            resumed.await()
+            emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 100_000_000_000L))
+            emit(activitySample(ActivityType.WALKING, TransitionType.ENTER, elapsedNanos = 101_000_000_000L))
+        }
+        val locationFlow = flow {
+            emit(sample(elapsedNanos = 1_000_000L))
+            emit(sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0)) // confirms the start
+            confirmed.await()
+            emit(sample(elapsedNanos = 25_000_000_000L)) // anchors the forgotten-pause watch
+            emit(sample(elapsedNanos = 90_000_000_000L, lat = 10.002, lon = -20.0)) // ~222m/65s later - warns
+            warningFired.await()
+            coordinator.resumeCapture()
+            resumed.complete(Unit)
+        }
+        var startedCaptureId: String? = null
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(
+            activityEvents = activityFlow,
+            onCaptureStarted = {
+                startedCaptureId = it
+                coordinator.pauseCapture()
+                confirmed.complete(Unit)
+            },
+            onForgottenPauseWarning = {
+                warned = true
+                warningFired.complete(Unit)
+            }
+        )
+
+        assertTrue("expected a forgotten-pause warning", warned)
+        assertTrue(outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
+        val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+        assertEquals(startedCaptureId, tripCompleted.captureId)
+        // The warning itself must never have auto-finished the trip - only
+        // the real EXIT/WALKING pair emitted after Resume did.
+        assertEquals(EndSource.AUTO, requireNotNull(db.tripCaptureDao().findById(tripCompleted.captureId)).endSource)
     }
 }
