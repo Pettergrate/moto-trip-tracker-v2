@@ -5,6 +5,7 @@ import androidx.room.Query
 import androidx.room.Upsert
 import com.mototriptracker.app.core.database.entity.TripStatisticsEntity
 import com.mototriptracker.app.core.model.ProcessingVersion
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TripStatisticsDao {
@@ -15,4 +16,15 @@ interface TripStatisticsDao {
 
     @Query("SELECT * FROM trip_statistics WHERE tripId = :tripId AND processingVersion = :processingVersion")
     suspend fun findByTripAndVersion(tripId: String, processingVersion: ProcessingVersion): TripStatisticsEntity?
+
+    /**
+     * UI-001: a Flow variant of [findByTripAndVersion] for reactive observation.
+     * `TripProcessingWorker` writes here asynchronously (often seconds after
+     * Finish), and Room only invalidates a query's Flow when a table IT reads
+     * from changes — so a screen combining this per-trip is required to
+     * notice the write; polling `tripDao.observeRecent(...)` alone never will,
+     * since that query doesn't touch `trip_statistics`.
+     */
+    @Query("SELECT * FROM trip_statistics WHERE tripId = :tripId AND processingVersion = :processingVersion")
+    fun observeByTripAndVersion(tripId: String, processingVersion: ProcessingVersion): Flow<TripStatisticsEntity?>
 }

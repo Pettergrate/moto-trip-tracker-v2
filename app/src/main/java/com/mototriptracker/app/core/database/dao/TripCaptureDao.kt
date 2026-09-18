@@ -7,12 +7,17 @@ import androidx.room.Transaction
 import com.mototriptracker.app.core.database.entity.TripCaptureEntity
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.EndSource
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TripCaptureDao {
 
     @Query("SELECT * FROM trip_capture WHERE status = :status LIMIT 1")
     suspend fun findByStatus(status: CaptureStatus = CaptureStatus.ACTIVE): TripCaptureEntity?
+
+    /** UI-001: the reactive twin of [findByStatus] — Home/Active Trip observe this instead of polling. */
+    @Query("SELECT * FROM trip_capture WHERE status = :status LIMIT 1")
+    fun observeByStatus(status: CaptureStatus = CaptureStatus.ACTIVE): Flow<TripCaptureEntity?>
 
     @Query("SELECT * FROM trip_capture WHERE id = :id")
     suspend fun findById(id: String): TripCaptureEntity?
