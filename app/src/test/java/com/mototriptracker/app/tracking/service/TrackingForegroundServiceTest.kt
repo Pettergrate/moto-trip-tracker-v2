@@ -10,6 +10,7 @@ import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.model.ActivityTransitionSample
 import com.mototriptracker.app.core.model.ActivityType
 import com.mototriptracker.app.core.model.CaptureStatus
+import com.mototriptracker.app.core.model.EndSource
 import com.mototriptracker.app.core.model.LocationSample
 import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.core.notification.TrackingNotificationController
@@ -75,7 +76,8 @@ class TrackingForegroundServiceTest {
     }
 
     private fun buildServiceController(
-        locationSamples: List<LocationSample> = emptyList()
+        locationSamples: List<LocationSample> = emptyList(),
+        elapsedNanos: Long = 1_000L
     ): ServiceController<TrackingForegroundService> {
         val controller = Robolectric.buildService(TrackingForegroundService::class.java)
         val service = controller.get()
@@ -98,7 +100,7 @@ class TrackingForegroundServiceTest {
             manualPauseIntervalDao = db.manualPauseIntervalDao(),
             locationGateway = FakeLocationGateway(locationSamples),
             processingScheduler = processingScheduler,
-            clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L),
+            clock = FakeClock(wallMillis = 1_000L, elapsedNanos = elapsedNanos),
             idGenerator = FakeIdGenerator(prefix = "capture")
         )
         service.notificationController = TrackingNotificationController(
@@ -210,6 +212,32 @@ class TrackingForegroundServiceTest {
             !shadowService.isStoppedBySelf
         )
         assertEquals(1, db.rawTrackPointDao().findAllByCapture(captureId).size)
+    }
+
+    /** REC-001/F0.10 SS10.2: a reboot must never look like an ordinary same-boot restart. */
+    @Test
+    fun nullIntentRestartAfterARebootAbortsTheCaptureInsteadOfResumingIt() = runBlocking {
+        val firstController = buildServiceController(elapsedNanos = 5_000L)
+        firstController.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        firstController.get().lastCommandJob?.join()
+        val captureId = requireNotNull(db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE)).id
+
+        // A fresh boot's elapsedRealtimeNanos starts small again - definitely
+        // less than the 5_000L the capture recorded as its own start.
+        val restartedController = buildServiceController(elapsedNanos = 100L)
+        restartedController.withIntent(null).startCommand(0, 0)
+        restartedController.get().lastCommandJob?.join()
+
+        val shadowService = shadowOf(restartedController.get())
+        assertTrue(
+            "nothing left to own after a reboot-aborted capture - the service should stop",
+            shadowService.isStoppedBySelf
+        )
+        val capture = requireNotNull(db.tripCaptureDao().findById(captureId))
+        assertEquals(CaptureStatus.ABORTED, capture.status)
+        assertEquals(EndSource.RECOVERY, capture.endSource)
+        assertEquals(null, db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE))
     }
 
     @Test

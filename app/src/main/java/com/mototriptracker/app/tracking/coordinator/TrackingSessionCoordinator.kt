@@ -201,6 +201,120 @@ class TrackingSessionCoordinator @Inject constructor(
     /** Used by the service on sticky restart / `Intent == null` recovery. */
     suspend fun findActiveCapture(): TripCaptureEntity? = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE)
 
+    /** REC-001/F0.10 §7.1's "reanudar la misma captura" vs §10's "no asumir que el viaje continuó durante el reboot". */
+    sealed interface RecoveryOutcome {
+        data class Resumed(val captureId: String) : RecoveryOutcome
+        data class AbortedAfterReboot(val captureId: String) : RecoveryOutcome
+        data object NoActiveCapture : RecoveryOutcome
+    }
+
+    /**
+     * REC-001. Called once by the Service whenever it (re)starts with no
+     * fresh command intent (a sticky restart, or `Intent == null`) - the
+     * only place F0.10 §7/§10's checklist actually applies, since a direct
+     * Start/Pause/Resume/Finish command already knows exactly what it means
+     * to do.
+     *
+     * F0.10 §10.1's discontinuity rule: `elapsedRealtimeNanos` is monotonic
+     * only *within* a boot session - it resets close to zero after a real
+     * reboot. If the capture's own recorded start is now *greater* than the
+     * current value, the clock domain changed underneath it, which is only
+     * possible if a reboot happened since Start - "same boot" (§7.1) no
+     * longer holds, and §10.2's stricter rule takes over instead of §7.1's
+     * plain resume.
+     */
+    suspend fun recoverActiveCaptureIfAny(): RecoveryOutcome {
+        val active = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) ?: return RecoveryOutcome.NoActiveCapture
+
+        return if (clock.elapsedRealtimeNanos() < active.startElapsedRealtimeNanos) {
+            abortCaptureAfterReboot(active)
+            RecoveryOutcome.AbortedAfterReboot(active.id)
+        } else {
+            logProcessRecovered(active.id)
+            RecoveryOutcome.Resumed(active.id)
+        }
+    }
+
+    /**
+     * F0.10 §10.2's baseline: preserve every RawTrackPoint (nothing here
+     * deletes or rewrites one), close the capture using the *last persisted
+     * evidence* rather than an invented "now" (rule 4 - a reboot could have
+     * lasted seconds or hours; wall-clock "now" says nothing true about when
+     * riding actually stopped), and never resume it - "the next valid
+     * movement creates a new capture" (rule 6) is a future Start, not
+     * something this method does itself. `EndSource.RECOVERY` distinguishes
+     * this from a hypothetical future user-initiated abort action
+     * (`EndSource.ABORTED`, unused today - no such action exists yet).
+     */
+    private suspend fun abortCaptureAfterReboot(capture: TripCaptureEntity) {
+        val lastPoint = rawTrackPointDao.findAllByCapture(capture.id).maxByOrNull { it.sequenceNumber }
+        val endedAt = lastPoint?.capturedAt ?: capture.startedAt
+        val endElapsedRealtimeNanos = lastPoint?.elapsedRealtimeNanos ?: capture.startElapsedRealtimeNanos
+        tripCaptureDao.completeActiveCapture(
+            id = capture.id,
+            endedAt = endedAt,
+            endElapsedRealtimeNanos = endElapsedRealtimeNanos,
+            endSource = EndSource.RECOVERY,
+            updatedAt = clock.wallClockMillis(),
+            newStatus = CaptureStatus.ABORTED
+        )
+        logCaptureAbortedAfterReboot(capture.id)
+    }
+
+    /** F0.10 §7.1 item 6: "registrar PROCESS_RECOVERED/evento equivalente." */
+    private suspend fun logProcessRecovered(captureId: String) {
+        diagnosticEventDao.insert(
+            DiagnosticEventEntity(
+                eventId = idGenerator.newId(),
+                occurredAt = clock.wallClockMillis(),
+                elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                category = DiagnosticCategory.RECOVERY_SYSTEM,
+                eventType = "PROCESS_RECOVERED",
+                severity = DiagnosticSeverity.INFO,
+                source = "tracking-service",
+                captureId = captureId,
+                tripId = null,
+                correlationId = null,
+                stateBefore = null,
+                stateAfter = null,
+                reasonCode = null,
+                metadata = emptyMap(),
+                appVersion = BuildConfig.VERSION_NAME,
+                schemaVersion = 1,
+                detectorVersion = DetectorVersion(0),
+                locationProfileVersion = LocationProfileVersion(0),
+                processingVersion = ProcessingVersion(0)
+            )
+        )
+    }
+
+    /** F0.10 §10.2 item 2: "registrar el motivo de recuperación cuando sea posible." */
+    private suspend fun logCaptureAbortedAfterReboot(captureId: String) {
+        diagnosticEventDao.insert(
+            DiagnosticEventEntity(
+                eventId = idGenerator.newId(),
+                occurredAt = clock.wallClockMillis(),
+                elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                category = DiagnosticCategory.RECOVERY_SYSTEM,
+                eventType = "CAPTURE_ABORTED_AFTER_REBOOT",
+                severity = DiagnosticSeverity.WARN,
+                source = "tracking-service",
+                captureId = captureId,
+                tripId = null,
+                correlationId = null,
+                stateBefore = "ACTIVE",
+                stateAfter = "ABORTED",
+                reasonCode = "ELAPSED_REALTIME_DISCONTINUITY",
+                metadata = emptyMap(),
+                appVersion = BuildConfig.VERSION_NAME,
+                schemaVersion = 1,
+                detectorVersion = DetectorVersion(0),
+                locationProfileVersion = LocationProfileVersion(0),
+                processingVersion = ProcessingVersion(0)
+            )
+        )
+    }
+
     /**
      * F0.3 §8: "Pause is available from the active-trip UI and notification
      * ... the Trip remains logically active ... the pause start timestamp is

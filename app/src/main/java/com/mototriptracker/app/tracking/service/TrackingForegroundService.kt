@@ -198,23 +198,30 @@ class TrackingForegroundService : Service() {
     }
 
     /**
-     * F0.10 §7.2/REL-002: a sticky restart (or any restart with an unknown/
-     * null action) must rehydrate from Room, never assume the intent that
-     * originally started it is still meaningful. If no capture is ACTIVE
-     * anymore, there's nothing for this service to own — stop cleanly
-     * instead of sitting in the foreground for no reason. If one is still
-     * ACTIVE, resume recording into it (TRK-002) rather than leaving the
+     * F0.10 §7.2/REL-002/REC-001: a sticky restart (or any restart with an
+     * unknown/null action) must rehydrate from Room, never assume the intent
+     * that originally started it is still meaningful.
+     * [TrackingSessionCoordinator.recoverActiveCaptureIfAny] does the actual
+     * same-boot-vs-reboot decision (F0.10 §7.1/§10.1); this method only acts
+     * on its answer. No capture, or one just aborted because a reboot broke
+     * elapsedRealtime continuity - either way there's nothing left for this
+     * service to own, so it stops cleanly rather than sitting in the
+     * foreground for no reason. Still `ACTIVE` (a genuine same-boot process
+     * death) resumes recording into it (TRK-002) instead of leaving the
      * notification up without actually collecting anything.
      */
     private suspend fun rehydrateOrStop() {
-        val active = coordinator.findActiveCapture()
-        if (active == null) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-        } else {
-            ensureLocationRecording(active.id)
-            ensureNotificationRefreshTicker(active.id)
-            refreshNotification(active.id)
+        when (val outcome = coordinator.recoverActiveCaptureIfAny()) {
+            TrackingSessionCoordinator.RecoveryOutcome.NoActiveCapture,
+            is TrackingSessionCoordinator.RecoveryOutcome.AbortedAfterReboot -> {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+            is TrackingSessionCoordinator.RecoveryOutcome.Resumed -> {
+                ensureLocationRecording(outcome.captureId)
+                ensureNotificationRefreshTicker(outcome.captureId)
+                refreshNotification(outcome.captureId)
+            }
         }
     }
 

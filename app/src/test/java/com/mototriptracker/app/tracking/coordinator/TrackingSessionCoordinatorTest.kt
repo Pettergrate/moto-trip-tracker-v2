@@ -852,4 +852,82 @@ class TrackingSessionCoordinatorTest {
         assertNotNull(snapshot)
         assertTrue(snapshot!!.isPaused)
     }
+
+    // --- REC-001: recoverActiveCaptureIfAny -------------------------------
+
+    @Test
+    fun recoverActiveCaptureIfAnyReturnsNoActiveCaptureWhenNothingIsActive() = runTest {
+        val outcome = coordinator.recoverActiveCaptureIfAny()
+
+        assertEquals(TrackingSessionCoordinator.RecoveryOutcome.NoActiveCapture, outcome)
+    }
+
+    @Test
+    fun recoverActiveCaptureIfAnyResumesTheSameCaptureOnAGenuineSameBootProcessDeath() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        clock.advanceMillis(5_000L) // real time passing, same boot - the clock only ever moves forward
+
+        val outcome = coordinator.recoverActiveCaptureIfAny()
+
+        assertEquals(TrackingSessionCoordinator.RecoveryOutcome.Resumed(captureId), outcome)
+        assertEquals(CaptureStatus.ACTIVE, db.tripCaptureDao().findById(captureId)?.status)
+        val event = db.diagnosticEventDao().findAll().single { it.eventType == "PROCESS_RECOVERED" }
+        assertEquals(DiagnosticCategory.RECOVERY_SYSTEM, event.category)
+        assertEquals(captureId, event.captureId)
+    }
+
+    @Test
+    fun recoverActiveCaptureIfAnyAbortsUsingTheLastRawPointWhenARebootIsDetected() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinatorWith(
+            listOf(sample(elapsedNanos = 2_000L, lat = 10.0), sample(elapsedNanos = 3_000L, lat = 10.001))
+        ).recordLocationUpdates(captureId)
+        // A real reboot: the new boot session's elapsedRealtimeNanos starts
+        // small again, definitely less than this capture's own recorded
+        // start (the class-level clock's initial 1_000L).
+        clock.setElapsedRealtimeNanos(500L)
+
+        val outcome = coordinator.recoverActiveCaptureIfAny()
+
+        assertEquals(TrackingSessionCoordinator.RecoveryOutcome.AbortedAfterReboot(captureId), outcome)
+        val capture = db.tripCaptureDao().findById(captureId)
+        assertEquals(CaptureStatus.ABORTED, capture?.status)
+        assertEquals(EndSource.RECOVERY, capture?.endSource)
+        assertEquals(3_000L, capture?.endElapsedRealtimeNanos) // the last raw point's own elapsedRealtimeNanos, not an invented "now"
+        assertEquals(
+            "raw evidence must never be deleted, even for an aborted capture",
+            2,
+            db.rawTrackPointDao().countByCapture(captureId)
+        )
+        val event = db.diagnosticEventDao().findAll().single { it.eventType == "CAPTURE_ABORTED_AFTER_REBOOT" }
+        assertEquals(DiagnosticSeverity.WARN, event.severity)
+    }
+
+    @Test
+    fun recoverActiveCaptureIfAnyFallsBackToTheCaptureStartWhenNoRawPointWasEverRecorded() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        val started = requireNotNull(db.tripCaptureDao().findById(captureId))
+        clock.setElapsedRealtimeNanos(0L) // rebooted before any location fix ever arrived
+
+        coordinator.recoverActiveCaptureIfAny()
+
+        val aborted = db.tripCaptureDao().findById(captureId)
+        assertEquals(CaptureStatus.ABORTED, aborted?.status)
+        assertEquals(started.startedAt, aborted?.endedAt)
+        assertEquals(started.startElapsedRealtimeNanos, aborted?.endElapsedRealtimeNanos)
+    }
+
+    @Test
+    fun recoverActiveCaptureIfAnyNeverResumesLocationRecordingAfterARebootAbort() = runTest {
+        // A regression guard for the exact bug F0.10 SS10.2 warns about: an
+        // aborted-after-reboot capture must stay ABORTED, not flip back to
+        // ACTIVE just because something later calls findByStatus(ACTIVE).
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        clock.setElapsedRealtimeNanos(0L)
+
+        coordinator.recoverActiveCaptureIfAny()
+
+        assertEquals(null, coordinator.findActiveCapture())
+        assertEquals(captureId, db.tripCaptureDao().findMostRecentlyEnded()?.id)
+    }
 }
