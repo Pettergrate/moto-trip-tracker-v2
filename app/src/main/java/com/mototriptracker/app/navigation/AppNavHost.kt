@@ -35,8 +35,15 @@ import com.mototriptracker.app.feature.tripdetail.TripDetailScreen
  * not an oversight.
  */
 @Composable
-fun AppNavHost() {
-    val backStack = remember { mutableStateListOf<Destination>(Destination.Home) }
+fun AppNavHost(initialDestination: Destination = Destination.Home) {
+    // Home always sits underneath so Back from a deep-linked destination
+    // (e.g. the tracking notification's content intent opening Active Trip
+    // directly) lands on Home instead of exiting the app.
+    val backStack = remember {
+        mutableStateListOf<Destination>(Destination.Home).apply {
+            if (initialDestination != Destination.Home) add(initialDestination)
+        }
+    }
 
     fun navigateToTab(tab: Destination) {
         // ADR-011: switching tabs replaces the stack rather than pushing -

@@ -817,4 +817,39 @@ class TrackingSessionCoordinatorTest {
             warned
         )
     }
+
+    // --- NOT-001: currentTrackingSnapshot --------------------------------
+
+    @Test
+    fun currentTrackingSnapshotReturnsNullForAMissingCapture() = runTest {
+        assertNull(coordinator.currentTrackingSnapshot("does-not-exist"))
+    }
+
+    @Test
+    fun currentTrackingSnapshotReportsLiveDistanceAndElapsedTimeWhileNotPaused() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinatorWith(
+            listOf(sample(elapsedNanos = 0L, lat = 10.0), sample(elapsedNanos = 1_000_000_000L, lat = 10.001))
+        ).recordLocationUpdates(captureId)
+        clock.advanceMillis(5_000L)
+
+        val snapshot = coordinator.currentTrackingSnapshot(captureId)
+
+        assertNotNull(snapshot)
+        assertTrue("expected nonzero distance from the two recorded points", snapshot!!.distanceMeters > 0.0)
+        assertFalse(snapshot.isPaused)
+        assertEquals(5_000L, snapshot.elapsedMs)
+    }
+
+    @Test
+    fun currentTrackingSnapshotReflectsAnOpenPause() = runTest {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+
+        coordinator.pauseCapture()
+
+        val snapshot = coordinator.currentTrackingSnapshot(captureId)
+
+        assertNotNull(snapshot)
+        assertTrue(snapshot!!.isPaused)
+    }
 }

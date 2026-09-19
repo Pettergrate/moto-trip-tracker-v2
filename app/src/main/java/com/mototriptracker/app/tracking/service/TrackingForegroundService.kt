@@ -17,6 +17,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import androidx.annotation.VisibleForTesting
@@ -94,6 +96,18 @@ class TrackingForegroundService : Service() {
         private set
 
     /**
+     * NOT-001: keeps the notification's live distance/duration text
+     * reasonably fresh without recomputing it on every single location
+     * sample (`currentTrackingSnapshot` rescans the capture's whole raw
+     * point history - fine at this cadence, wasteful at TRK-002's ~2s
+     * sample rate). State-changing moments (Start, rehydrate, Pause,
+     * Resume) refresh immediately instead of waiting for the next tick.
+     */
+    @VisibleForTesting
+    var notificationRefreshJob: Job? = null
+        private set
+
+    /**
      * AUTO-001: mirrors [locationRecordingJob]'s dedupe guard - a second
      * `IN_VEHICLE ENTER` broadcast arriving while a candidate is still being
      * validated (nothing ACTIVE yet, so `ActivityTransitionReceiver` would
@@ -138,10 +152,20 @@ class TrackingForegroundService : Service() {
                 val result = coordinator.startManualCapture()
                 lastStartResult = result
                 ensureLocationRecording(result.captureId)
+                ensureNotificationRefreshTicker(result.captureId)
+                refreshNotification(result.captureId)
             }
             ACTION_FINISH -> serviceScope.launch { finishActiveCaptureAndStop() }
-            ACTION_PAUSE -> serviceScope.launch { lastPauseResult = coordinator.pauseCapture() }
-            ACTION_RESUME -> serviceScope.launch { lastResumeResult = coordinator.resumeCapture() }
+            ACTION_PAUSE -> serviceScope.launch {
+                val result = coordinator.pauseCapture()
+                lastPauseResult = result
+                pausedCaptureId(result)?.let { refreshNotification(it) }
+            }
+            ACTION_RESUME -> serviceScope.launch {
+                val result = coordinator.resumeCapture()
+                lastResumeResult = result
+                resumedCaptureId(result)?.let { refreshNotification(it) }
+            }
             ACTION_AUTO_DETECT -> ensureAutoDetection()
             else -> serviceScope.launch { rehydrateOrStop() }
         }
@@ -189,6 +213,8 @@ class TrackingForegroundService : Service() {
             stopSelf()
         } else {
             ensureLocationRecording(active.id)
+            ensureNotificationRefreshTicker(active.id)
+            refreshNotification(active.id)
         }
     }
 
@@ -201,6 +227,40 @@ class TrackingForegroundService : Service() {
                 onForgottenFinishWarning = { notificationController.postForgottenFinishReminder() }
             )
         }
+    }
+
+    private fun pausedCaptureId(result: TrackingSessionCoordinator.PauseResult): String? = when (result) {
+        is TrackingSessionCoordinator.PauseResult.Paused -> result.captureId
+        is TrackingSessionCoordinator.PauseResult.AlreadyPaused -> result.captureId
+        TrackingSessionCoordinator.PauseResult.NoActiveCapture -> null
+    }
+
+    private fun resumedCaptureId(result: TrackingSessionCoordinator.ResumeResult): String? = when (result) {
+        is TrackingSessionCoordinator.ResumeResult.Resumed -> result.captureId
+        is TrackingSessionCoordinator.ResumeResult.AlreadyResumed -> result.captureId
+        TrackingSessionCoordinator.ResumeResult.NoActiveCapture -> null
+    }
+
+    /** NOT-001: started once a capture is confirmed active; not order-sensitive like [locationRecordingJob], so `onDestroy`'s `serviceScope.cancel()` cleaning it up on Finish/stop is enough - no explicit cancel needed here. */
+    private fun ensureNotificationRefreshTicker(captureId: String) {
+        if (notificationRefreshJob?.isActive == true) return
+        notificationRefreshJob = serviceScope.launch {
+            while (isActive) {
+                delay(NOTIFICATION_REFRESH_INTERVAL_MS)
+                refreshNotification(captureId)
+            }
+        }
+    }
+
+    /** Re-calling `startForeground` with the same ID updates the existing notification in place - the same mechanism `runAutoDetectionAndStop`'s own `onCaptureStarted` swap already relies on. */
+    private suspend fun refreshNotification(captureId: String) {
+        val snapshot = coordinator.currentTrackingSnapshot(captureId) ?: return
+        val notification = if (snapshot.isPaused) {
+            notificationController.buildPausedTrackingNotification(snapshot.elapsedMs)
+        } else {
+            notificationController.buildTrackingNotification(snapshot.distanceMeters, snapshot.elapsedMs)
+        }
+        startForeground(NOTIFICATION_ID, notification)
     }
 
     /**
@@ -220,8 +280,10 @@ class TrackingForegroundService : Service() {
     private suspend fun runAutoDetectionAndStop() {
         val outcome = coordinator.runAutoDetection(
             activityEvents = activityTransitionBus.events,
-            onCaptureStarted = {
+            onCaptureStarted = { captureId ->
                 startForeground(NOTIFICATION_ID, notificationController.buildTrackingNotification())
+                ensureNotificationRefreshTicker(captureId)
+                refreshNotification(captureId)
             },
             onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() }
         )
@@ -237,6 +299,11 @@ class TrackingForegroundService : Service() {
 
     companion object {
         private const val TAG = "TrackingFgService"
+        // NOT-001/ADR-018-style placeholder: not validated against real
+        // battery/UX field data, just a reasonable middle ground between
+        // "stale for a while" and rescanning the whole raw-point history
+        // needlessly often.
+        private const val NOTIFICATION_REFRESH_INTERVAL_MS = 30_000L
         const val ACTION_START = "com.mototriptracker.app.action.START_TRACKING"
         const val ACTION_FINISH = "com.mototriptracker.app.action.FINISH_TRACKING"
         const val ACTION_PAUSE = "com.mototriptracker.app.action.PAUSE_TRACKING"

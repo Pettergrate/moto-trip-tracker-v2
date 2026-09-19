@@ -40,6 +40,7 @@ import com.mototriptracker.app.domain.detection.ForgottenFinishDecision
 import com.mototriptracker.app.domain.detection.ForgottenFinishEngine
 import com.mototriptracker.app.domain.detection.ForgottenPauseDecision
 import com.mototriptracker.app.domain.detection.ForgottenPauseEngine
+import com.mototriptracker.app.domain.liveDistanceMeters
 import com.mototriptracker.app.tracking.location.LocationGateway
 import com.mototriptracker.app.tracking.processing.ProcessingScheduler
 import kotlinx.coroutines.CancellationException
@@ -105,6 +106,34 @@ class TrackingSessionCoordinator @Inject constructor(
         /** Nothing was ever confirmed - the candidate opened (or never did) and closed with no Trip created. */
         data object CandidateAbandoned : AutoDetectionOutcome
         data class TripCompleted(val captureId: String, val tripId: String) : AutoDetectionOutcome
+    }
+
+    /**
+     * NOT-001: the live figures the notification's TRACKING/MANUAL_PAUSED
+     * text needs (F0.9 §7). [distanceMeters] reuses [liveDistanceMeters] -
+     * the same non-authoritative, best-effort figure Home/Active Trip
+     * already show, not PRC-002's post-Finish authoritative one.
+     */
+    data class TrackingSnapshot(val distanceMeters: Double, val elapsedMs: Long, val isPaused: Boolean)
+
+    /**
+     * NOT-001: a single on-demand read rather than a live-subscribed Flow -
+     * the notification only needs "the current value right now" at a few
+     * specific moments (Start, Pause, Resume, rehydrate, and a periodic
+     * refresh the Service owns), not a continuous stream. `null` means the
+     * capture is already gone (a stale/duplicate command racing a Finish
+     * elsewhere) - the Service's own job to decide there's nothing left to
+     * show, not this method's.
+     */
+    suspend fun currentTrackingSnapshot(captureId: String): TrackingSnapshot? {
+        val capture = tripCaptureDao.findById(captureId) ?: return null
+        val points = rawTrackPointDao.findAllByCapture(captureId)
+        val isPaused = manualPauseIntervalDao.findOpenByCapture(captureId) != null
+        return TrackingSnapshot(
+            distanceMeters = liveDistanceMeters(points),
+            elapsedMs = (clock.elapsedRealtimeNanos() - capture.startElapsedRealtimeNanos) / 1_000_000,
+            isPaused = isPaused
+        )
     }
 
     /** TRK-003: [pauseCapture]'s outcome. */
