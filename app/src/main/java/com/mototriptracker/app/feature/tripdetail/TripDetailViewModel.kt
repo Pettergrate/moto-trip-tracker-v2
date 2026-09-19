@@ -3,8 +3,11 @@ package com.mototriptracker.app.feature.tripdetail
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mototriptracker.app.core.common.Clock
+import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripDao
 import com.mototriptracker.app.core.database.dao.TripStatisticsDao
+import com.mototriptracker.app.domain.GeoPoint
+import com.mototriptracker.app.domain.simplifyRoute
 import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.feature.common.formatDateTime
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
@@ -33,6 +36,7 @@ import kotlinx.coroutines.launch
 class TripDetailViewModel @Inject constructor(
     private val tripDao: TripDao,
     private val tripStatisticsDao: TripStatisticsDao,
+    private val processedTrackPointDao: ProcessedTrackPointDao,
     private val clock: Clock
 ) : ViewModel() {
 
@@ -44,11 +48,16 @@ class TripDetailViewModel @Inject constructor(
         } else {
             combine(
                 tripDao.observeById(tripId),
-                tripStatisticsDao.observeByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION)
-            ) { trip, statistics ->
+                tripStatisticsDao.observeByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION),
+                processedTrackPointDao.observeAllByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION)
+            ) { trip, statistics, processedPoints ->
                 if (trip == null) {
                     TripDetailUiState.NotFound
                 } else {
+                    // MAP-001: simplified once here, not per-recomposition -
+                    // ADR-006 still holds, this never becomes a source of
+                    // truth for distance/speed, only what the map draws.
+                    val routePoints = simplifyRoute(processedPoints.map { GeoPoint(it.latitude, it.longitude) })
                     TripDetailUiState.Loaded(
                         tripId = trip.id,
                         displayName = trip.name ?: fallbackTripName(trip.createdAt),
@@ -66,7 +75,8 @@ class TripDetailViewModel @Inject constructor(
                         minElevationM = statistics?.minElevationM,
                         maxElevationM = statistics?.maxElevationM,
                         ascentM = statistics?.ascentM,
-                        descentM = statistics?.descentM
+                        descentM = statistics?.descentM,
+                        routePoints = routePoints
                     )
                 }
             }

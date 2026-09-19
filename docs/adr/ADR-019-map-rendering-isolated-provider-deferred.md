@@ -47,3 +47,7 @@ El renderer de mapas consume Processed Track detrás de un boundary de UI. El pr
 ### Decision lifecycle
 
 This ADR remains **Accepted** until explicitly superseded by a later ADR. Implementation tasks must not silently override it.
+
+### Clarifying note (2026-09-18, `MAP-001`)
+
+The provider is no longer undecided: `ADR-021` selects MapLibre Native + OpenFreeMap, exactly via the evaluation this ADR's own reopen trigger called for. This note does not supersede this ADR - the isolation/presentation-adapter decision above is unchanged and still governs; only the "provider TBD" state is now resolved, in `ADR-021` specifically, per §2's "minor clarification" provision rather than a full supersession.

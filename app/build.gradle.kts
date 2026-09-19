@@ -87,6 +87,7 @@ dependencies {
     implementation(libs.androidx.hilt.navigation.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
+    implementation(libs.maplibre.android.sdk)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 

@@ -2,6 +2,7 @@ package com.mototriptracker.app.feature.tripdetail
 
 import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.database.MotoTripDatabase
+import com.mototriptracker.app.core.database.entity.ProcessedTrackPointEntity
 import com.mototriptracker.app.core.database.entity.TripEntity
 import com.mototriptracker.app.core.database.entity.TripStatisticsEntity
 import com.mototriptracker.app.core.model.TripStatus
@@ -36,7 +37,12 @@ class TripDetailViewModelTest {
     fun setUp() {
         Dispatchers.setMain(Dispatchers.Unconfined)
         db = TestDatabaseFactory.createInMemory()
-        viewModel = TripDetailViewModel(tripDao = db.tripDao(), tripStatisticsDao = db.tripStatisticsDao(), clock = clock)
+        viewModel = TripDetailViewModel(
+            tripDao = db.tripDao(),
+            tripStatisticsDao = db.tripStatisticsDao(),
+            processedTrackPointDao = db.processedTrackPointDao(),
+            clock = clock
+        )
     }
 
     @After
@@ -97,6 +103,36 @@ class TripDetailViewModelTest {
         assertEquals(5_000.0, state.distanceMeters!!, 0.0001)
         assertEquals(1_800_000L, state.totalDurationMs)
         assertEquals(60_000L, state.manualPauseDurationMs)
+    }
+
+    @Test
+    fun loadedStateExposesTheSimplifiedRouteFromProcessedTrackPoints() = runBlocking {
+        db.tripDao().insert(trip("trip-1", createdAt = 5_000L))
+        // A straight line of collinear points - MAP-001's simplifyRoute
+        // should collapse it to just the two endpoints.
+        val points = (0..9).map { i ->
+            ProcessedTrackPointEntity(
+                tripId = "trip-1",
+                processingVersion = TripProcessingWorker.CURRENT_PROCESSING_VERSION,
+                orderIndex = i,
+                latitude = 10.0,
+                longitude = -20.0 + i * 0.0001,
+                sourceCaptureId = "capture-1",
+                sourceSequenceNumber = i.toLong(),
+                pointRole = null
+            )
+        }
+        db.processedTrackPointDao().insertAll(points)
+
+        viewModel.load("trip-1")
+
+        val state = withTimeout(5_000) {
+            viewModel.uiState.first { it is TripDetailUiState.Loaded && it.routePoints.isNotEmpty() }
+        } as TripDetailUiState.Loaded
+
+        assertEquals(2, state.routePoints.size)
+        assertEquals(10.0, state.routePoints.first().latitude, 0.0001)
+        assertEquals(10.0, state.routePoints.last().latitude, 0.0001)
     }
 
     @Test

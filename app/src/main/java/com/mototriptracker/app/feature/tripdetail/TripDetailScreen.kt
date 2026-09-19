@@ -38,6 +38,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationCompact
 import com.mototriptracker.app.feature.common.formatElevationM
+import com.mototriptracker.app.feature.map.TripRouteMap
 import com.mototriptracker.app.feature.common.formatSpeedKmh
 
 /** F0.9 §9: HIS-02. */
@@ -102,12 +103,14 @@ private fun TripDetailContent(
                 ) {
                     item { HeaderSection(uiState) }
                     item {
-                        // MAP-001 isn't built yet - an honest placeholder, matching Active Trip's own.
-                        Card(modifier = Modifier.fillMaxWidth().aspectRatio(1.5f)) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text("Map not available yet", style = MaterialTheme.typography.bodyMedium)
-                            }
-                        }
+                        // MAP-001/ADR-021: TripRouteMap itself renders the
+                        // honest "Map not available yet" placeholder when
+                        // routePoints has fewer than 2 points - no separate
+                        // branch needed here.
+                        TripRouteMap(
+                            points = uiState.routePoints,
+                            modifier = Modifier.fillMaxWidth().aspectRatio(1.5f)
+                        )
                     }
                     item { CoreMetricsSection(uiState) }
                     item { TimeBreakdownSection(uiState) }

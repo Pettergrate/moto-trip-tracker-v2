@@ -57,6 +57,7 @@ An ADR exists so a future implementation agent can answer five questions without
 | ADR-018 | Testing determinista + field validation antes de congelar detector | Accepted | `ADR-018-deterministic-tests-and-field-freeze.md` |
 | ADR-019 | Mapas son presentación; proveedor aislado y diferido | Accepted | `ADR-019-map-rendering-isolated-provider-deferred.md` |
 | ADR-020 | Solo una TripCapture ACTIVE a la vez | Accepted | `ADR-020-single-active-capture-invariant.md` |
+| ADR-021 | Proveedor de mapa: MapLibre Native + OpenFreeMap | Accepted | `ADR-021-map-provider-maplibre-openfreemap.md` |
 
 ---
 
@@ -86,7 +87,6 @@ The following remain open because Phase 0 has not produced enough evidence or be
 
 - final detector thresholds and confidence/scoring model;
 - final location sampling/min-distance/batching production profile;
-- map provider;
 - exact elevation smoothing/ascent algorithm;
 - final diagnostic retention limits after measurement;
 - cloud sync/backend architecture if ever introduced;

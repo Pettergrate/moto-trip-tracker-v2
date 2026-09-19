@@ -1,5 +1,7 @@
 package com.mototriptracker.app.feature.tripdetail
 
+import com.mototriptracker.app.domain.GeoPoint
+
 /** F0.9 §9.1: HIS-02's own state - loading/not-found are real cases (a deep link or a deleted-elsewhere Trip), not just placeholders. */
 sealed interface TripDetailUiState {
     data object Loading : TripDetailUiState
@@ -22,6 +24,8 @@ sealed interface TripDetailUiState {
         val minElevationM: Double?,
         val maxElevationM: Double?,
         val ascentM: Double?,
-        val descentM: Double?
+        val descentM: Double?,
+        /** MAP-001: already simplified (`domain.simplifyRoute`); empty for a Trip whose processing hasn't produced points yet, which `TripRouteMap` itself renders as the honest "Map not available yet" placeholder. */
+        val routePoints: List<GeoPoint> = emptyList()
     ) : TripDetailUiState
 }
