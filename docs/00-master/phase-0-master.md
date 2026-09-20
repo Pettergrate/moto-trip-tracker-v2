@@ -3,8 +3,8 @@
 
 **Project type:** Greenfield Android application  
 **Status:** Phase 0 documentation closed (GO, F0.17); Phase 1 implementation underway — **Wave W0 and Wave W1 both complete** (`TRK-001`, `TRK-002`, `TRK-003`, `TRK-004`, `PRC-001`, `PRC-002`, `UI-001`, `HIS-001`, `PRC-003`, `NOT-001` (on-device verification pending), `REC-001`, `MAP-001` done); Wave W2 started early (`DET-001`, `DET-002`, `DET-003`, `AUTO-001`, `DET-004`, `DET-005`, `DET-006`, `DET-007` done)  
-**Version:** 0.38
-**Last updated:** 2026-09-18
+**Version:** 0.39
+**Last updated:** 2026-09-19
 
 ---
 
@@ -86,6 +86,7 @@ It will establish:
 | F0.13 | Observability & Diagnostics | Closed observability v0.1 |
 | F0.14 | ADR Baseline | Closed ADR v0.1 |
 | F0.15 | V2 Roadmap | Closed roadmap v0.1 |
+| F0.16 | V1 Reference (Feature Parity & Data Migration) | **Reinstated 2026-09-19, scoped v0.1**. See `docs/00-master/f0-16-v1-reference.md` |
 | F0.17 | Phase 1 Readiness Review | Closed — **GO, scoped to Wave W0**. See `docs/00-master/phase-1-readiness-review.md` |
 
 ---
@@ -134,6 +135,8 @@ By project-owner decision on 2026-09-15, F0.16 is removed. It is not a deliverab
 V2 is defined from its own requirements, research and accepted architecture decisions.
 
 > Do not inspect or replicate V1 as part of V2 planning or implementation. Any future change to this scope requires an explicit project-owner decision.
+
+**Update, 2026-09-19 (project-owner decision):** F0.16 is reinstated, narrowly. See `docs/00-master/f0-16-v1-reference.md`. Scope is limited to (a) a V1-vs-V2 feature parity checklist and (b) V1-to-V2 data migration planning — both executed as backlog tasks `REF-001`/`REF-002`. This does **not** reopen V1's architecture, code, or "lessons learned" for inspection (that angle was explicitly declined), and does not change `DEC-001`/`ADR-001`'s core greenfield decision: V2's own architecture is not being revisited against V1.
 
 ---
 

@@ -491,3 +491,5 @@ Only after that foundation is green should the manual tracking vertical slice be
 Next workstream: **F0.17 — Phase 1 Readiness Review**.
 
 F0.16 was removed by project-owner decision on 2026-09-15. V1 review is not a prerequisite for Phase 1. V2 is evaluated against its own documentation; original workstream IDs are preserved.
+
+**Update, 2026-09-19:** F0.16 reinstated, narrowly scoped to a V1-vs-V2 feature parity checklist and V1-to-V2 data migration planning only — see `docs/00-master/f0-16-v1-reference.md`. Still not a prerequisite for anything already closed (F0.17's GO stands); executed as backlog tasks `REF-001`/`REF-002`.

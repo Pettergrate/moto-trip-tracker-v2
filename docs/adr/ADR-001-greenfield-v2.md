@@ -48,3 +48,7 @@ Moto Trip Tracker V2 se construye como proyecto nuevo desde sus propios requisit
 ### Decision lifecycle
 
 This ADR remains **Accepted** until explicitly superseded by a later ADR. Implementation tasks must not silently override it.
+
+### Clarifying note, 2026-09-19
+
+Per this ADR's own reopen trigger ("el propietario solicita explícitamente reconsiderar el alcance respecto de V1"), the project owner narrowly reopened the "no se inspecciona ni reutiliza V1" clause — **not** the core decision. Scope: F0.16 is reinstated for exactly two purposes, a V1-vs-V2 feature parity checklist and V1-to-V2 data migration planning (`docs/00-master/f0-16-v1-reference.md`). V1's architecture and code are still not inspected for adoption into V2, and V2 remains greenfield: this note authorizes reading V1's product surface and data model for comparison/planning, not reusing its implementation.

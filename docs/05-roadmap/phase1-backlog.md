@@ -631,6 +631,30 @@ Verified with `./gradlew assembleDebug testDebugUnitTest`: 71/71 tests pass (up 
 
 ---
 
+## V1 Reference — F0.16 (reinstated 2026-09-19)
+
+Narrowly-scoped follow-on to F0.16's reinstatement (`docs/00-master/f0-16-v1-reference.md`): feature parity and data migration planning only, not a V1 architecture review. Not gating any wave; schedule opportunistically alongside W2/W3.
+
+### REF-001 — V1 feature-parity checklist
+
+**Objective:** produce the parity table described in F0.16 §3 — every V1 user-facing feature classified as Covered/Planned/Gap/Deliberately excluded against V2's actual backlog state.
+
+**Constraints:** `docs/00-master/f0-16-v1-reference.md` §3, `ADR-001` clarifying note (2026-09-19). Read-only against V1 (`C:\proyectos\moto-trip-tracker`) — no V1 code changes, no V1 install touched.  
+**Depends on:** none technically; most useful once W2's automatic-detection slice is closer to done, since several V1 features to compare against are detection-adjacent.
+
+**Acceptance:** a checklist artifact (doc) covering all of V1's Etapa 0-8 features from its `README.md`/`docs/roadmap.md`; every "Gap" row either gets a new backlog task ID or an explicit owner decision to exclude it, recorded in this file or `phase-0-master.md`.
+
+### REF-002 — V1 data migration design
+
+**Objective:** produce the mapping/design document described in F0.16 §4 — V1 `Trip`/`TrackPoint` fields mapped to V2's actual tables, the `endReason`→V2 end-source mapping table, and an explicit list of what cannot be migrated given V1's flat schema (no raw stream, no rejected points, no point-level quality assessment, no lineage/edit history).
+
+**Constraints:** `docs/00-master/f0-16-v1-reference.md` §4, `ADR-005`/`ADR-006`/`ADR-014` (V2's raw/processed/versioned data model, which V1 has no equivalent for). Design/planning only — no import code, no execution against the real V1 pilot database, unless a later explicit owner decision asks for it.  
+**Depends on:** none; independent of `REF-001`.
+
+**Acceptance:** a design doc with the field-by-field mapping, the enum mapping table, an explicit recommendation on how an imported trip is marked/versioned relative to `processingVersion`, and an explicit unrecoverable-data list. No silent defaults on the "mandatory vs optional import" product question — surfaced for an owner decision instead.
+
+---
+
 ## W3 — Editing & Everyday Use
 
 ### EDT-001 — Merge Trips
