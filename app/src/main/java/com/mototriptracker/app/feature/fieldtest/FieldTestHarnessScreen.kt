@@ -2,12 +2,12 @@ package com.mototriptracker.app.feature.fieldtest
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
@@ -191,17 +191,25 @@ private fun ActiveContent(
         item {
             Text("Ground-truth markers (record while stopped)", style = MaterialTheme.typography.titleSmall)
         }
-        item {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(LIVE_GROUND_TRUTH_MARKER_TYPES) { type ->
-                    OutlinedButton(onClick = { onRecordMarker(type) }, modifier = Modifier.fillMaxWidth()) {
+        // A plain chunked Column/Row grid, not LazyVerticalGrid: the marker
+        // vocabulary is small and fixed (7 entries), and a lazy grid nested
+        // inside this screen's own LazyColumn crashes at measure time
+        // ("scrollable component measured with infinity height constraints")
+        // - confirmed via a real on-device crash (logcat FATAL EXCEPTION)
+        // the first time this screen actually rendered, not caught by the
+        // ViewModel-only unit tests since they never exercise Compose layout.
+        items(LIVE_GROUND_TRUTH_MARKER_TYPES.chunked(2)) { rowTypes ->
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                rowTypes.forEach { type ->
+                    OutlinedButton(
+                        onClick = { onRecordMarker(type) },
+                        modifier = Modifier.weight(1f)
+                    ) {
                         Text("${type.label()} (${state.markerCounts[type] ?: 0})")
                     }
+                }
+                if (rowTypes.size == 1) {
+                    Spacer(modifier = Modifier.weight(1f))
                 }
             }
         }
