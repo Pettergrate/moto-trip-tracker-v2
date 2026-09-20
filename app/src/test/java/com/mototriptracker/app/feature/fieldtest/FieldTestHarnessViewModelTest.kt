@@ -1,5 +1,7 @@
 package com.mototriptracker.app.feature.fieldtest
 
+import android.app.Application
+import androidx.test.core.app.ApplicationProvider
 import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.common.FakeIdGenerator
 import com.mototriptracker.app.core.database.MotoTripDatabase
@@ -20,6 +22,7 @@ import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.tracking.location.InMemoryLocationProfileSelector
+import com.mototriptracker.app.tracking.service.TrackingForegroundService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -36,6 +39,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -88,6 +92,7 @@ class FieldTestHarnessViewModelTest {
     }
 
     private fun newViewModel() = FieldTestHarnessViewModel(
+        context = ApplicationProvider.getApplicationContext(),
         deviceInfoProvider = deviceInfoProvider,
         capabilityInputsProvider = capabilityInputsProvider,
         exporter = FieldTestSessionExporter(writer),
@@ -325,6 +330,39 @@ class FieldTestHarnessViewModelTest {
             "production tracking must never be left on an experimental profile after the field test ends",
             ExperimentLocationProfiles.DEFAULT,
             locationProfileSelector.current()
+        )
+    }
+
+    @Test
+    fun startSessionAlsoStartsTheRealTrackingServiceSoARiderOnlyNeedsOneButton() = runBlocking {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+
+        viewModel.onProfileIdChanged("S1-A")
+        viewModel.startSession()
+
+        val startedIntent = shadowOf(application).nextStartedService
+        assertEquals(
+            "the harness must start the real trip capture itself, not just its own diagnostic session",
+            TrackingForegroundService.ACTION_START,
+            startedIntent?.action
+        )
+    }
+
+    @Test
+    fun stopAndExportSessionAlsoFinishesTheRealTrackingService() = runBlocking {
+        val application = ApplicationProvider.getApplicationContext<Application>()
+        viewModel.onProfileIdChanged("S1-A")
+        viewModel.startSession()
+        withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Active } }
+        shadowOf(application).nextStartedService // discard the ACTION_START intent from startSession() above
+
+        viewModel.stopAndExportSession()
+
+        val finishedIntent = shadowOf(application).nextStartedService
+        assertEquals(
+            "stopping the field-test session must also stop the real ride recording, not leave it running",
+            TrackingForegroundService.ACTION_FINISH,
+            finishedIntent?.action
         )
     }
 }

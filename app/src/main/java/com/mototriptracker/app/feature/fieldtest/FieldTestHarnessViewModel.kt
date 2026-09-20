@@ -1,5 +1,6 @@
 package com.mototriptracker.app.feature.fieldtest
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mototriptracker.app.core.common.Clock
@@ -22,7 +23,9 @@ import com.mototriptracker.app.experiment.PersistedHarnessState
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.tracking.location.LocationProfileSelector
+import com.mototriptracker.app.tracking.service.TrackingForegroundService
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
@@ -59,9 +62,19 @@ import javax.inject.Inject
  * [stopAndExportSession] always resets it back, and [init]'s resumability
  * path re-arms it too, since the in-memory selector itself doesn't survive
  * the same process death this ViewModel's own state does.
+ *
+ * [startSession]/[stopAndExportSession] also start/finish a real Trip
+ * capture, the same way Home's own START TRIP button does
+ * (`TrackingForegroundService.createStartIntent`/`createFinishIntent`) -
+ * a field-test session's whole reason to exist is riding a real trip, so
+ * this used to be two separate steps a tester had to remember (harness
+ * "Start session", then Home "START TRIP") until a real ride was recorded
+ * without one of them. One button now does both; a rider fumbling with two
+ * separate screens before pulling away was never reasonable to ask for.
  */
 @HiltViewModel
 class FieldTestHarnessViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val deviceInfoProvider: FieldTestDeviceInfoProvider,
     private val capabilityInputsProvider: CapabilityInputsProvider,
     private val exporter: FieldTestSessionExporter,
@@ -147,7 +160,11 @@ class FieldTestHarnessViewModel @Inject constructor(
             markerLog.clear()
             activeSession = session
             persistActiveSession()
+            // Order matters: the profile must be armed before the service
+            // actually starts collecting locations, or the ride would begin
+            // under whatever was previously selected (the default).
             locationProfileSelector.select(ExperimentLocationProfiles.findById(session.experimentProfileId))
+            context.startForegroundService(TrackingForegroundService.createStartIntent(context))
             isStarting = false
             startTicker()
             refreshActiveState()
@@ -180,6 +197,7 @@ class FieldTestHarnessViewModel @Inject constructor(
     fun stopAndExportSession() {
         val session = activeSession ?: return
         tickerJob?.cancel()
+        context.startForegroundService(TrackingForegroundService.createFinishIntent(context))
 
         viewModelScope.launch {
             val metadata = FieldTestSessionMetadata(
