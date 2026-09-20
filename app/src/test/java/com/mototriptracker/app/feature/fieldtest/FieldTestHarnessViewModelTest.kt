@@ -7,8 +7,12 @@ import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.core.model.CapabilityMode
 import com.mototriptracker.app.experiment.FakeFieldTestDatasetWriter
 import com.mototriptracker.app.experiment.FakeFieldTestDeviceInfoProvider
+import com.mototriptracker.app.experiment.FakeFieldTestHarnessStateStore
+import com.mototriptracker.app.experiment.FieldTestDeviceSnapshot
 import com.mototriptracker.app.experiment.FieldTestSessionExporter
+import com.mototriptracker.app.experiment.GroundTruthMarker
 import com.mototriptracker.app.experiment.GroundTruthMarkerType
+import com.mototriptracker.app.experiment.PersistedHarnessState
 import com.mototriptracker.app.testing.FakeCapabilityInputsProvider
 import com.mototriptracker.app.testing.FakeLocationGateway
 import com.mototriptracker.app.testing.FakeProcessingScheduler
@@ -39,6 +43,7 @@ class FieldTestHarnessViewModelTest {
     private lateinit var writer: FakeFieldTestDatasetWriter
     private lateinit var capabilityInputsProvider: FakeCapabilityInputsProvider
     private lateinit var deviceInfoProvider: FakeFieldTestDeviceInfoProvider
+    private lateinit var stateStore: FakeFieldTestHarnessStateStore
     private lateinit var coordinator: TrackingSessionCoordinator
     private lateinit var viewModel: FieldTestHarnessViewModel
     private val clock = FakeClock(wallMillis = 100_000L, elapsedNanos = 100_000L)
@@ -60,6 +65,7 @@ class FieldTestHarnessViewModelTest {
         writer = FakeFieldTestDatasetWriter()
         capabilityInputsProvider = FakeCapabilityInputsProvider(fullyGrantedInputs)
         deviceInfoProvider = FakeFieldTestDeviceInfoProvider()
+        stateStore = FakeFieldTestHarnessStateStore()
         coordinator = TrackingSessionCoordinator(
             database = db,
             tripCaptureDao = db.tripCaptureDao(),
@@ -74,16 +80,19 @@ class FieldTestHarnessViewModelTest {
             clock = clock,
             idGenerator = FakeIdGenerator(prefix = "capture")
         )
-        viewModel = FieldTestHarnessViewModel(
-            deviceInfoProvider = deviceInfoProvider,
-            capabilityInputsProvider = capabilityInputsProvider,
-            exporter = FieldTestSessionExporter(writer),
-            tripCaptureDao = db.tripCaptureDao(),
-            trackingSessionCoordinator = coordinator,
-            clock = clock,
-            idGenerator = FakeIdGenerator(prefix = "session")
-        )
+        viewModel = newViewModel()
     }
+
+    private fun newViewModel() = FieldTestHarnessViewModel(
+        deviceInfoProvider = deviceInfoProvider,
+        capabilityInputsProvider = capabilityInputsProvider,
+        exporter = FieldTestSessionExporter(writer),
+        stateStore = stateStore,
+        tripCaptureDao = db.tripCaptureDao(),
+        trackingSessionCoordinator = coordinator,
+        clock = clock,
+        idGenerator = FakeIdGenerator(prefix = "session")
+    )
 
     @After
     fun tearDown() {
@@ -185,5 +194,83 @@ class FieldTestHarnessViewModelTest {
 
         val annotationsJson = requireNotNull(writer.readFile(sessionId, "annotations.json")) { "annotations.json should have been written" }
         assertEquals(1, JSONObject(annotationsJson).getJSONArray("markers").length())
+    }
+
+    @Test
+    fun startSessionPersistsStateSoAProcessKillWouldNotLoseIt() = runBlocking {
+        viewModel.onProfileIdChanged("S1-A")
+        viewModel.startSession()
+        withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Active } }
+
+        val persisted = requireNotNull(stateStore.load()) { "starting a session should persist it immediately" }
+        assertEquals("S1-A", persisted.experimentProfileId)
+        assertTrue(persisted.markers.isEmpty())
+    }
+
+    @Test
+    fun recordMarkerUpdatesThePersistedStateImmediately() = runBlocking {
+        viewModel.onProfileIdChanged("S1-A")
+        viewModel.startSession()
+        withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Active } }
+
+        viewModel.recordMarker(GroundTruthMarkerType.ARRIVED)
+
+        val persisted = requireNotNull(stateStore.load())
+        assertEquals(1, persisted.markers.size)
+        assertEquals(GroundTruthMarkerType.ARRIVED, persisted.markers.first().type)
+    }
+
+    @Test
+    fun stopAndExportSessionClearsThePersistedState() = runBlocking {
+        viewModel.onProfileIdChanged("S1-A")
+        viewModel.startSession()
+        withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Active } }
+
+        viewModel.stopAndExportSession()
+        withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Configuring && it.lastExport != null } }
+
+        assertNull("a genuinely exported session shouldn't leave resumable state behind", stateStore.load())
+    }
+
+    @Test
+    fun aNewViewModelRehydratesAnInProgressSessionAfterASimulatedProcessDeath() = runBlocking {
+        stateStore.seed(
+            PersistedHarnessState(
+                sessionId = "session-before-kill",
+                experimentProfileId = "S1-A",
+                startedAtWallMs = 50_000L,
+                startedAtElapsedNanos = 50_000L,
+                phonePlacement = "PLACEMENT-MOUNTED",
+                routeType = "urban",
+                weatherNotes = "",
+                notes = "",
+                deviceSnapshot = FieldTestDeviceSnapshot(
+                    appVersion = "test-version",
+                    phoneManufacturer = "TestManufacturer",
+                    phoneModel = "TestModel",
+                    androidVersion = "16",
+                    playServicesVersion = null,
+                    batterySaverState = "disabled",
+                    locationSettingsState = "enabled",
+                    notificationPermissionState = "enabled",
+                    screenStateAtStart = "on"
+                ),
+                capabilityInputsAtStart = fullyGrantedInputs,
+                markers = listOf(GroundTruthMarker(GroundTruthMarkerType.READY_TO_START, 51_000L, 51_000L))
+            )
+        )
+
+        // A fresh ViewModel instance, as Hilt would create after the process
+        // restarts - this is deliberately NOT `viewModel` from setUp().
+        val recreatedViewModel = newViewModel()
+
+        val state = withTimeout(5_000) {
+            recreatedViewModel.uiState.first { it is FieldTestHarnessUiState.Active }
+        } as FieldTestHarnessUiState.Active
+
+        assertEquals("session-before-kill", state.sessionId)
+        assertEquals("S1-A", state.experimentProfileId)
+        assertEquals(1, state.markerCounts[GroundTruthMarkerType.READY_TO_START])
+        recreatedViewModel.onCleared()
     }
 }

@@ -11,11 +11,13 @@ import com.mototriptracker.app.core.model.DetectorVersion
 import com.mototriptracker.app.domain.capability.CapabilityResolver
 import com.mototriptracker.app.experiment.FieldTestDeviceInfoProvider
 import com.mototriptracker.app.experiment.FieldTestDeviceSnapshot
+import com.mototriptracker.app.experiment.FieldTestHarnessStateStore
 import com.mototriptracker.app.experiment.FieldTestSessionExporter
 import com.mototriptracker.app.experiment.FieldTestSessionMetadata
 import com.mototriptracker.app.experiment.GroundTruthMarker
 import com.mototriptracker.app.experiment.GroundTruthMarkerLog
 import com.mototriptracker.app.experiment.GroundTruthMarkerType
+import com.mototriptracker.app.experiment.PersistedHarnessState
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -39,12 +41,19 @@ import javax.inject.Inject
  * internal candidate-start/stop state machine, which is private/pure by
  * design and already captured to `DiagnosticEvent` for post-hoc analysis
  * (F0.13); duplicating it here live would be new scope this task doesn't need.
+ *
+ * A real ride can run for a long time with the screen off, long enough for
+ * Android to kill this process in the background - [stateStore] persists
+ * the in-progress session/markers to a small file so [init] can rebuild
+ * `Active` state after a real process death, instead of silently losing an
+ * entire field-test session before it was ever exported.
  */
 @HiltViewModel
 class FieldTestHarnessViewModel @Inject constructor(
     private val deviceInfoProvider: FieldTestDeviceInfoProvider,
     private val capabilityInputsProvider: CapabilityInputsProvider,
     private val exporter: FieldTestSessionExporter,
+    private val stateStore: FieldTestHarnessStateStore,
     private val tripCaptureDao: TripCaptureDao,
     private val trackingSessionCoordinator: TrackingSessionCoordinator,
     private val clock: Clock,
@@ -71,6 +80,26 @@ class FieldTestHarnessViewModel @Inject constructor(
         val deviceSnapshot: FieldTestDeviceSnapshot,
         val capabilityInputsAtStart: CapabilityInputs
     )
+
+    init {
+        stateStore.load()?.let { persisted ->
+            activeSession = ActiveSession(
+                sessionId = persisted.sessionId,
+                experimentProfileId = persisted.experimentProfileId,
+                startedAtWallMs = persisted.startedAtWallMs,
+                startedAtElapsedNanos = persisted.startedAtElapsedNanos,
+                phonePlacement = persisted.phonePlacement,
+                routeType = persisted.routeType,
+                weatherNotes = persisted.weatherNotes,
+                notes = persisted.notes,
+                deviceSnapshot = persisted.deviceSnapshot,
+                capabilityInputsAtStart = persisted.capabilityInputsAtStart
+            )
+            persisted.markers.forEach(markerLog::record)
+            startTicker()
+            viewModelScope.launch { refreshActiveState() }
+        }
+    }
 
     fun onProfileIdChanged(value: String) = updateConfiguring { it.copy(experimentProfileId = value) }
     fun onPhonePlacementChanged(value: String) = updateConfiguring { it.copy(phonePlacement = value) }
@@ -103,6 +132,7 @@ class FieldTestHarnessViewModel @Inject constructor(
             )
             markerLog.clear()
             activeSession = session
+            persistActiveSession()
             isStarting = false
             startTicker()
             refreshActiveState()
@@ -113,6 +143,7 @@ class FieldTestHarnessViewModel @Inject constructor(
     fun recordMarker(type: GroundTruthMarkerType) {
         if (activeSession == null) return
         markerLog.record(GroundTruthMarker(type, clock.wallClockMillis(), clock.elapsedRealtimeNanos()))
+        persistActiveSession()
         viewModelScope.launch { refreshActiveState() }
     }
 
@@ -147,12 +178,32 @@ class FieldTestHarnessViewModel @Inject constructor(
             )
             val markers = markerLog.markers
             exporter.export(metadata, markers)
+            stateStore.clear()
 
             activeSession = null
             _uiState.value = FieldTestHarnessUiState.Configuring(
                 lastExport = ExportSummary(sessionId = session.sessionId, markerCount = markers.size)
             )
         }
+    }
+
+    private fun persistActiveSession() {
+        val session = activeSession ?: return
+        stateStore.save(
+            PersistedHarnessState(
+                sessionId = session.sessionId,
+                experimentProfileId = session.experimentProfileId,
+                startedAtWallMs = session.startedAtWallMs,
+                startedAtElapsedNanos = session.startedAtElapsedNanos,
+                phonePlacement = session.phonePlacement,
+                routeType = session.routeType,
+                weatherNotes = session.weatherNotes,
+                notes = session.notes,
+                deviceSnapshot = session.deviceSnapshot,
+                capabilityInputsAtStart = session.capabilityInputsAtStart,
+                markers = markerLog.markers
+            )
+        )
     }
 
     private fun startTicker() {
@@ -183,10 +234,16 @@ class FieldTestHarnessViewModel @Inject constructor(
         // suspend calls above were in flight - don't resurrect Active state after a Stop.
         if (activeSession !== session) return
 
+        // Only reachable without a real reboot (elapsedRealtimeNanos is monotonic
+        // within a boot) - a genuine reboot mid-ride is REC-001's territory, not
+        // this internal tool's; this just keeps the ticker from showing a
+        // nonsensical negative duration in that edge case.
+        val elapsedMs = ((clock.elapsedRealtimeNanos() - session.startedAtElapsedNanos) / 1_000_000).coerceAtLeast(0L)
+
         _uiState.value = FieldTestHarnessUiState.Active(
             sessionId = session.sessionId,
             experimentProfileId = session.experimentProfileId,
-            elapsedMs = (clock.elapsedRealtimeNanos() - session.startedAtElapsedNanos) / 1_000_000,
+            elapsedMs = elapsedMs,
             capabilityMode = capabilityMode,
             activeCapture = activeCaptureInfo,
             markerCounts = markerLog.markers.groupingBy { it.type }.eachCount()
