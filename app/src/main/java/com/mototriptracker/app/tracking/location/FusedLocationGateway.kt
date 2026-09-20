@@ -21,29 +21,39 @@ import javax.inject.Inject
  * TRK-002: the only class that touches `com.google.android.gms.location.*`
  * (ADR-013's spirit — [LocationGateway] itself stays framework-free).
  *
- * F0.5 §3.1/§8.1's TRACKING profile: PRIORITY_HIGH_ACCURACY, no
- * `setMaxUpdateDelayMillis` (GPS-012 — no aggressive batching as baseline),
- * `minUpdateDistance=0` (F0.5 §9 — a nonzero baseline risks losing curves/
- * slow movement, and no field-tested value exists yet). The 2s interval is
- * F0.5 §8.3's own hypothesis range (1-2s), not a closed value — like TRK-001's
- * `DetectorVersion(0)`/`LocationProfileVersion(0)`, this is an explicit,
- * documented placeholder for the one profile this task needs (manual-start
- * TRACKING only); F0.6 field tests close the real value, and DET/AUTO tasks
- * add the other F0.5 §8.1 profiles (CANDIDATE_START burst, relaxed IDLE,
- * etc.) when they exist.
+ * F0.5 §3.1/§8.1's TRACKING profile: PRIORITY_HIGH_ACCURACY always; interval/
+ * min-distance/batching come from [profileSelector] (EXP-003), defaulting to
+ * `ExperimentLocationProfiles.DEFAULT` (F0.5 §8.3's own 1-2s hypothesis
+ * range's midpoint, 2s, `minUpdateDistance=0`, no batching — F0.5 §9's own
+ * reasoning: a nonzero baseline risks losing curves/slow movement, and no
+ * field-tested value existed yet) whenever no field-test session has
+ * selected an experiment profile. [LocationSample.requestProfileId] is
+ * stamped from whatever profile was actually resolved for this specific
+ * capture, not a fixed constant — EXP-003's whole point is comparing real
+ * campaigns, so a Raw Track point's own profile provenance has to be honest.
  */
 class FusedLocationGateway @Inject constructor(
     private val fusedClient: FusedLocationProviderClient,
-    private val clock: Clock
+    private val clock: Clock,
+    private val profileSelector: LocationProfileSelector
 ) : LocationGateway {
 
     @SuppressLint("MissingPermission")
     override fun locationUpdates(): Flow<LocationSample> = callbackFlow {
+        // Resolved once per capture, not per-sample: F0.6's campaigns fix a
+        // profile for a whole ride, never change it mid-ride.
+        val profile = profileSelector.current()
+        val request = LocationRequest.Builder(profile.intervalMillis)
+            .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
+            .setMinUpdateDistanceMeters(profile.minUpdateDistanceMeters)
+            .apply { if (profile.maxUpdateDelayMillis > 0) setMaxUpdateDelayMillis(profile.maxUpdateDelayMillis) }
+            .build()
+
         val callback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val receivedAtElapsedRealtimeNanos = clock.elapsedRealtimeNanos()
                 for (location in result.locations) {
-                    val sample = location.toSampleOrNull(receivedAtElapsedRealtimeNanos)
+                    val sample = location.toSampleOrNull(receivedAtElapsedRealtimeNanos, profile.id)
                     if (sample != null) {
                         trySend(sample)
                     } else {
@@ -57,11 +67,11 @@ class FusedLocationGateway @Inject constructor(
             }
         }
 
-        fusedClient.requestLocationUpdates(TRACKING_REQUEST, callback, Looper.getMainLooper())
+        fusedClient.requestLocationUpdates(request, callback, Looper.getMainLooper())
         awaitClose { fusedClient.removeLocationUpdates(callback) }
     }
 
-    private fun Location.toSampleOrNull(receivedAtElapsedRealtimeNanos: Long): LocationSample? {
+    private fun Location.toSampleOrNull(receivedAtElapsedRealtimeNanos: Long, requestProfileId: String): LocationSample? {
         if (!hasAccuracy()) return null
         return LocationSample(
             wallTimeEpochMs = time,
@@ -70,7 +80,7 @@ class FusedLocationGateway @Inject constructor(
             latitude = latitude,
             longitude = longitude,
             horizontalAccuracyM = accuracy,
-            requestProfileId = TRACKING_PROFILE_ID,
+            requestProfileId = requestProfileId,
             altitudeEllipsoidM = if (hasAltitude()) altitude else null,
             altitudeMslM = if (Build.VERSION.SDK_INT >= 34 && hasMslAltitude()) mslAltitudeMeters else null,
             verticalAccuracyM = if (hasVerticalAccuracy()) verticalAccuracyMeters else null,
@@ -85,13 +95,5 @@ class FusedLocationGateway @Inject constructor(
 
     companion object {
         private const val TAG = "FusedLocationGateway"
-        const val TRACKING_PROFILE_ID = "tracking-manual-v0"
-        private const val TRACKING_INTERVAL_MS = 2000L
-
-        private val TRACKING_REQUEST: LocationRequest =
-            LocationRequest.Builder(TRACKING_INTERVAL_MS)
-                .setPriority(Priority.PRIORITY_HIGH_ACCURACY)
-                .setMinUpdateDistanceMeters(0f)
-                .build()
     }
 }

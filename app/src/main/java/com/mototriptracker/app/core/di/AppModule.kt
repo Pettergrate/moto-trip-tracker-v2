@@ -20,7 +20,9 @@ import com.mototriptracker.app.experiment.FieldTestHarnessStateStore
 import com.mototriptracker.app.tracking.capability.AndroidCapabilityInputsProvider
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.tracking.location.FusedLocationGateway
+import com.mototriptracker.app.tracking.location.InMemoryLocationProfileSelector
 import com.mototriptracker.app.tracking.location.LocationGateway
+import com.mototriptracker.app.tracking.location.LocationProfileSelector
 import com.mototriptracker.app.tracking.processing.ProcessingScheduler
 import com.mototriptracker.app.tracking.processing.WorkManagerProcessingScheduler
 import androidx.work.WorkManager
@@ -30,6 +32,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
 
 /**
  * FND-002 proved the Hilt graph wires up with no bindings. FND-004 added
@@ -67,6 +70,17 @@ interface AppModule {
 
     @Binds
     fun bindFieldTestHarnessStateStore(impl: AndroidFieldTestHarnessStateStore): FieldTestHarnessStateStore
+
+    /**
+     * `@Singleton` is required here despite [InMemoryLocationProfileSelector]
+     * already carrying it on its own class - a `@Binds` interface binding
+     * needs the scope repeated, or `FusedLocationGateway` and
+     * `FieldTestHarnessViewModel` would each get their own separate instance
+     * and a harness-selected profile would never reach real tracking.
+     */
+    @Binds
+    @Singleton
+    fun bindLocationProfileSelector(impl: InMemoryLocationProfileSelector): LocationProfileSelector
 
     companion object {
         @Provides

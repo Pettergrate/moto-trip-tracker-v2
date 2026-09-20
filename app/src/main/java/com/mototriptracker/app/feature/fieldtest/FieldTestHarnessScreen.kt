@@ -104,7 +104,7 @@ private fun ConfiguringContent(
             OutlinedTextField(
                 value = state.experimentProfileId,
                 onValueChange = onProfileIdChanged,
-                label = { Text("Experiment profile ID (F0.6 §10, e.g. S1-interval-1s)") },
+                label = { Text("Experiment profile ID (tracking-manual-v0, S1-A, S1-B or S1-C)") },
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -169,6 +169,14 @@ private fun ActiveContent(
                     Text("Session ${state.sessionId}", style = MaterialTheme.typography.titleSmall)
                     Text("Profile: ${state.experimentProfileId}")
                     Text("Elapsed: ${formatDurationClock(state.elapsedMs)}")
+                    val profile = state.resolvedLocationProfile
+                    Text("GPS: ${profile.id} - ${profile.intervalMillis}ms interval, ${profile.minUpdateDistanceMeters}m min-distance")
+                    if (profile.id != state.experimentProfileId) {
+                        Text(
+                            "\"${state.experimentProfileId}\" isn't a known profile - using the default GPS config instead",
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
         }

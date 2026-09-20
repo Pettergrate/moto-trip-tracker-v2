@@ -9,6 +9,7 @@ import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.DetectorVersion
 import com.mototriptracker.app.domain.capability.CapabilityResolver
+import com.mototriptracker.app.experiment.ExperimentLocationProfiles
 import com.mototriptracker.app.experiment.FieldTestDeviceInfoProvider
 import com.mototriptracker.app.experiment.FieldTestDeviceSnapshot
 import com.mototriptracker.app.experiment.FieldTestHarnessStateStore
@@ -20,8 +21,10 @@ import com.mototriptracker.app.experiment.GroundTruthMarkerType
 import com.mototriptracker.app.experiment.PersistedHarnessState
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
+import com.mototriptracker.app.tracking.location.LocationProfileSelector
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -47,6 +50,15 @@ import javax.inject.Inject
  * the in-progress session/markers to a small file so [init] can rebuild
  * `Active` state after a real process death, instead of silently losing an
  * entire field-test session before it was ever exported.
+ *
+ * EXP-003: [startSession] also arms [locationProfileSelector] with the real
+ * `ExperimentLocationProfiles` entry matching the typed `experimentProfileId`
+ * (or resets to the default if it doesn't match a known one), so
+ * `FusedLocationGateway`'s actual GPS request reflects what the tester
+ * picked - before this, the field was a label with nothing behind it.
+ * [stopAndExportSession] always resets it back, and [init]'s resumability
+ * path re-arms it too, since the in-memory selector itself doesn't survive
+ * the same process death this ViewModel's own state does.
  */
 @HiltViewModel
 class FieldTestHarnessViewModel @Inject constructor(
@@ -54,6 +66,7 @@ class FieldTestHarnessViewModel @Inject constructor(
     private val capabilityInputsProvider: CapabilityInputsProvider,
     private val exporter: FieldTestSessionExporter,
     private val stateStore: FieldTestHarnessStateStore,
+    private val locationProfileSelector: LocationProfileSelector,
     private val tripCaptureDao: TripCaptureDao,
     private val trackingSessionCoordinator: TrackingSessionCoordinator,
     private val clock: Clock,
@@ -96,6 +109,7 @@ class FieldTestHarnessViewModel @Inject constructor(
                 capabilityInputsAtStart = persisted.capabilityInputsAtStart
             )
             persisted.markers.forEach(markerLog::record)
+            locationProfileSelector.select(ExperimentLocationProfiles.findById(persisted.experimentProfileId))
             startTicker()
             viewModelScope.launch { refreshActiveState() }
         }
@@ -133,18 +147,34 @@ class FieldTestHarnessViewModel @Inject constructor(
             markerLog.clear()
             activeSession = session
             persistActiveSession()
+            locationProfileSelector.select(ExperimentLocationProfiles.findById(session.experimentProfileId))
             isStarting = false
             startTicker()
             refreshActiveState()
         }
     }
 
-    /** F0.6 §7: recorded while stopped - see `LIVE_GROUND_TRUTH_MARKER_TYPES` for the excluded GT_START/GT_END. */
+    /**
+     * F0.6 §7: recorded while stopped - see `LIVE_GROUND_TRUTH_MARKER_TYPES`
+     * for the excluded GT_START/GT_END. Deliberately synchronous, no DB
+     * re-query: a marker tap only ever changes [markerLog], never the
+     * capability mode or active-capture figures the ticker already keeps
+     * fresh - re-querying Room on every tap would be both unnecessary and,
+     * fired-and-forgotten from a UI callback, race-prone (a real one showed
+     * up as a flaky "uncaught exception" in an unrelated test whose only
+     * connection was running afterward in the same JVM).
+     */
     fun recordMarker(type: GroundTruthMarkerType) {
         if (activeSession == null) return
         markerLog.record(GroundTruthMarker(type, clock.wallClockMillis(), clock.elapsedRealtimeNanos()))
         persistActiveSession()
-        viewModelScope.launch { refreshActiveState() }
+        _uiState.update { current ->
+            if (current is FieldTestHarnessUiState.Active) {
+                current.copy(markerCounts = markerLog.markers.groupingBy { it.type }.eachCount())
+            } else {
+                current
+            }
+        }
     }
 
     fun stopAndExportSession() {
@@ -179,6 +209,7 @@ class FieldTestHarnessViewModel @Inject constructor(
             val markers = markerLog.markers
             exporter.export(metadata, markers)
             stateStore.clear()
+            locationProfileSelector.select(null)
 
             activeSession = null
             _uiState.value = FieldTestHarnessUiState.Configuring(
@@ -206,11 +237,12 @@ class FieldTestHarnessViewModel @Inject constructor(
         )
     }
 
+    /** `delay` first, not last: the caller always does its own immediate [refreshActiveState] right after calling this - refreshing here too would be a redundant concurrent DB query racing that one. */
     private fun startTicker() {
         tickerJob = viewModelScope.launch {
             while (true) {
-                refreshActiveState()
                 delay(2_000)
+                refreshActiveState()
             }
         }
     }
@@ -246,11 +278,17 @@ class FieldTestHarnessViewModel @Inject constructor(
             elapsedMs = elapsedMs,
             capabilityMode = capabilityMode,
             activeCapture = activeCaptureInfo,
-            markerCounts = markerLog.markers.groupingBy { it.type }.eachCount()
+            markerCounts = markerLog.markers.groupingBy { it.type }.eachCount(),
+            resolvedLocationProfile = locationProfileSelector.current()
         )
     }
 
     public override fun onCleared() {
-        tickerJob?.cancel()
+        // Cancels the ticker AND any one-off `viewModelScope.launch { refreshActiveState() }`
+        // fired by recordMarker()/startSession() - tracking `tickerJob` alone left those
+        // stray, which under a test's real Room dispatch could still be touching the
+        // database after the test's own teardown closed it (an uncaught exception that
+        // then got misattributed to whatever test ran next).
+        viewModelScope.coroutineContext.cancelChildren()
     }
 }

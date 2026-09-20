@@ -5,6 +5,7 @@ import com.mototriptracker.app.core.common.FakeIdGenerator
 import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.core.model.CapabilityMode
+import com.mototriptracker.app.experiment.ExperimentLocationProfiles
 import com.mototriptracker.app.experiment.FakeFieldTestDatasetWriter
 import com.mototriptracker.app.experiment.FakeFieldTestDeviceInfoProvider
 import com.mototriptracker.app.experiment.FakeFieldTestHarnessStateStore
@@ -18,6 +19,7 @@ import com.mototriptracker.app.testing.FakeLocationGateway
 import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
+import com.mototriptracker.app.tracking.location.InMemoryLocationProfileSelector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -44,6 +46,7 @@ class FieldTestHarnessViewModelTest {
     private lateinit var capabilityInputsProvider: FakeCapabilityInputsProvider
     private lateinit var deviceInfoProvider: FakeFieldTestDeviceInfoProvider
     private lateinit var stateStore: FakeFieldTestHarnessStateStore
+    private lateinit var locationProfileSelector: InMemoryLocationProfileSelector
     private lateinit var coordinator: TrackingSessionCoordinator
     private lateinit var viewModel: FieldTestHarnessViewModel
     private val clock = FakeClock(wallMillis = 100_000L, elapsedNanos = 100_000L)
@@ -66,6 +69,7 @@ class FieldTestHarnessViewModelTest {
         capabilityInputsProvider = FakeCapabilityInputsProvider(fullyGrantedInputs)
         deviceInfoProvider = FakeFieldTestDeviceInfoProvider()
         stateStore = FakeFieldTestHarnessStateStore()
+        locationProfileSelector = InMemoryLocationProfileSelector()
         coordinator = TrackingSessionCoordinator(
             database = db,
             tripCaptureDao = db.tripCaptureDao(),
@@ -88,6 +92,7 @@ class FieldTestHarnessViewModelTest {
         capabilityInputsProvider = capabilityInputsProvider,
         exporter = FieldTestSessionExporter(writer),
         stateStore = stateStore,
+        locationProfileSelector = locationProfileSelector,
         tripCaptureDao = db.tripCaptureDao(),
         trackingSessionCoordinator = coordinator,
         clock = clock,
@@ -118,14 +123,14 @@ class FieldTestHarnessViewModelTest {
 
     @Test
     fun startSessionMovesToActiveAndResolvesCapabilityModeFromRealInputs() = runBlocking {
-        viewModel.onProfileIdChanged("S1-interval-1s")
+        viewModel.onProfileIdChanged("S1-A")
         viewModel.startSession()
 
         val state = withTimeout(5_000) {
             viewModel.uiState.first { it is FieldTestHarnessUiState.Active }
         } as FieldTestHarnessUiState.Active
 
-        assertEquals("S1-interval-1s", state.experimentProfileId)
+        assertEquals("S1-A", state.experimentProfileId)
         assertEquals(CapabilityMode.FULL_AUTO, state.capabilityMode)
         assertNull("no capture was started, so there's nothing to show", state.activeCapture)
     }
@@ -133,7 +138,7 @@ class FieldTestHarnessViewModelTest {
     @Test
     fun activeCaptureInfoReflectsARealActiveCapture() = runBlocking {
         coordinator.startManualCapture()
-        viewModel.onProfileIdChanged("S1-interval-1s")
+        viewModel.onProfileIdChanged("S1-A")
         viewModel.startSession()
 
         val state = withTimeout(5_000) {
@@ -153,7 +158,7 @@ class FieldTestHarnessViewModelTest {
 
     @Test
     fun recordMarkerIncrementsItsCountWhileActive() = runBlocking {
-        viewModel.onProfileIdChanged("S1-interval-1s")
+        viewModel.onProfileIdChanged("S1-A")
         viewModel.startSession()
         withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Active } }
 
@@ -172,7 +177,7 @@ class FieldTestHarnessViewModelTest {
 
     @Test
     fun stopAndExportSessionWritesBothDatasetFilesAndReturnsToConfiguringWithASummary() = runBlocking {
-        viewModel.onProfileIdChanged("S1-interval-1s")
+        viewModel.onProfileIdChanged("S1-A")
         viewModel.startSession()
         withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Active } }
         val sessionId = (viewModel.uiState.value as FieldTestHarnessUiState.Active).sessionId
@@ -190,7 +195,7 @@ class FieldTestHarnessViewModelTest {
 
         val sessionJson = requireNotNull(writer.readFile(sessionId, "session.json")) { "session.json should have been written" }
         val parsed = JSONObject(sessionJson)
-        assertEquals("S1-interval-1s", parsed.getString("experimentProfileId"))
+        assertEquals("S1-A", parsed.getString("experimentProfileId"))
 
         val annotationsJson = requireNotNull(writer.readFile(sessionId, "annotations.json")) { "annotations.json should have been written" }
         assertEquals(1, JSONObject(annotationsJson).getJSONArray("markers").length())
@@ -271,6 +276,55 @@ class FieldTestHarnessViewModelTest {
         assertEquals("session-before-kill", state.sessionId)
         assertEquals("S1-A", state.experimentProfileId)
         assertEquals(1, state.markerCounts[GroundTruthMarkerType.READY_TO_START])
+        assertEquals(
+            "the in-memory selector itself doesn't survive a process death - the ViewModel must re-arm it on rehydration",
+            ExperimentLocationProfiles.S1_A,
+            locationProfileSelector.current()
+        )
         recreatedViewModel.onCleared()
+    }
+
+    @Test
+    fun startSessionArmsTheRealLocationProfileMatchingTheTypedId() = runBlocking {
+        viewModel.onProfileIdChanged("S1-A")
+        viewModel.startSession()
+
+        val state = withTimeout(5_000) {
+            viewModel.uiState.first { it is FieldTestHarnessUiState.Active }
+        } as FieldTestHarnessUiState.Active
+
+        assertEquals(ExperimentLocationProfiles.S1_A, state.resolvedLocationProfile)
+        assertEquals(ExperimentLocationProfiles.S1_A, locationProfileSelector.current())
+    }
+
+    @Test
+    fun startSessionWithAnUnrecognizedProfileIdFallsBackToTheDefaultLocationProfile() = runBlocking {
+        viewModel.onProfileIdChanged("not-a-real-profile")
+        viewModel.startSession()
+
+        val state = withTimeout(5_000) {
+            viewModel.uiState.first { it is FieldTestHarnessUiState.Active }
+        } as FieldTestHarnessUiState.Active
+
+        assertEquals("not-a-real-profile", state.experimentProfileId)
+        assertEquals(ExperimentLocationProfiles.DEFAULT, state.resolvedLocationProfile)
+        assertEquals(ExperimentLocationProfiles.DEFAULT, locationProfileSelector.current())
+    }
+
+    @Test
+    fun stopAndExportSessionResetsTheLocationProfileSelectorToDefault() = runBlocking {
+        viewModel.onProfileIdChanged("S1-C")
+        viewModel.startSession()
+        withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Active } }
+        assertEquals(ExperimentLocationProfiles.S1_C, locationProfileSelector.current())
+
+        viewModel.stopAndExportSession()
+        withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Configuring && it.lastExport != null } }
+
+        assertEquals(
+            "production tracking must never be left on an experimental profile after the field test ends",
+            ExperimentLocationProfiles.DEFAULT,
+            locationProfileSelector.current()
+        )
     }
 }

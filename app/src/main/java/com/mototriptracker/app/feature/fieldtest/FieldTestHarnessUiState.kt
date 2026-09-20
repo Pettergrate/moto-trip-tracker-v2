@@ -1,6 +1,7 @@
 package com.mototriptracker.app.feature.fieldtest
 
 import com.mototriptracker.app.core.model.CapabilityMode
+import com.mototriptracker.app.core.model.LocationProfile
 import com.mototriptracker.app.core.model.StartSource
 import com.mototriptracker.app.experiment.GroundTruthMarkerType
 
@@ -21,7 +22,9 @@ sealed interface FieldTestHarnessUiState {
         val elapsedMs: Long,
         val capabilityMode: CapabilityMode,
         val activeCapture: ActiveCaptureInfo?,
-        val markerCounts: Map<GroundTruthMarkerType, Int>
+        val markerCounts: Map<GroundTruthMarkerType, Int>,
+        /** EXP-003: the real profile actually armed on `FusedLocationGateway` - may differ from [experimentProfileId] if it didn't match a known profile (falls back to the default). */
+        val resolvedLocationProfile: LocationProfile
     ) : FieldTestHarnessUiState
 }
 
