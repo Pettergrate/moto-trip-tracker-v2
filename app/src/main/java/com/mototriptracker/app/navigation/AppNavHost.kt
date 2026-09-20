@@ -23,6 +23,7 @@ import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.ui.NavDisplay
 import com.mototriptracker.app.feature.active.ActiveTripScreen
 import com.mototriptracker.app.feature.favorites.FavoritesPlaceholderScreen
+import com.mototriptracker.app.feature.fieldtest.FieldTestHarnessScreen
 import com.mototriptracker.app.feature.history.HistoryScreen
 import com.mototriptracker.app.feature.home.HomeScreen
 import com.mototriptracker.app.feature.settings.SettingsPlaceholderScreen
@@ -70,6 +71,12 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
         backStack.add(Destination.TripDetail(tripId))
     }
 
+    fun navigateToFieldTestHarness() {
+        if (backStack.lastOrNull() != Destination.FieldTestHarness) {
+            backStack.add(Destination.FieldTestHarness)
+        }
+    }
+
     NavDisplay(
         backStack = backStack,
         onBack = { backStack.removeLastOrNull() },
@@ -94,7 +101,14 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
                 }
 
                 Destination.Settings -> NavEntry(destination) {
-                    SettingsPlaceholderScreen(onBack = { backStack.removeLastOrNull() })
+                    SettingsPlaceholderScreen(
+                        onBack = { backStack.removeLastOrNull() },
+                        onOpenFieldTestHarness = ::navigateToFieldTestHarness
+                    )
+                }
+
+                Destination.FieldTestHarness -> NavEntry(destination) {
+                    FieldTestHarnessScreen(onBack = { backStack.removeLastOrNull() })
                 }
 
                 Destination.ActiveTrip -> NavEntry(destination) {
@@ -152,12 +166,14 @@ private fun Destination.tabLabel(): String = when (this) {
     Destination.Home -> "Home"
     Destination.History -> "History"
     Destination.Favorites -> "Favorites"
-    Destination.Settings, Destination.ActiveTrip, is Destination.TripDetail -> error("$this is not a bottom-nav tab")
+    Destination.Settings, Destination.ActiveTrip, Destination.FieldTestHarness, is Destination.TripDetail ->
+        error("$this is not a bottom-nav tab")
 }
 
 private fun Destination.tabIcon() = when (this) {
     Destination.Home -> Icons.Default.Home
     Destination.History -> Icons.AutoMirrored.Filled.List
     Destination.Favorites -> Icons.Default.Star
-    Destination.Settings, Destination.ActiveTrip, is Destination.TripDetail -> error("$this is not a bottom-nav tab")
+    Destination.Settings, Destination.ActiveTrip, Destination.FieldTestHarness, is Destination.TripDetail ->
+        error("$this is not a bottom-nav tab")
 }

@@ -22,6 +22,9 @@ sealed interface Destination {
 
     /** HIS-001/F0.9 §9: HIS-02, pushed from History with a specific Trip's ID - the first non-singleton, parameterized destination in this graph. */
     data class TripDetail(val tripId: String) : Destination
+
+    /** EXP-002: internal-only, reached from Settings - not a tab, no user-facing entry point elsewhere (EXP-001 acceptance). */
+    data object FieldTestHarness : Destination
 }
 
 /** The three ADR-011 bottom-nav tabs, in display order. */

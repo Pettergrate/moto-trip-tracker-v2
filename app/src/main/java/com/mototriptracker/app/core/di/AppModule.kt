@@ -12,7 +12,9 @@ import com.mototriptracker.app.core.common.DispatcherProvider
 import com.mototriptracker.app.core.common.IdGenerator
 import com.mototriptracker.app.core.common.UuidIdGenerator
 import com.mototriptracker.app.experiment.AndroidFieldTestDatasetWriter
+import com.mototriptracker.app.experiment.AndroidFieldTestDeviceInfoProvider
 import com.mototriptracker.app.experiment.FieldTestDatasetWriter
+import com.mototriptracker.app.experiment.FieldTestDeviceInfoProvider
 import com.mototriptracker.app.tracking.capability.AndroidCapabilityInputsProvider
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.tracking.location.FusedLocationGateway
@@ -57,6 +59,9 @@ interface AppModule {
 
     @Binds
     fun bindCapabilityInputsProvider(impl: AndroidCapabilityInputsProvider): CapabilityInputsProvider
+
+    @Binds
+    fun bindFieldTestDeviceInfoProvider(impl: AndroidFieldTestDeviceInfoProvider): FieldTestDeviceInfoProvider
 
     companion object {
         @Provides

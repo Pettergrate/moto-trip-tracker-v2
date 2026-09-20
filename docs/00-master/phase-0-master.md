@@ -2,8 +2,8 @@
 ## Phase 0 — Master Document
 
 **Project type:** Greenfield Android application  
-**Status:** Phase 0 documentation closed (GO, F0.17); Phase 1 implementation underway — **Wave W0 and Wave W1 both complete** (`TRK-001`, `TRK-002`, `TRK-003`, `TRK-004`, `PRC-001`, `PRC-002`, `UI-001`, `HIS-001`, `PRC-003`, `NOT-001` (on-device verification pending), `REC-001`, `MAP-001` done); Wave W2 started early (`DET-001`, `DET-002`, `DET-003`, `AUTO-001`, `DET-004`, `DET-005`, `DET-006`, `DET-007` done)  
-**Version:** 0.39
+**Status:** Phase 0 documentation closed (GO, F0.17); Phase 1 implementation underway — **Wave W0 and Wave W1 both complete** (`TRK-001`, `TRK-002`, `TRK-003`, `TRK-004`, `PRC-001`, `PRC-002`, `UI-001`, `HIS-001`, `PRC-003`, `NOT-001` (on-device verification pending), `REC-001`, `MAP-001` done); Wave W2 started early (`DET-001`, `DET-002`, `DET-003`, `AUTO-001`, `DET-004`, `DET-005`, `DET-006`, `DET-007` done; `EXP-002` harness UI done, real pilot rides pending)  
+**Version:** 0.40
 **Last updated:** 2026-09-19
 
 ---
