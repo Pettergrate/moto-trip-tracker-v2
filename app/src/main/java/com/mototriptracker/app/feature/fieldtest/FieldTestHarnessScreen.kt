@@ -144,6 +144,7 @@ private fun ConfiguringContent(
             Button(
                 onClick = onStart,
                 enabled = state.experimentProfileId.isNotBlank(),
+                shape = MaterialTheme.shapes.small,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Start session")
@@ -211,6 +212,7 @@ private fun ActiveContent(
                 rowTypes.forEach { type ->
                     OutlinedButton(
                         onClick = { onRecordMarker(type) },
+                        shape = MaterialTheme.shapes.small,
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("${type.label()} (${state.markerCounts[type] ?: 0})")
@@ -222,7 +224,7 @@ private fun ActiveContent(
             }
         }
         item {
-            Button(onClick = onStop, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onStop, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth()) {
                 Text("Stop & export session")
             }
         }

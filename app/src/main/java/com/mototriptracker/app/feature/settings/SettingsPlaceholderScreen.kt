@@ -48,7 +48,7 @@ fun SettingsPlaceholderScreen(onBack: () -> Unit, onOpenFieldTestHarness: () -> 
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text("Settings are coming soon", style = MaterialTheme.typography.bodyLarge)
-            OutlinedButton(onClick = onOpenFieldTestHarness, modifier = Modifier.padding(top = 24.dp)) {
+            OutlinedButton(onClick = onOpenFieldTestHarness, shape = MaterialTheme.shapes.small, modifier = Modifier.padding(top = 24.dp)) {
                 Text("Field test harness (internal)")
             }
         }

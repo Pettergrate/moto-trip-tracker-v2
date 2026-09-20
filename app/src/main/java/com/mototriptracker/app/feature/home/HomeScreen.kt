@@ -103,7 +103,7 @@ private fun ReadinessCard(capabilityMode: CapabilityMode?, onStartTripClick: () 
                 text = capabilityMode?.toReadinessText() ?: "Checking readiness…",
                 style = MaterialTheme.typography.bodyMedium
             )
-            Button(onClick = onStartTripClick, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onStartTripClick, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth()) {
                 Text("START TRIP")
             }
         }
@@ -129,11 +129,12 @@ private fun ActiveTripCard(
                 Text(formatDistanceKm(distanceMeters), style = MaterialTheme.typography.headlineSmall)
                 Text(formatDurationClock(elapsedMs), style = MaterialTheme.typography.headlineSmall)
             }
-            Button(onClick = onViewActiveTrip, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onViewActiveTrip, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth()) {
                 Text("VIEW ACTIVE TRIP")
             }
             OutlinedButton(
                 onClick = if (isPaused) onResumeClick else onPauseClick,
+                shape = MaterialTheme.shapes.small,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(if (isPaused) "Resume" else "Pause")

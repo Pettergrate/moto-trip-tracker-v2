@@ -1,9 +1,12 @@
 package com.mototriptracker.app.core.theme
 
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.dp
 
 /**
  * The stock Material3 baseline the app shipped with through EXP-002 (plain
@@ -35,6 +38,19 @@ val BlackOrangeColorScheme = darkColorScheme(
 )
 
 /**
+ * Sharp, angular corners rather than Material3's default soft/pill shapes -
+ * part of the same "aggressive, motorcyclist-facing" direction as the color
+ * revision above: rounded pill buttons read as friendly/soft, not racing/KTM.
+ */
+val AggressiveShapes = Shapes(
+    extraSmall = RoundedCornerShape(2.dp),
+    small = RoundedCornerShape(4.dp),
+    medium = RoundedCornerShape(4.dp),
+    large = RoundedCornerShape(6.dp),
+    extraLarge = RoundedCornerShape(8.dp)
+)
+
+/**
  * App-wide theme entry point (`MainActivity`'s `setContent`). Not yet
  * user-selectable - SET-01 (Settings, not built yet) is where a real
  * "Appearance" toggle between [BlackOrangeColorScheme] and
@@ -43,5 +59,5 @@ val BlackOrangeColorScheme = darkColorScheme(
  */
 @Composable
 fun MotoTripTrackerTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = BlackOrangeColorScheme, content = content)
+    MaterialTheme(colorScheme = BlackOrangeColorScheme, shapes = AggressiveShapes, content = content)
 }

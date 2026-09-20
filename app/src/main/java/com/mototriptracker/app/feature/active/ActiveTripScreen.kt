@@ -124,11 +124,16 @@ private fun ActiveTripContent(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedButton(
                             onClick = if (isPaused) onResumeClick else onPauseClick,
+                            shape = MaterialTheme.shapes.small,
                             modifier = Modifier.weight(1f)
                         ) {
                             Text(if (isPaused) "RESUME" else "PAUSE")
                         }
-                        Button(onClick = { showFinishConfirmation = true }, modifier = Modifier.weight(1f)) {
+                        Button(
+                            onClick = { showFinishConfirmation = true },
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Text("FINISH")
                         }
                     }
