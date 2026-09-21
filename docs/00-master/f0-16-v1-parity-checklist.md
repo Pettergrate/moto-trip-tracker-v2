@@ -48,7 +48,7 @@ Every core MVP requirement V1 has is already covered in V2. No gaps in this sect
 | 15 | Duplicate-start suppression after a just-finished trip | Not documented as a distinct feature in V1 | `DET-006` | **V2 ahead** |
 | 16 | Forgotten-finish reminder for a manual capture left running | Not documented in V1 | `DET-007` | **V2 ahead** |
 | 17 | Diagnostic categorization of *why* a start attempt timed out (late AR delivery vs. gate lock vs. rejected GPS vs. buffer state) — 7G.1/7G.2 | Implemented, installed incrementally in the pilot, awaiting 3-5 field rides | `DIA-001` + `DET-002`'s own diagnostic stamping exist; exact category granularity not verified 1:1 against V1's 7G.1/7G.2 categories | **Planned/needs verification** — not a blocking gap, revisit once `EXP-004`'s detector campaign runs |
-| 18 | Reanchoring a stale `IN_VEHICLE` event to processing time + median-based buffer speed (7G.3) | Implemented, awaiting first field round | V2's `DET-002` design not yet compared line-for-line against this specific correction | **Gap (needs owner decision)** — no V2 task currently names this specific correction; may already be moot if V2's own candidate-start design never had the bug it fixes. Recommend: revisit during `EXP-004`, not before. |
+| 18 | Reanchoring a stale `IN_VEHICLE` event to processing time + median-based buffer speed (7G.3) | Implemented, awaiting first field round | V2's `DET-002` design not yet compared line-for-line against this specific correction | **Deferred (owner decision, 2026-09-20)** — revisit during `EXP-004`; likely moot if V2's own design never had the bug it fixes. |
 
 ---
 
@@ -59,9 +59,9 @@ Every core MVP requirement V1 has is already covered in V2. No gaps in this sect
 | 19 | History list with reactive queries | Complete (6A) | `HIS-001` | **Covered** |
 | 20 | Trip detail: full stats, offline local route (Canvas), start/end markers | Complete (6C.1) | `HIS-001` | **Covered** |
 | 21 | Optional remote base map (MapLibre + OpenFreeMap), offline fallback preserved | Complete (6C.2), field-validated on Android 16 | `MAP-001` (same provider choice, independently arrived at — see ADR-021) | **Covered** |
-| 22 | Compact map with remembered consent, no map traffic before first opt-in, one MapLibre instance at a time (8A) | Implemented, pending physical/visual validation | `MAP-001`'s `TripRouteMap` always renders (no separate compact/expanded consent gate); consent-to-show-remote-map is not a V2 concept yet | **Gap** — V1 asks for explicit consent before any map network traffic; V2's `TripRouteMap` doesn't gate on consent at all yet. Needs an owner decision: fold into `MAP-002`, or a new privacy-adjacent task. |
-| 23 | Route thumbnail in each history card, bounded single-query sampling (8B) | Implemented and field-validated | Not built; `HIS-001`'s `RecentTripRow`/History list is text-only | **Gap** — no current V2 task names a history-card route thumbnail. Candidate: fold into `HIS-002` or `MAP-002`. |
-| 24 | Selected-point contrast/accessibility marker on the map (8A) | Implemented, pending device validation | Not applicable yet — V2 has no point-selection-on-map interaction at all | **Gap** — candidate: `MAP-002` ("stops/markers/large tracks") if point-level selection is in its intended scope; needs owner confirmation. |
+| 22 | Compact map with remembered consent, no map traffic before first opt-in, one MapLibre instance at a time (8A) | Implemented, pending physical/visual validation | `MAP-001`'s `TripRouteMap` always renders (no separate compact/expanded consent gate); consent-to-show-remote-map is not a V2 concept yet | **Declined (owner decision, 2026-09-20)** — V2 keeps its current always-render behavior; not replicating V1's opt-in gate. |
+| 23 | Route thumbnail in each history card, bounded single-query sampling (8B) | Implemented and field-validated | Not built; `HIS-001`'s `RecentTripRow`/History list is text-only | **Planned (owner decision, 2026-09-20)** — added to `HIS-002`'s scope. |
+| 24 | Selected-point contrast/accessibility marker on the map (8A) | Implemented, pending device validation | Not applicable yet — V2 has no point-selection-on-map interaction at all | **Planned (owner decision, 2026-09-20)** — added to `MAP-002`'s scope. |
 | 25 | Stop markers on the route map | Not found as a distinct V1 feature | Backlog names `MAP-002` "stops/markers" | **N/A (both undecided)** — V2 is already ahead in *intent* even though neither has built it. |
 
 ---
@@ -96,7 +96,7 @@ Every core MVP requirement V1 has is already covered in V2. No gaps in this sect
 
 | # | V1 feature | V1 status | V2 status | Classification |
 |---|---|---|---|---|
-| 38 | Custom app icon/branding (adaptive + monochrome + splash, replacing the default template robot) | Complete (7C), visually validated | `ic_launcher_foreground.xml` itself says: *"Placeholder mark; not a final product icon. Revisit with real branding later."* — V2 has explicitly self-documented this as unfinished | **Gap** — no V2 backlog task currently owns custom branding/icon work. Needs an owner decision: add a task (candidate wave: W3 or W5 polish) or explicitly defer past Phase 1. |
+| 38 | Custom app icon/branding (adaptive + monochrome + splash, replacing the default template robot) | Complete (7C), visually validated | `ic_launcher_foreground.xml` itself says: *"Placeholder mark; not a final product icon. Revisit with real branding later."* — V2 has explicitly self-documented this as unfinished | **Deferred (owner decision, 2026-09-20)** — not declined, just not scheduled to a task or wave yet. |
 | 39 | Doze/Battery-Saver/lock-screen field validation protocol | Complete audit (7D.1) + partial physical validation (7D.2, Doze forced case done, Battery Saver isolated case still pending in V1 itself) | No V2 task specifically names Doze/lock-screen validation; `EXP-006` "Battery campaign" is the closest, broader in scope | **Gap (loosely tracked)** — recommend explicitly folding a Doze/lock-screen scenario into `EXP-006`'s design rather than opening a new task. |
 | 40 | Privacy-scoped diagnostic logging (no coordinates/routes/speeds/timestamps/exception text) for auto-start reliability | Complete (7G.1) | `DIA-001` structured diagnostic event foundation exists; privacy-scoping of its actual field contents not yet audited against this specific bar | **Planned/needs verification** — candidate: `PRV-001` (W4, privacy/backup enforcement) should explicitly check `DiagnosticEvent`'s fields against this same bar. |
 
@@ -113,15 +113,13 @@ Neither "Gap" nor "Covered": these are V1's own **unbuilt plans**, useful only a
 
 ## 9. Gaps requiring an explicit owner decision
 
-Per REF-001's own acceptance criterion, every Gap needs either a task ID or an explicit decision to exclude. These five don't have one yet:
+Per REF-001's own acceptance criterion, every Gap needs either a task ID or an explicit decision to exclude. **Resolved by the project owner, 2026-09-20:**
 
-1. **Map-consent gating before any remote-map network traffic** (row 22) — candidate: `MAP-002`, or a new task.
-2. **Route thumbnail in history cards** (row 23) — candidate: `HIS-002` or `MAP-002`.
-3. **Selected-point map marker/accessibility** (row 24) — candidate: `MAP-002`.
-4. **Custom app icon/branding** (row 38) — candidate: new task, wave TBD.
-5. **7G.3's stale-`IN_VEHICLE`-reanchor correction** (row 18) — candidate: revisit during `EXP-004`, may be moot.
-
-None of these block Phase 1's current wave. Recommend the project owner either assigns each a real task ID (existing or new) or records an explicit "not doing this in V2" decision here or in `phase-0-master.md`, per F0.16's own methodology.
+1. **Map-consent gating before any remote-map network traffic** (row 22) — **Declined.** V2 keeps its current always-render `TripRouteMap` behavior (ADR-019); V1's stricter opt-in-before-network-traffic flow is not being replicated.
+2. **Route thumbnail in history cards** (row 23) — **Approved.** Added to `HIS-002`'s scope.
+3. **Selected-point map marker/accessibility** (row 24) — **Approved.** Added to `MAP-002`'s scope.
+4. **Custom app icon/branding** (row 38) — **Deferred**, not declined. No task or wave assigned yet; revisit later.
+5. **7G.3's stale-`IN_VEHICLE`-reanchor correction** (row 18) — **Deferred to `EXP-004`**, per the recommendation above (likely moot).
 
 ---
 

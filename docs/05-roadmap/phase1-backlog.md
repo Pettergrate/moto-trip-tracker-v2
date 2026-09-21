@@ -717,8 +717,12 @@ Narrowly-scoped follow-on to F0.16's reinstatement (`docs/00-master/f0-16-v1-ref
 ### HIS-002 — Search/filter/sort
 **Objective:** complete Core history management at scale.
 
+**Scope addition (owner decision, 2026-09-20, from REF-001's parity checklist):** a route thumbnail per history card/row, matching V1's 8B (bounded per-trip point sampling in a single reactive query — never one query per trip, never the full point list). No remote map, no persisted thumbnail files — same offline, locally-computed spirit as `MAP-001`'s existing local rendering.
+
 ### MAP-002 — Stops/markers/large tracks
 **Objective:** render start/end/stop markers and long routes efficiently.
+
+**Scope addition (owner decision, 2026-09-20, from REF-001's parity checklist):** a visible, higher-contrast marker (plus its own accessibility node) for a selected point on the route map, matching V1's 8A. Explicitly **not** in scope, by the same decision: gating remote-map network traffic behind a remembered user consent step (V1's 8A also does this; the owner chose to keep V2's current always-render `TripRouteMap` behavior instead).
 
 ### MET-001 — Core metric presentation
 **Objective:** finish user-facing Core metrics, quality/degraded labels and recalculation visibility.
