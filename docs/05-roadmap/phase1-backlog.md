@@ -691,6 +691,8 @@ Narrowly-scoped follow-on to F0.16's reinstatement (`docs/00-master/f0-16-v1-ref
 
 **Acceptance:** a design doc with the field-by-field mapping, the enum mapping table, an explicit recommendation on how an imported trip is marked/versioned relative to `processingVersion`, and an explicit unrecoverable-data list. No silent defaults on the "mandatory vs optional import" product question — surfaced for an owner decision instead.
 
+**Status: done, first pass (2026-09-20).** Full design at `docs/00-master/f0-16-v1-migration-design.md`. Headline decision: V1's `TrackPoint` maps to V2's `ProcessedTrackPointEntity`, **not** `RawTrackPointEntity` — V1 only ever stored already-filtered "accepted" points, never the unfiltered stream, so treating them as raw evidence would be dishonest; treating them as a frozen, non-regenerable processed layer is accurate. Direct consequence: an imported trip gets zero `RawTrackPointEntity`/`PointAssessmentEntity` rows, forever, and can never be reprocessed by `PRC-001`/`002`/`003`. One V1 `Trip` becomes three linked V2 rows (`TripEntity` + a synthesized `TripCaptureEntity` + one `TripPartEntity` spanning it) per `ADR-005`'s own Trip/Capture/Part split. Found that `StartSource.IMPORTED` already exists in V2's taxonomy with the doc comment "reserved for a future import feature" - this is that feature; `EndSource` has no equivalent value, which is now a documented open gap (§4) rather than a silent mismatch. Five product decisions surfaced for the owner (mandatory-vs-optional import, `ACTIVE`/`DISCARDED` V1 trips, re-import idempotency, `EndSource.IMPORTED`) — none defaulted.
+
 ---
 
 ## W3 — Editing & Everyday Use

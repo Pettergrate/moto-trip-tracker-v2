@@ -86,7 +86,7 @@ It will establish:
 | F0.13 | Observability & Diagnostics | Closed observability v0.1 |
 | F0.14 | ADR Baseline | Closed ADR v0.1 |
 | F0.15 | V2 Roadmap | Closed roadmap v0.1 |
-| F0.16 | V1 Reference (Feature Parity & Data Migration) | **Reinstated 2026-09-19, scoped v0.1**. See `docs/00-master/f0-16-v1-reference.md`. Parity checklist (`REF-001`) done 2026-09-20 — see `docs/00-master/f0-16-v1-parity-checklist.md` |
+| F0.16 | V1 Reference (Feature Parity & Data Migration) | **Reinstated 2026-09-19, scoped v0.1**. See `docs/00-master/f0-16-v1-reference.md`. Parity checklist (`REF-001`) and migration design (`REF-002`) both done 2026-09-20 — see `docs/00-master/f0-16-v1-parity-checklist.md` and `docs/00-master/f0-16-v1-migration-design.md` |
 | F0.17 | Phase 1 Readiness Review | Closed — **GO, scoped to Wave W0**. See `docs/00-master/phase-1-readiness-review.md` |
 
 ---
