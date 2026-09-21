@@ -2,9 +2,9 @@
 ## Phase 0 — Master Document
 
 **Project type:** Greenfield Android application  
-**Status:** Phase 0 documentation closed (GO, F0.17); Phase 1 implementation underway — **Wave W0 and Wave W1 both complete** (`TRK-001`, `TRK-002`, `TRK-003`, `TRK-004`, `PRC-001`, `PRC-002`, `UI-001`, `HIS-001`, `PRC-003`, `NOT-001` (on-device verification pending), `REC-001`, `MAP-001` done); Wave W2 started early (`DET-001`, `DET-002`, `DET-003`, `AUTO-001`, `DET-004`, `DET-005`, `DET-006`, `DET-007` done; `EXP-002` harness UI done, real pilot rides pending)  
-**Version:** 0.40
-**Last updated:** 2026-09-19
+**Status:** Phase 0 documentation closed (GO, F0.17); Phase 1 implementation underway — **Wave W0 and Wave W1 both complete** (`TRK-001`, `TRK-002`, `TRK-003`, `TRK-004`, `PRC-001`, `PRC-002`, `UI-001`, `HIS-001`, `PRC-003`, `NOT-001` (on-device verification pending), `REC-001`, `MAP-001` done); Wave W2 started early (`DET-001`, `DET-002`, `DET-003`, `AUTO-001`, `DET-004`, `DET-005`, `DET-006`, `DET-007` done; `EXP-002`/`EXP-003` harness+profile-switching done, real pilot rides in progress; `REF-001` V1 parity checklist done)  
+**Version:** 0.41
+**Last updated:** 2026-09-20
 
 ---
 
@@ -86,7 +86,7 @@ It will establish:
 | F0.13 | Observability & Diagnostics | Closed observability v0.1 |
 | F0.14 | ADR Baseline | Closed ADR v0.1 |
 | F0.15 | V2 Roadmap | Closed roadmap v0.1 |
-| F0.16 | V1 Reference (Feature Parity & Data Migration) | **Reinstated 2026-09-19, scoped v0.1**. See `docs/00-master/f0-16-v1-reference.md` |
+| F0.16 | V1 Reference (Feature Parity & Data Migration) | **Reinstated 2026-09-19, scoped v0.1**. See `docs/00-master/f0-16-v1-reference.md`. Parity checklist (`REF-001`) done 2026-09-20 — see `docs/00-master/f0-16-v1-parity-checklist.md` |
 | F0.17 | Phase 1 Readiness Review | Closed — **GO, scoped to Wave W0**. See `docs/00-master/phase-1-readiness-review.md` |
 
 ---
