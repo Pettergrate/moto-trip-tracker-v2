@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mototriptracker.app.core.common.Clock
 import com.mototriptracker.app.core.common.IdGenerator
+import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.core.model.CaptureStatus
@@ -71,6 +72,12 @@ import javax.inject.Inject
  * "Start session", then Home "START TRIP") until a real ride was recorded
  * without one of them. One button now does both; a rider fumbling with two
  * separate screens before pulling away was never reasonable to ask for.
+ *
+ * [refreshActiveState] also remembers the real capture's id the first time
+ * it observes one (`ActiveSession.associatedCaptureId`) so
+ * [stopAndExportSession] can pull that capture's `RawTrackPointEntity` rows
+ * and export a real `raw-track.csv` (F0.6 §20) - EXP-001 deferred this file
+ * entirely since no capture correlated with a harness session existed yet.
  */
 @HiltViewModel
 class FieldTestHarnessViewModel @Inject constructor(
@@ -81,6 +88,7 @@ class FieldTestHarnessViewModel @Inject constructor(
     private val stateStore: FieldTestHarnessStateStore,
     private val locationProfileSelector: LocationProfileSelector,
     private val tripCaptureDao: TripCaptureDao,
+    private val rawTrackPointDao: RawTrackPointDao,
     private val trackingSessionCoordinator: TrackingSessionCoordinator,
     private val clock: Clock,
     private val idGenerator: IdGenerator
@@ -104,7 +112,8 @@ class FieldTestHarnessViewModel @Inject constructor(
         val weatherNotes: String,
         val notes: String,
         val deviceSnapshot: FieldTestDeviceSnapshot,
-        val capabilityInputsAtStart: CapabilityInputs
+        val capabilityInputsAtStart: CapabilityInputs,
+        val associatedCaptureId: String? = null
     )
 
     init {
@@ -119,7 +128,8 @@ class FieldTestHarnessViewModel @Inject constructor(
                 weatherNotes = persisted.weatherNotes,
                 notes = persisted.notes,
                 deviceSnapshot = persisted.deviceSnapshot,
-                capabilityInputsAtStart = persisted.capabilityInputsAtStart
+                capabilityInputsAtStart = persisted.capabilityInputsAtStart,
+                associatedCaptureId = persisted.associatedCaptureId
             )
             persisted.markers.forEach(markerLog::record)
             locationProfileSelector.select(ExperimentLocationProfiles.findById(persisted.experimentProfileId))
@@ -225,7 +235,11 @@ class FieldTestHarnessViewModel @Inject constructor(
                 notes = session.notes.ifBlank { null }
             )
             val markers = markerLog.markers
-            exporter.export(metadata, markers)
+            // null when the real capture was never observed by refreshActiveState()
+            // in time (e.g. a start-then-almost-immediately-stop sanity check) -
+            // exported as an honest empty raw-track.csv rather than skipped.
+            val rawTrackPoints = session.associatedCaptureId?.let { rawTrackPointDao.findAllByCapture(it) } ?: emptyList()
+            exporter.export(metadata, markers, rawTrackPoints)
             stateStore.clear()
             locationProfileSelector.select(null)
 
@@ -250,7 +264,8 @@ class FieldTestHarnessViewModel @Inject constructor(
                 notes = session.notes,
                 deviceSnapshot = session.deviceSnapshot,
                 capabilityInputsAtStart = session.capabilityInputsAtStart,
-                markers = markerLog.markers
+                markers = markerLog.markers,
+                associatedCaptureId = session.associatedCaptureId
             )
         )
     }
@@ -283,6 +298,15 @@ class FieldTestHarnessViewModel @Inject constructor(
         // activeSession may have been cleared by stopAndExportSession while the
         // suspend calls above were in flight - don't resurrect Active state after a Stop.
         if (activeSession !== session) return
+
+        // Remembered once discovered, not re-queried every tick: by export
+        // time the real capture has already finished (and stopped being
+        // ACTIVE), so this is the only way stopAndExportSession() later knows
+        // which capture's raw-track.csv rows belong to this session.
+        if (activeCapture != null && session.associatedCaptureId == null) {
+            activeSession = session.copy(associatedCaptureId = activeCapture.id)
+            persistActiveSession()
+        }
 
         // Only reachable without a real reboot (elapsedRealtimeNanos is monotonic
         // within a boot) - a genuine reboot mid-ride is REC-001's territory, not

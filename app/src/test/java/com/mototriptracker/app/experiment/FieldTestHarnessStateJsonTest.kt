@@ -46,7 +46,8 @@ class FieldTestHarnessStateJsonTest {
         markers = listOf(
             GroundTruthMarker(GroundTruthMarkerType.READY_TO_START, 21_000L, 21_000L),
             GroundTruthMarker(GroundTruthMarkerType.KNOWN_TUNNEL, 22_000L, 22_000L, note = "under the bridge")
-        )
+        ),
+        associatedCaptureId = "capture-1"
     )
 
     @Test
@@ -66,5 +67,15 @@ class FieldTestHarnessStateJsonTest {
 
         assertEquals(original, restored)
         assertEquals(emptyList<GroundTruthMarker>(), restored.markers)
+    }
+
+    @Test
+    fun nullAssociatedCaptureIdSurvivesTheRoundTrip() {
+        val original = sampleState().copy(associatedCaptureId = null)
+
+        val restored = FieldTestHarnessStateJson.fromJson(FieldTestHarnessStateJson.toJson(original))
+
+        assertEquals(original, restored)
+        assertEquals(null, restored.associatedCaptureId)
     }
 }

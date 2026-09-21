@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.common.FakeIdGenerator
 import com.mototriptracker.app.core.database.MotoTripDatabase
+import com.mototriptracker.app.core.database.entity.RawTrackPointEntity
 import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.core.model.CapabilityMode
 import com.mototriptracker.app.experiment.ExperimentLocationProfiles
@@ -99,6 +100,7 @@ class FieldTestHarnessViewModelTest {
         stateStore = stateStore,
         locationProfileSelector = locationProfileSelector,
         tripCaptureDao = db.tripCaptureDao(),
+        rawTrackPointDao = db.rawTrackPointDao(),
         trackingSessionCoordinator = coordinator,
         clock = clock,
         idGenerator = FakeIdGenerator(prefix = "session")
@@ -266,7 +268,8 @@ class FieldTestHarnessViewModelTest {
                     screenStateAtStart = "on"
                 ),
                 capabilityInputsAtStart = fullyGrantedInputs,
-                markers = listOf(GroundTruthMarker(GroundTruthMarkerType.READY_TO_START, 51_000L, 51_000L))
+                markers = listOf(GroundTruthMarker(GroundTruthMarkerType.READY_TO_START, 51_000L, 51_000L)),
+                associatedCaptureId = null
             )
         )
 
@@ -364,5 +367,64 @@ class FieldTestHarnessViewModelTest {
             TrackingForegroundService.ACTION_FINISH,
             finishedIntent?.action
         )
+    }
+
+    @Test
+    fun stopAndExportSessionExportsTheAssociatedCaptureRealRawTrackPoints() = runBlocking {
+        val startResult = coordinator.startManualCapture()
+        db.rawTrackPointDao().insert(
+            RawTrackPointEntity(
+                captureId = startResult.captureId,
+                sequenceNumber = 0,
+                capturedAt = 1_000L,
+                elapsedRealtimeNanos = 100_000L,
+                receivedAtElapsedRealtimeNanos = null,
+                latitude = 10.0,
+                longitude = -20.0,
+                horizontalAccuracyM = 5f,
+                altitudeEllipsoidM = null,
+                altitudeMslM = null,
+                verticalAccuracyM = null,
+                speedMps = null,
+                speedAccuracyMps = null,
+                bearingDeg = null,
+                bearingAccuracyDeg = null,
+                provider = "fused",
+                isMock = false,
+                requestProfileId = "S1-A",
+                callbackBatchId = null,
+                detectorStateSnapshot = "TRACKING"
+            )
+        )
+
+        viewModel.onProfileIdChanged("S1-A")
+        viewModel.startSession()
+        // Wait for refreshActiveState() to actually observe the real capture
+        // (this is what teaches the harness session its associatedCaptureId),
+        // not just for the state to become Active.
+        withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Active && it.activeCapture != null } }
+        val sessionId = (viewModel.uiState.value as FieldTestHarnessUiState.Active).sessionId
+
+        viewModel.stopAndExportSession()
+        withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Configuring && it.lastExport != null } }
+
+        val csv = requireNotNull(writer.readFile(sessionId, "raw-track.csv")) { "raw-track.csv should have been written" }
+        val rows = csv.lines()
+        assertEquals(2, rows.size)
+        assertTrue("the real captured point's data should be in the exported CSV", rows[1].contains("10.0,-20.0"))
+    }
+
+    @Test
+    fun stopAndExportSessionWithNoObservedCaptureExportsAnEmptyRawTrackCsv() = runBlocking {
+        viewModel.onProfileIdChanged("S1-A")
+        viewModel.startSession()
+        withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Active } }
+        val sessionId = (viewModel.uiState.value as FieldTestHarnessUiState.Active).sessionId
+
+        viewModel.stopAndExportSession()
+        withTimeout(5_000) { viewModel.uiState.first { it is FieldTestHarnessUiState.Configuring && it.lastExport != null } }
+
+        val csv = requireNotNull(writer.readFile(sessionId, "raw-track.csv"))
+        assertEquals("no capture was ever observed, so the honest export is a header-only CSV, not a missing file", 1, csv.lines().size)
     }
 }

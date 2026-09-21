@@ -23,6 +23,7 @@ object FieldTestHarnessStateJson {
         json.put("routeType", state.routeType)
         json.put("weatherNotes", state.weatherNotes)
         json.put("notes", state.notes)
+        json.put("associatedCaptureId", state.associatedCaptureId ?: JSONObject.NULL)
         json.put(
             "deviceSnapshot",
             JSONObject().apply {
@@ -111,6 +112,7 @@ object FieldTestHarnessStateJson {
             routeType = json.getString("routeType"),
             weatherNotes = json.getString("weatherNotes"),
             notes = json.getString("notes"),
+            associatedCaptureId = if (json.isNull("associatedCaptureId")) null else json.getString("associatedCaptureId"),
             deviceSnapshot = deviceSnapshot,
             capabilityInputsAtStart = capabilityInputs,
             markers = markers

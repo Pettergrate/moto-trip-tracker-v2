@@ -22,5 +22,7 @@ data class PersistedHarnessState(
     val notes: String,
     val deviceSnapshot: FieldTestDeviceSnapshot,
     val capabilityInputsAtStart: CapabilityInputs,
-    val markers: List<GroundTruthMarker>
+    val markers: List<GroundTruthMarker>,
+    /** The real `TripCaptureEntity.id` this session is riding along with, once observed - `null` until the first successful poll finds one. Needed at export time to pull this session's own `raw-track.csv` rows. */
+    val associatedCaptureId: String?
 )
