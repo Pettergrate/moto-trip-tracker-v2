@@ -105,6 +105,14 @@ class TripDetailViewModel @Inject constructor(
         }
     }
 
+    /** TRS-001/FR-HIS-005/F0.9 §13: soft-delete only - the caller navigates back after this, since this Trip drops out of every normal list immediately. */
+    fun onTrash() {
+        val tripId = tripIdFlow.value ?: return
+        viewModelScope.launch {
+            tripDao.trash(tripId, deletedAt = clock.wallClockMillis(), updatedAt = clock.wallClockMillis())
+        }
+    }
+
     private companion object {
         const val STOP_TIMEOUT_MS = 5_000L
     }

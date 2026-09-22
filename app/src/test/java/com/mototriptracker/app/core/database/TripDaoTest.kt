@@ -139,4 +139,71 @@ class TripDaoTest {
 
         assertEquals(listOf("favorite-new", "favorite-old"), ids)
     }
+
+    @Test
+    fun trashSetsStatusAndDeletedAtAndExcludesFromNormalLists() = runTest {
+        val dao = db.tripDao()
+        dao.insert(trip("a", createdAt = 1_000L))
+
+        dao.trash("a", deletedAt = 5_000L, updatedAt = 5_000L)
+
+        val trashed = dao.findById("a")
+        assertEquals(TripStatus.TRASHED, trashed?.status)
+        assertEquals(5_000L, trashed?.deletedAt)
+        assertEquals(5_000L, trashed?.updatedAt)
+        assertEquals(emptyList<String>(), dao.observeAllDescending().first().map { it.id })
+    }
+
+    @Test
+    fun restoreRevertsStatusAndClearsDeletedAt() = runTest {
+        val dao = db.tripDao()
+        dao.insert(trip("a", createdAt = 1_000L))
+        dao.trash("a", deletedAt = 5_000L, updatedAt = 5_000L)
+
+        dao.restore("a", updatedAt = 6_000L)
+
+        val restored = dao.findById("a")
+        assertEquals(TripStatus.COMPLETED, restored?.status)
+        assertNull(restored?.deletedAt)
+        assertEquals(6_000L, restored?.updatedAt)
+        assertEquals(listOf("a"), dao.observeAllDescending().first().map { it.id })
+    }
+
+    @Test
+    fun observeTrashedDescendingOnlyReturnsTrashedTripsMostRecentlyTrashedFirst() = runTest {
+        val dao = db.tripDao()
+        dao.insert(trip("kept", createdAt = 1_000L))
+        dao.insert(trip("trashed-old", createdAt = 2_000L))
+        dao.insert(trip("trashed-new", createdAt = 3_000L))
+        dao.trash("trashed-old", deletedAt = 10_000L, updatedAt = 10_000L)
+        dao.trash("trashed-new", deletedAt = 20_000L, updatedAt = 20_000L)
+
+        val ids = dao.observeTrashedDescending().first().map { it.id }
+
+        assertEquals(listOf("trashed-new", "trashed-old"), ids)
+    }
+
+    @Test
+    fun findEligibleForPurgeOnlyReturnsTrashedTripsPastTheCutoff() = runTest {
+        val dao = db.tripDao()
+        dao.insert(trip("too-recent", createdAt = 1_000L))
+        dao.insert(trip("eligible", createdAt = 2_000L))
+        dao.insert(trip("not-trashed", createdAt = 3_000L))
+        dao.trash("too-recent", deletedAt = 90_000L, updatedAt = 90_000L)
+        dao.trash("eligible", deletedAt = 10_000L, updatedAt = 10_000L)
+
+        val eligible = dao.findEligibleForPurge(cutoff = 50_000L)
+
+        assertEquals(listOf("eligible"), eligible.map { it.id })
+    }
+
+    @Test
+    fun deleteByIdRemovesTheTripRow() = runTest {
+        val dao = db.tripDao()
+        dao.insert(trip("a", createdAt = 1_000L))
+
+        dao.deleteById("a")
+
+        assertNull(dao.findById("a"))
+    }
 }

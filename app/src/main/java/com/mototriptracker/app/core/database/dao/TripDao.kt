@@ -54,4 +54,29 @@ interface TripDao {
     /** FAV-001/FR-FAV-001: mark/unmark a Trip as favorite - does not affect metrics/processing (domain-data-model.md). */
     @Query("UPDATE trip SET isFavorite = :isFavorite, updatedAt = :updatedAt WHERE id = :id")
     suspend fun setFavorite(id: String, isFavorite: Boolean, updatedAt: Long)
+
+    /** TRS-001/FR-HIS-005: soft-delete - a TRASHED Trip keeps every row (own, TripPart, statistics) untouched, just hidden from normal browsing. */
+    @Query("UPDATE trip SET status = :newStatus, deletedAt = :deletedAt, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun trash(id: String, deletedAt: Long, updatedAt: Long, newStatus: TripStatus = TripStatus.TRASHED)
+
+    /**
+     * TRS-001/FR-HIS-005. Always restores to `COMPLETED` - the only status a
+     * Trip can currently be trashed *from* (`EDT`-family `SUPERSEDED` trips
+     * don't exist yet; `EDT-001..004` will need to revisit this if a
+     * superseded Trip ever becomes trashable too).
+     */
+    @Query("UPDATE trip SET status = :restoredStatus, deletedAt = NULL, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun restore(id: String, updatedAt: Long, restoredStatus: TripStatus = TripStatus.COMPLETED)
+
+    /** TRS-001/F0.9 §14: the dedicated Trash list, most-recently-trashed first. */
+    @Query("SELECT * FROM trip WHERE status = :status ORDER BY deletedAt DESC")
+    fun observeTrashedDescending(status: TripStatus = TripStatus.TRASHED): Flow<List<TripEntity>>
+
+    /** TRS-001/PRIV-013: trashed past the retention window, eligible for [TrashPurgeWorker] to physically delete. */
+    @Query("SELECT * FROM trip WHERE status = :status AND deletedAt <= :cutoff")
+    suspend fun findEligibleForPurge(cutoff: Long, status: TripStatus = TripStatus.TRASHED): List<TripEntity>
+
+    /** TRS-001: physical delete - cascades to this Trip's own TripPart/TripStatistics/ProcessedTrackPoint/etc. rows (see their FKs), never to RawTrackPoint (ADR-006, keyed off captureId only). */
+    @Query("DELETE FROM trip WHERE id = :id")
+    suspend fun deleteById(id: String)
 }

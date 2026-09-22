@@ -124,4 +124,14 @@ class TripCaptureDaoTest {
         assertEquals(1, results.count { it })
         assertEquals(1, dao.countByStatus(CaptureStatus.ACTIVE))
     }
+
+    @Test
+    fun deleteByIdRemovesAnUnreferencedCapture() = runTest {
+        val dao = db.tripCaptureDao()
+        dao.startCaptureIfNoneActive(capture("capture-1"))
+
+        dao.deleteById("capture-1")
+
+        assertEquals(null, dao.findById("capture-1"))
+    }
 }

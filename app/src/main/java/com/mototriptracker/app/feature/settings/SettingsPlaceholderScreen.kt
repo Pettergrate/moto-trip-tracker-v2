@@ -27,10 +27,13 @@ import androidx.compose.ui.unit.dp
  * The field-test harness entry (EXP-002) lives here rather than as its own
  * tab or Home affordance - EXP-001's acceptance criterion is that this stays
  * internal tooling, not user-facing Core UX.
+ *
+ * Trash (TRS-001) also lives here, matching F0.9 §14's "Datos" section -
+ * trashing is infrequent, unlike Favorites, so it doesn't need a tab.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsPlaceholderScreen(onBack: () -> Unit, onOpenFieldTestHarness: () -> Unit) {
+fun SettingsPlaceholderScreen(onBack: () -> Unit, onOpenFieldTestHarness: () -> Unit, onOpenTrash: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -48,7 +51,10 @@ fun SettingsPlaceholderScreen(onBack: () -> Unit, onOpenFieldTestHarness: () -> 
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text("Settings are coming soon", style = MaterialTheme.typography.bodyLarge)
-            OutlinedButton(onClick = onOpenFieldTestHarness, shape = MaterialTheme.shapes.small, modifier = Modifier.padding(top = 24.dp)) {
+            OutlinedButton(onClick = onOpenTrash, shape = MaterialTheme.shapes.small, modifier = Modifier.padding(top = 24.dp)) {
+                Text("Trash")
+            }
+            OutlinedButton(onClick = onOpenFieldTestHarness, shape = MaterialTheme.shapes.small, modifier = Modifier.padding(top = 12.dp)) {
                 Text("Field test harness (internal)")
             }
         }

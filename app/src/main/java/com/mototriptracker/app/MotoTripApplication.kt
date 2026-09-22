@@ -5,6 +5,8 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.mototriptracker.app.tracking.activityrecognition.ActivityRecognitionRegistrar
+import com.mototriptracker.app.worker.TrashPurgeScheduler
+import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -31,6 +33,19 @@ class MotoTripApplication : Application() {
     @Inject lateinit var workerFactory: HiltWorkerFactory
     @Inject lateinit var activityRecognitionRegistrar: ActivityRecognitionRegistrar
 
+    /**
+     * `Lazy`, not a plain `@Inject lateinit var` like the two fields above -
+     * [TrashPurgeScheduler]'s own implementation needs a `WorkManager`
+     * instance, and Hilt resolves every eagerly-injected field during the
+     * same `super.onCreate()` call that runs *before* the
+     * `WorkManager.initialize()` line below - a plain field here would
+     * construct it too early and crash with "WorkManager is not initialized
+     * properly" (verified: this is exactly what happened on the first
+     * version of this change). `Lazy` defers construction until [get] is
+     * called, which this does only after initialization.
+     */
+    @Inject lateinit var trashPurgeScheduler: Lazy<TrashPurgeScheduler>
+
     override fun onCreate() {
         super.onCreate()
         if (!WorkManager.isInitialized()) {
@@ -40,5 +55,7 @@ class MotoTripApplication : Application() {
         // (BootReceiver handles those separately) - this is just the
         // normal-start/first-run case, same idempotent call.
         activityRecognitionRegistrar.register()
+        // TRS-001: ExistingPeriodicWorkPolicy.KEEP makes this idempotent too.
+        trashPurgeScheduler.get().schedulePeriodicPurge()
     }
 }

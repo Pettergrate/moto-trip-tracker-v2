@@ -196,4 +196,18 @@ class TripDetailViewModelTest {
         withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded && !it.isFavorite } }
         assertEquals(false, db.tripDao().findById("trip-1")?.isFavorite)
     }
+
+    @Test
+    fun onTrashSoftDeletesTheTrip() = runBlocking {
+        db.tripDao().insert(trip("trip-1", createdAt = 5_000L))
+        viewModel.load("trip-1")
+        withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded } }
+
+        viewModel.onTrash()
+
+        val trashed = db.tripDao().findById("trip-1")
+        assertEquals(TripStatus.TRASHED, trashed?.status)
+        assertEquals(clock.wallClockMillis(), trashed?.deletedAt)
+        assertEquals(clock.wallClockMillis(), trashed?.updatedAt)
+    }
 }

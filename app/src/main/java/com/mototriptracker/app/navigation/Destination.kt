@@ -25,6 +25,9 @@ sealed interface Destination {
 
     /** EXP-002: internal-only, reached from Settings - not a tab, no user-facing entry point elsewhere (EXP-001 acceptance). */
     data object FieldTestHarness : Destination
+
+    /** TRS-001/F0.9 §14: reached from Settings' "Datos" section, not a tab - trashing is infrequent, unlike Favorites. */
+    data object Trash : Destination
 }
 
 /** The three ADR-011 bottom-nav tabs, in display order. */

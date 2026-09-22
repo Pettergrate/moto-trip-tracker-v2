@@ -25,6 +25,8 @@ import com.mototriptracker.app.tracking.location.LocationGateway
 import com.mototriptracker.app.tracking.location.LocationProfileSelector
 import com.mototriptracker.app.tracking.processing.ProcessingScheduler
 import com.mototriptracker.app.tracking.processing.WorkManagerProcessingScheduler
+import com.mototriptracker.app.worker.TrashPurgeScheduler
+import com.mototriptracker.app.worker.WorkManagerTrashPurgeScheduler
 import androidx.work.WorkManager
 import dagger.Binds
 import dagger.Module
@@ -61,6 +63,9 @@ interface AppModule {
 
     @Binds
     fun bindProcessingScheduler(impl: WorkManagerProcessingScheduler): ProcessingScheduler
+
+    @Binds
+    fun bindTrashPurgeScheduler(impl: WorkManagerTrashPurgeScheduler): TrashPurgeScheduler
 
     @Binds
     fun bindCapabilityInputsProvider(impl: AndroidCapabilityInputsProvider): CapabilityInputsProvider

@@ -12,9 +12,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,7 +59,11 @@ fun TripDetailScreen(
         uiState = uiState,
         onBack = onBack,
         onRename = viewModel::onRename,
-        onToggleFavorite = viewModel::onToggleFavorite
+        onToggleFavorite = viewModel::onToggleFavorite,
+        onTrash = {
+            viewModel.onTrash()
+            onBack()
+        }
     )
 }
 
@@ -66,9 +73,12 @@ private fun TripDetailContent(
     uiState: TripDetailUiState,
     onBack: () -> Unit,
     onRename: (String) -> Unit,
-    onToggleFavorite: () -> Unit
+    onToggleFavorite: () -> Unit,
+    onTrash: () -> Unit
 ) {
     var showRenameDialog by remember { mutableStateOf(false) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
+    var showTrashDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -94,6 +104,20 @@ private fun TripDetailContent(
                         }
                         IconButton(onClick = { showRenameDialog = true }) {
                             Icon(Icons.Filled.Edit, contentDescription = "Rename")
+                        }
+                        Box {
+                            IconButton(onClick = { showOverflowMenu = true }) {
+                                Icon(Icons.Filled.MoreVert, contentDescription = "More")
+                            }
+                            DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Delete") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        showTrashDialog = true
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -147,6 +171,23 @@ private fun TripDetailContent(
                 showRenameDialog = false
             },
             onDismiss = { showRenameDialog = false }
+        )
+    }
+
+    if (showTrashDialog) {
+        AlertDialog(
+            onDismissRequest = { showTrashDialog = false },
+            title = { Text("Move this trip to Trash?") },
+            text = { Text("You can restore it from Trash within 30 days.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showTrashDialog = false
+                    onTrash()
+                }) { Text("Move to Trash") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTrashDialog = false }) { Text("Cancel") }
+            }
         )
     }
 }

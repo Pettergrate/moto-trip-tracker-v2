@@ -101,4 +101,13 @@ interface TripCaptureDao {
         insert(capture)
         return true
     }
+
+    /**
+     * TRS-001. Only ever called once nothing references [id] any more -
+     * `TripPartEntity`'s own FK to this table is `RESTRICT` (F0.7 §15), so an
+     * out-of-order call here fails loudly (a thrown constraint violation)
+     * rather than silently corrupting anything.
+     */
+    @Query("DELETE FROM trip_capture WHERE id = :id")
+    suspend fun deleteById(id: String)
 }
