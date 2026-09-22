@@ -2,8 +2,10 @@ package com.mototriptracker.app.feature.history
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mototriptracker.app.core.common.Clock
 import com.mototriptracker.app.core.database.dao.TripDao
 import com.mototriptracker.app.core.database.dao.TripStatisticsDao
+import com.mototriptracker.app.feature.common.TripSummaryUi
 import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.feature.common.formatDateTime
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 /**
  * HIS-001/F0.9 §8: HIS-01, the full chronological history (Home's own list
@@ -29,7 +32,8 @@ import kotlinx.coroutines.flow.stateIn
 @HiltViewModel
 class HistoryViewModel @Inject constructor(
     private val tripDao: TripDao,
-    private val tripStatisticsDao: TripStatisticsDao
+    private val tripStatisticsDao: TripStatisticsDao,
+    private val clock: Clock
 ) : ViewModel() {
 
     private val sortOrderFlow = MutableStateFlow(SortOrder.NEWEST_FIRST)
@@ -56,7 +60,7 @@ class HistoryViewModel @Inject constructor(
                 ) { statisticsByTrip ->
                     trips.mapIndexed { index, trip ->
                         val statistics = statisticsByTrip[index]
-                        HistoryTripUi(
+                        TripSummaryUi(
                             tripId = trip.id,
                             displayName = trip.name ?: fallbackTripName(trip.createdAt),
                             dateTimeLabel = formatDateTime(trip.createdAt),
@@ -74,6 +78,13 @@ class HistoryViewModel @Inject constructor(
         sortOrderFlow.value = when (sortOrderFlow.value) {
             SortOrder.NEWEST_FIRST -> SortOrder.OLDEST_FIRST
             SortOrder.OLDEST_FIRST -> SortOrder.NEWEST_FIRST
+        }
+    }
+
+    /** FAV-001/FR-FAV-001. */
+    fun onToggleFavorite(tripId: String, currentIsFavorite: Boolean) {
+        viewModelScope.launch {
+            tripDao.setFavorite(tripId, !currentIsFavorite, clock.wallClockMillis())
         }
     }
 

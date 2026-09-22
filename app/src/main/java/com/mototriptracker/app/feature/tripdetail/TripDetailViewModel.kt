@@ -96,6 +96,15 @@ class TripDetailViewModel @Inject constructor(
         }
     }
 
+    /** FAV-001/FR-FAV-001. */
+    fun onToggleFavorite() {
+        val tripId = tripIdFlow.value ?: return
+        val currentIsFavorite = (uiState.value as? TripDetailUiState.Loaded)?.isFavorite ?: return
+        viewModelScope.launch {
+            tripDao.setFavorite(tripId, !currentIsFavorite, clock.wallClockMillis())
+        }
+    }
+
     private companion object {
         const val STOP_TIMEOUT_MS = 5_000L
     }

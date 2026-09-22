@@ -109,4 +109,34 @@ class TripDaoTest {
 
         assertNull(dao.observeById("a").first()?.name)
     }
+
+    @Test
+    fun setFavoriteUpdatesFlagAndUpdatedAt() = runTest {
+        val dao = db.tripDao()
+        dao.insert(trip("a", createdAt = 1_000L))
+
+        dao.setFavorite("a", true, updatedAt = 5_000L)
+
+        val favorited = dao.observeById("a").first()
+        assertEquals(true, favorited?.isFavorite)
+        assertEquals(5_000L, favorited?.updatedAt)
+
+        dao.setFavorite("a", false, updatedAt = 6_000L)
+
+        assertEquals(false, dao.observeById("a").first()?.isFavorite)
+    }
+
+    @Test
+    fun observeFavoritesDescendingOnlyReturnsFavoritedCompletedTrips() = runTest {
+        val dao = db.tripDao()
+        dao.insert(trip("favorite-old", createdAt = 1_000L))
+        dao.insert(trip("favorite-new", createdAt = 2_000L))
+        dao.insert(trip("not-favorite", createdAt = 3_000L))
+        dao.setFavorite("favorite-old", true, updatedAt = 1_000L)
+        dao.setFavorite("favorite-new", true, updatedAt = 2_000L)
+
+        val ids = dao.observeFavoritesDescending().first().map { it.id }
+
+        assertEquals(listOf("favorite-new", "favorite-old"), ids)
+    }
 }

@@ -1,4 +1,4 @@
-package com.mototriptracker.app.feature.history
+package com.mototriptracker.app.feature.favorites
 
 import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.database.MotoTripDatabase
@@ -16,38 +16,27 @@ import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/**
- * HIS-001: mirrors `HomeViewModelTest`'s own regression coverage for the
- * exact reactivity bug UI-001 shipped with (`recentTripsFlow`'s one-shot
- * suspend read of `trip_statistics`) - this ViewModel was written after that
- * bug was found and fixed, but a real test proves it, rather than trusting
- * "I copied the fixed pattern" by inspection alone.
- */
+/** FAV-001: mirrors `HistoryViewModelTest`'s own reactivity coverage, filtered to favorites. */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
-class HistoryViewModelTest {
+class FavoritesViewModelTest {
 
     private lateinit var db: MotoTripDatabase
     private lateinit var clock: FakeClock
-    private lateinit var viewModel: HistoryViewModel
+    private lateinit var viewModel: FavoritesViewModel
 
     @Before
     fun setUp() {
-        // See `HomeViewModelTest`'s own KDoc for why Main only needs to exist
-        // here (for `viewModelScope` to resolve), and why waiting for real
-        // Flow emissions via `first{}`/`withTimeout` is used instead of a
-        // TestDispatcher's virtual time - Room's own Flow queries run on a
-        // real executor a virtual scheduler can't drive.
         Dispatchers.setMain(Dispatchers.Unconfined)
         db = TestDatabaseFactory.createInMemory()
         clock = FakeClock(wallMillis = 1_000L)
-        viewModel = HistoryViewModel(tripDao = db.tripDao(), tripStatisticsDao = db.tripStatisticsDao(), clock = clock)
+        viewModel = FavoritesViewModel(tripDao = db.tripDao(), tripStatisticsDao = db.tripStatisticsDao(), clock = clock)
     }
 
     @After
@@ -56,11 +45,11 @@ class HistoryViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun trip(id: String, createdAt: Long, name: String? = null) = TripEntity(
+    private fun trip(id: String, createdAt: Long, isFavorite: Boolean) = TripEntity(
         id = id,
         status = TripStatus.COMPLETED,
-        name = name,
-        isFavorite = false,
+        name = null,
+        isFavorite = isFavorite,
         motorcycleId = null,
         routeId = null,
         notes = null,
@@ -92,13 +81,18 @@ class HistoryViewModelTest {
     )
 
     @Test
-    fun reflectsStatisticsInsertedAfterTheTripAlreadyExists() = runBlocking {
-        db.tripDao().insert(trip("trip-1", createdAt = 5_000L))
+    fun onlyShowsFavoritedTrips() = runBlocking {
+        db.tripDao().insert(trip("favorite", createdAt = 2_000L, isFavorite = true))
+        db.tripDao().insert(trip("not-favorite", createdAt = 1_000L, isFavorite = false))
 
-        val before = withTimeout(5_000) {
-            viewModel.uiState.first { it.trips.isNotEmpty() }
-        }.trips.single()
-        assertNull("stats not processed yet - must be genuinely unknown, not zero", before.distanceMeters)
+        val state = withTimeout(5_000) { viewModel.uiState.first { it.trips.isNotEmpty() } }
+
+        assertEquals(listOf("favorite"), state.trips.map { it.tripId })
+    }
+
+    @Test
+    fun reflectsStatisticsInsertedAfterTheTripAlreadyExists() = runBlocking {
+        db.tripDao().insert(trip("trip-1", createdAt = 5_000L, isFavorite = true))
 
         db.tripStatisticsDao().upsert(statistics("trip-1", distanceM = 4200.0, totalDurationMs = 600_000L))
 
@@ -110,35 +104,16 @@ class HistoryViewModelTest {
     }
 
     @Test
-    fun toggleSortOrderSwitchesBetweenNewestAndOldestFirst() = runBlocking {
-        db.tripDao().insert(trip("older", createdAt = 1_000L))
-        db.tripDao().insert(trip("newer", createdAt = 2_000L))
-
-        val initial = withTimeout(5_000) { viewModel.uiState.first { it.trips.size == 2 } }
-        assertEquals(SortOrder.NEWEST_FIRST, initial.sortOrder)
-        assertEquals(listOf("newer", "older"), initial.trips.map { it.tripId })
-
-        viewModel.onToggleSortOrder()
-
-        val toggled = withTimeout(5_000) { viewModel.uiState.first { it.sortOrder == SortOrder.OLDEST_FIRST } }
-        assertEquals(listOf("older", "newer"), toggled.trips.map { it.tripId })
-    }
-
-    @Test
-    fun toggleFavoritePersistsAndReflectsBackReactively() = runBlocking {
-        db.tripDao().insert(trip("trip-1", createdAt = 1_000L))
+    fun unfavoritingRemovesTheTripFromTheListReactively() = runBlocking {
+        db.tripDao().insert(trip("trip-1", createdAt = 1_000L, isFavorite = true))
         val initial = withTimeout(5_000) { viewModel.uiState.first { it.trips.isNotEmpty() } }.trips.single()
-        assertEquals(false, initial.isFavorite)
+        assertTrue(initial.isFavorite)
 
         viewModel.onToggleFavorite(initial.tripId, initial.isFavorite)
 
-        val favorited = withTimeout(5_000) { viewModel.uiState.first { it.trips.single().isFavorite } }.trips.single()
-        assertEquals(true, favorited.isFavorite)
-        assertEquals(true, db.tripDao().findById("trip-1")!!.isFavorite)
-
-        viewModel.onToggleFavorite(favorited.tripId, favorited.isFavorite)
-
-        val unfavorited = withTimeout(5_000) { viewModel.uiState.first { !it.trips.single().isFavorite } }.trips.single()
-        assertEquals(false, unfavorited.isFavorite)
+        val after = withTimeout(5_000) { viewModel.uiState.first { it.trips.isEmpty() } }
+        assertEquals(emptyList<String>(), after.trips.map { it.tripId })
+        assertEquals(false, db.tripDao().findById("trip-1")?.isFavorite)
+        assertEquals(clock.wallClockMillis(), db.tripDao().findById("trip-1")?.updatedAt)
     }
 }

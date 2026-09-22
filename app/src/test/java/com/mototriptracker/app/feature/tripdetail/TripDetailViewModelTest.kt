@@ -175,4 +175,25 @@ class TripDetailViewModelTest {
         assertNull(db.tripDao().findById("trip-1")?.name)
         assertFalse(reverted.isUserNamed)
     }
+
+    @Test
+    fun onToggleFavoritePersistsAndReflectsBackReactively() = runBlocking {
+        db.tripDao().insert(trip("trip-1", createdAt = 5_000L).copy(isFavorite = false))
+        viewModel.load("trip-1")
+        withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded && !it.isFavorite } }
+
+        viewModel.onToggleFavorite()
+
+        val favorited = withTimeout(5_000) {
+            viewModel.uiState.first { it is TripDetailUiState.Loaded && it.isFavorite }
+        } as TripDetailUiState.Loaded
+        assertTrue(favorited.isFavorite)
+        assertEquals(true, db.tripDao().findById("trip-1")?.isFavorite)
+        assertEquals(clock.wallClockMillis(), db.tripDao().findById("trip-1")?.updatedAt)
+
+        viewModel.onToggleFavorite()
+
+        withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded && !it.isFavorite } }
+        assertEquals(false, db.tripDao().findById("trip-1")?.isFavorite)
+    }
 }

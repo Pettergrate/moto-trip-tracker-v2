@@ -34,6 +34,10 @@ interface TripDao {
     @Query("SELECT * FROM trip WHERE status = :status AND deletedAt IS NULL ORDER BY createdAt ASC")
     fun observeAllAscending(status: TripStatus = TripStatus.COMPLETED): Flow<List<TripEntity>>
 
+    /** FAV-001/FR-FAV-002: the dedicated favorites list, same ordering/filters as [observeAllDescending]. */
+    @Query("SELECT * FROM trip WHERE status = :status AND deletedAt IS NULL AND isFavorite = 1 ORDER BY createdAt DESC")
+    fun observeFavoritesDescending(status: TripStatus = TripStatus.COMPLETED): Flow<List<TripEntity>>
+
     /** HIS-001/F0.9 §9: Trip Detail observes this directly so a rename made elsewhere is reflected without a manual refresh. */
     @Query("SELECT * FROM trip WHERE id = :id")
     fun observeById(id: String): Flow<TripEntity?>
@@ -46,4 +50,8 @@ interface TripDao {
      */
     @Query("UPDATE trip SET name = :name, updatedAt = :updatedAt WHERE id = :id")
     suspend fun rename(id: String, name: String?, updatedAt: Long)
+
+    /** FAV-001/FR-FAV-001: mark/unmark a Trip as favorite - does not affect metrics/processing (domain-data-model.md). */
+    @Query("UPDATE trip SET isFavorite = :isFavorite, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setFavorite(id: String, isFavorite: Boolean, updatedAt: Long)
 }

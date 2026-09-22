@@ -1,6 +1,5 @@
 package com.mototriptracker.app.feature.history
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,8 +12,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -26,15 +23,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.mototriptracker.app.feature.common.formatDistanceKm
-import com.mototriptracker.app.feature.common.formatDurationCompact
+import com.mototriptracker.app.feature.common.TripSummaryRow
 
-/**
- * HIS-001/F0.9 §8: HIS-01. `favorite` here is a read-only indicator (the
- * `Trip.isFavorite` column already exists since FND-003) - the tap-to-toggle
- * action itself is `FR-FAV-001`'s job, a separate task from this one's own
- * Implements line (`FR-HIS-001..004`/`FR-HIS-008`).
- */
+/** HIS-001/F0.9 §8: HIS-01 (`FR-HIS-001..004`/`FR-HIS-008`). Favorite toggling is `TripSummaryRow`'s own job, shared with Favorites (`FAV-001`). */
 @Composable
 fun HistoryScreen(
     onOpenTripDetail: (String) -> Unit,
@@ -45,7 +36,8 @@ fun HistoryScreen(
     HistoryContent(
         uiState = uiState,
         onOpenTripDetail = onOpenTripDetail,
-        onToggleSortOrder = viewModel::onToggleSortOrder
+        onToggleSortOrder = viewModel::onToggleSortOrder,
+        onToggleFavorite = viewModel::onToggleFavorite
     )
 }
 
@@ -53,7 +45,8 @@ fun HistoryScreen(
 private fun HistoryContent(
     uiState: HistoryUiState,
     onOpenTripDetail: (String) -> Unit,
-    onToggleSortOrder: () -> Unit
+    onToggleSortOrder: () -> Unit,
+    onToggleFavorite: (String, Boolean) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -79,35 +72,13 @@ private fun HistoryContent(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(uiState.trips, key = { it.tripId }) { trip ->
-                    HistoryTripRow(trip, onClick = { onOpenTripDetail(trip.tripId) })
+                    TripSummaryRow(
+                        trip,
+                        onClick = { onOpenTripDetail(trip.tripId) },
+                        onToggleFavorite = { onToggleFavorite(trip.tripId, trip.isFavorite) }
+                    )
                 }
                 item { Box(modifier = Modifier.padding(bottom = 16.dp)) }
-            }
-        }
-    }
-}
-
-@Composable
-private fun HistoryTripRow(trip: HistoryTripUi, onClick: () -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(trip.displayName, style = MaterialTheme.typography.titleSmall)
-                Text(trip.dateTimeLabel, style = MaterialTheme.typography.bodySmall)
-                val distanceText = trip.distanceMeters?.let { formatDistanceKm(it) } ?: "—"
-                val durationText = trip.durationMs?.let { formatDurationCompact(it) } ?: "—"
-                Text("$distanceText · $durationText", style = MaterialTheme.typography.bodyMedium)
-            }
-            if (trip.isFavorite) {
-                Icon(
-                    Icons.Filled.Star,
-                    contentDescription = "Favorite",
-                    tint = MaterialTheme.colorScheme.primary
-                )
             }
         }
     }

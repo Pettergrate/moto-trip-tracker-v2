@@ -418,6 +418,11 @@ Post-Core work remains sequenced behind Core acceptance.
 - `MOTO-004` maintenance domain.
 - `MOTO-005` fuel domain.
 
+### Train D — Wear OS companion (deferred)
+
+- Scope reviewed 2026-09-21 (Galaxy Watch 8 target): a companion display + Start/Pause/Resume/Finish controls for the phone-owned capture already built through Wave W1/W2, reusing `TrackingSessionCoordinator`/`currentTrackingSnapshot` rather than any independent watch-side GPS or detection. No tasks broken out yet; parked at the owner's explicit request until they revisit it.
+- Sequenced no earlier than after Wave W3 (needs a stable command surface and metrics to mirror) and requires explicitly reopening **ADR-012** (single-module bootstrap) first, since a Wear module is exactly the "dependencias justifican módulos separados" trigger that ADR already names.
+
 Cloud sync, public social features, navigation and competitive speed features remain out of Core and require explicit scope/ADR review before introduction.
 
 ---

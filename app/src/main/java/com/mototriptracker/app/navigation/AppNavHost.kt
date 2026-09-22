@@ -22,7 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.ui.NavDisplay
 import com.mototriptracker.app.feature.active.ActiveTripScreen
-import com.mototriptracker.app.feature.favorites.FavoritesPlaceholderScreen
+import com.mototriptracker.app.feature.favorites.FavoritesScreen
 import com.mototriptracker.app.feature.fieldtest.FieldTestHarnessScreen
 import com.mototriptracker.app.feature.history.HistoryScreen
 import com.mototriptracker.app.feature.home.HomeScreen
@@ -96,7 +96,7 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
 
                 Destination.Favorites -> NavEntry(destination) {
                     MainTabScaffold(current = destination, onTabSelected = ::navigateToTab, onSettingsClick = ::navigateToSettings) {
-                        FavoritesPlaceholderScreen()
+                        FavoritesScreen(onOpenTripDetail = ::navigateToTripDetail)
                     }
                 }
 

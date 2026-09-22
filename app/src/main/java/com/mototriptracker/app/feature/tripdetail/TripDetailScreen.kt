@@ -52,7 +52,12 @@ fun TripDetailScreen(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(tripId) { viewModel.load(tripId) }
 
-    TripDetailContent(uiState = uiState, onBack = onBack, onRename = viewModel::onRename)
+    TripDetailContent(
+        uiState = uiState,
+        onBack = onBack,
+        onRename = viewModel::onRename,
+        onToggleFavorite = viewModel::onToggleFavorite
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,7 +65,8 @@ fun TripDetailScreen(
 private fun TripDetailContent(
     uiState: TripDetailUiState,
     onBack: () -> Unit,
-    onRename: (String) -> Unit
+    onRename: (String) -> Unit,
+    onToggleFavorite: () -> Unit
 ) {
     var showRenameDialog by remember { mutableStateOf(false) }
 
@@ -75,6 +81,17 @@ private fun TripDetailContent(
                 },
                 actions = {
                     if (uiState is TripDetailUiState.Loaded) {
+                        IconButton(onClick = onToggleFavorite) {
+                            Icon(
+                                Icons.Filled.Star,
+                                contentDescription = if (uiState.isFavorite) "Unfavorite" else "Favorite",
+                                tint = if (uiState.isFavorite) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                }
+                            )
+                        }
                         IconButton(onClick = { showRenameDialog = true }) {
                             Icon(Icons.Filled.Edit, contentDescription = "Rename")
                         }
@@ -137,12 +154,7 @@ private fun TripDetailContent(
 @Composable
 private fun HeaderSection(state: TripDetailUiState.Loaded) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(state.displayName, style = MaterialTheme.typography.headlineSmall)
-            if (state.isFavorite) {
-                Icon(Icons.Filled.Star, contentDescription = "Favorite", tint = MaterialTheme.colorScheme.primary)
-            }
-        }
+        Text(state.displayName, style = MaterialTheme.typography.headlineSmall)
         Text(state.dateTimeLabel, style = MaterialTheme.typography.bodyMedium)
     }
 }
