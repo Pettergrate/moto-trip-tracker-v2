@@ -103,6 +103,22 @@ dependencies {
     androidTestImplementation(libs.androidx.room.testing)
 }
 
+// MET-001: room-migration:2.8.5 itself declares kotlinx-serialization-json
+// 1.8.1, but something else on the same classpath brings in a
+// `{strictly 1.7.3}` kotlinx-serialization-bom constraint that wins over
+// that request during resolution - Room's own generated migration-bundle
+// serializer classes need 1.8+'s GeneratedSerializer shape, so running
+// MigrationTestHelper against the resolved 1.7.3 jar throws
+// AbstractMethodError on typeParametersSerializers() (verified by attempting
+// the real connectedAndroidTest run here). Forcing both artifacts to 1.8.1
+// is the fix - Room 2.8.5 itself is still pinned exactly per F0.8.
+configurations.all {
+    resolutionStrategy {
+        force("org.jetbrains.kotlinx:kotlinx-serialization-core:1.8.1")
+        force("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+    }
+}
+
 // FND-003: Robolectric needs these JVM module opens on JDK 17+ (verified by
 // attempting a Robolectric-backed Room test without them: it fails with
 // "cannot access class jdk.internal.access.SharedSecrets").

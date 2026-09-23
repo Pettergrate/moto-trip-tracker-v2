@@ -46,6 +46,9 @@ data class TripStatisticsEntity(
     val averageMovingSpeedMps: Double?,
     val minElevationM: Double?,
     val maxElevationM: Double?,
+    /** MET-001/FR-MET-009: schema v2 - added after the frozen F0.7 v1 field list left this out (PRC-003's own noted gap). */
+    val startElevationM: Double?,
+    val endElevationM: Double?,
     val ascentM: Double?,
     val descentM: Double?,
     val validPointCount: Int,

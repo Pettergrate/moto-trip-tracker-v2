@@ -81,7 +81,7 @@ class TripPurgerTest {
         tripId = tripId, processingVersion = TripProcessingWorker.CURRENT_PROCESSING_VERSION, computedAt = 1_000L,
         distanceM = 100.0, totalDurationMs = 1_000L, movingDurationMs = null, stoppedDurationMs = null,
         manualPauseDurationMs = 0L, maxSpeedMps = null, averageSpeedMps = null, averageMovingSpeedMps = null,
-        minElevationM = null, maxElevationM = null, ascentM = null, descentM = null,
+        minElevationM = null, maxElevationM = null, startElevationM = null, endElevationM = null, ascentM = null, descentM = null,
         validPointCount = 1, suspectPointCount = 0, rejectedPointCount = 0, gapCount = 0
     )
 

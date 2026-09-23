@@ -3,10 +3,12 @@ package com.mototriptracker.app.domain.processing
 /** One point's resolved elevation (already accuracy-filtered/MSL-preferred by the caller) plus whether it's a gap boundary, per [ElevationCalculator]'s own input contract. */
 data class ElevationSample(val elevationMeters: Double?, val isGapBoundary: Boolean)
 
-/** FR-MET-009/010's four fields - each independently nullable per F0.7 §9.3's own rule ("una métrica desconocida queda nula, no cero"). */
+/** FR-MET-009/010's six fields - each independently nullable per F0.7 §9.3's own rule ("una métrica desconocida queda nula, no cero"). */
 data class ElevationMetrics(
     val minElevationM: Double?,
     val maxElevationM: Double?,
+    val startElevationM: Double?,
+    val endElevationM: Double?,
     val ascentM: Double?,
     val descentM: Double?
 )
@@ -17,10 +19,15 @@ data class ElevationMetrics(
  * way `CandidateStopEngine`/`ForgottenPauseEngine` are tested with minimal
  * synthetic `LocationSample`s.
  *
- * [ElevationMetrics.minElevationM]/[ElevationMetrics.maxElevationM] fill as
- * soon as any valid sample exists - F0.7 §9.3's own rule only gates
- * ascent/descent ("elevation gain/loss solo se rellena si el algoritmo
- * vigente se considera suficientemente fiable"), not the simple range.
+ * [ElevationMetrics.minElevationM]/[ElevationMetrics.maxElevationM]/
+ * [ElevationMetrics.startElevationM]/[ElevationMetrics.endElevationM]
+ * (FR-MET-009's "elevation range" family) fill as soon as any valid sample
+ * exists - F0.7 §9.3's own rule only gates ascent/descent ("elevation
+ * gain/loss solo se rellena si el algoritmo vigente se considera
+ * suficientemente fiable"), not the simple range. Start/end are the first
+ * and last *valid* sample's own elevation, in the same chronological order
+ * [compute]'s caller already provides them in - not the first/last list
+ * entry regardless of whether it has a value.
  * [ElevationMetrics.ascentM]/[ElevationMetrics.descentM] additionally
  * require [ElevationProfile.minReliableSampleCount] valid samples before
  * being filled at all - noisy/unsupported altitude (too few usable
@@ -81,6 +88,8 @@ object ElevationCalculator {
         return ElevationMetrics(
             minElevationM = validElevations.minOrNull(),
             maxElevationM = validElevations.maxOrNull(),
+            startElevationM = validElevations.firstOrNull(),
+            endElevationM = validElevations.lastOrNull(),
             ascentM = if (hasEnoughSamplesForGainLoss) ascent else null,
             descentM = if (hasEnoughSamplesForGainLoss) descent else null
         )

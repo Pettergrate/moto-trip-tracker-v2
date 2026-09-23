@@ -37,10 +37,13 @@ import com.mototriptracker.app.core.database.entity.TripTagEntity
 /**
  * Room source of truth (ADR-003). Schema v1 — FND-003, covering the full
  * conceptual model from docs/03-architecture/domain-data-model.md (F0.7),
- * plus DIA-001's DiagnosticEventEntity. schemaVersion bumps and migrations
- * are a separate, later concern (F0.8 §16-17) once a v2 is actually needed
- * — still pre-release, so DIA-001 adds its table to v1 rather than forcing
- * a migration nothing yet needs.
+ * plus DIA-001's DiagnosticEventEntity - still pre-release at the time, so
+ * DIA-001 added its table to v1 rather than forcing a migration nothing yet
+ * needed. **v2 — MET-001**: `trip_statistics` gains `startElevationM`/
+ * `endElevationM` (FR-MET-009); see [MIGRATION_1_2] in `Migrations.kt` and
+ * `DatabaseModule.provideDatabase`'s `.addMigrations(...)` call - the first
+ * real migration this schema has needed, never `fallbackToDestructiveMigration()`
+ * (real user history already exists by now).
  *
  * TripCaptureDao, DiagnosticEventDao, RawTrackPointDao (TRK-002),
  * CaptureEventDao/TripDao/TripPartDao (TRK-004) and
@@ -71,7 +74,7 @@ import com.mototriptracker.app.core.database.entity.TripTagEntity
         MotorcycleEntity::class,
         DiagnosticEventEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = true
 )
 @TypeConverters(DiagnosticMetadataConverters::class)

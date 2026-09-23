@@ -23,8 +23,15 @@ sealed interface TripDetailUiState {
         val averageMovingSpeedMps: Double?,
         val minElevationM: Double?,
         val maxElevationM: Double?,
+        /** MET-001/FR-MET-009. */
+        val startElevationM: Double?,
+        val endElevationM: Double?,
         val ascentM: Double?,
         val descentM: Double?,
+        /** MET-001: null until statistics exist at all - "Calculated {date}" only shows once there's something to date. */
+        val calculatedAtLabel: String?,
+        /** MET-001: null when there's nothing real to report - see `buildDataQualityNote`. */
+        val qualityNote: String?,
         /** MAP-001: already simplified (`domain.simplifyRoute`); empty for a Trip whose processing hasn't produced points yet, which `TripRouteMap` itself renders as the honest "Map not available yet" placeholder. */
         val routePoints: List<GeoPoint> = emptyList()
     ) : TripDetailUiState

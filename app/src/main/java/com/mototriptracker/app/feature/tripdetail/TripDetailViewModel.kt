@@ -8,6 +8,7 @@ import com.mototriptracker.app.core.database.dao.TripDao
 import com.mototriptracker.app.core.database.dao.TripStatisticsDao
 import com.mototriptracker.app.domain.GeoPoint
 import com.mototriptracker.app.domain.simplifyRoute
+import com.mototriptracker.app.feature.common.buildDataQualityNote
 import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.feature.common.formatDateTime
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
@@ -74,8 +75,12 @@ class TripDetailViewModel @Inject constructor(
                         averageMovingSpeedMps = statistics?.averageMovingSpeedMps,
                         minElevationM = statistics?.minElevationM,
                         maxElevationM = statistics?.maxElevationM,
+                        startElevationM = statistics?.startElevationM,
+                        endElevationM = statistics?.endElevationM,
                         ascentM = statistics?.ascentM,
                         descentM = statistics?.descentM,
+                        calculatedAtLabel = statistics?.let { formatDateTime(it.computedAt) },
+                        qualityNote = statistics?.let { buildDataQualityNote(it.rejectedPointCount, it.gapCount) },
                         routePoints = routePoints
                     )
                 }

@@ -158,6 +158,9 @@ private fun TripDetailContent(
                     if (hasElevationData(uiState)) {
                         item { ElevationSection(uiState) }
                     }
+                    if (uiState.calculatedAtLabel != null) {
+                        item { MetaSection(uiState) }
+                    }
                 }
             }
         }
@@ -224,7 +227,9 @@ private fun TimeBreakdownSection(state: TripDetailUiState.Loaded) {
 }
 
 private fun hasElevationData(state: TripDetailUiState.Loaded): Boolean =
-    state.minElevationM != null || state.maxElevationM != null || state.ascentM != null || state.descentM != null
+    state.minElevationM != null || state.maxElevationM != null ||
+        state.startElevationM != null || state.endElevationM != null ||
+        state.ascentM != null || state.descentM != null
 
 @Composable
 private fun ElevationSection(state: TripDetailUiState.Loaded) {
@@ -233,8 +238,24 @@ private fun ElevationSection(state: TripDetailUiState.Loaded) {
             Text("Elevation", style = MaterialTheme.typography.titleMedium)
             MetricRow("Minimum", state.minElevationM?.let { formatElevationM(it) })
             MetricRow("Maximum", state.maxElevationM?.let { formatElevationM(it) })
+            MetricRow("Starting", state.startElevationM?.let { formatElevationM(it) })
+            MetricRow("Ending", state.endElevationM?.let { formatElevationM(it) })
             MetricRow("Ascent", state.ascentM?.let { formatElevationM(it) })
             MetricRow("Descent", state.descentM?.let { formatElevationM(it) })
+        }
+    }
+}
+
+@Composable
+private fun MetaSection(state: TripDetailUiState.Loaded) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            "Calculated ${state.calculatedAtLabel}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        state.qualityNote?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

@@ -2,6 +2,7 @@ package com.mototriptracker.app.core.di
 
 import android.content.Context
 import androidx.room.Room
+import com.mototriptracker.app.core.database.MIGRATION_1_2
 import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.database.dao.CaptureEventDao
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
@@ -28,8 +29,8 @@ import javax.inject.Singleton
  * needed one yet; this is that builder.
  *
  * No `fallbackToDestructiveMigration()` (F0.8/F0.10: never destructive in a
- * build with real user history) and no migrations defined yet — schema v1
- * is still pre-release, so there is nothing to migrate from.
+ * build with real user history) - `MIGRATION_1_2` (MET-001) is the real
+ * migration that policy was written for.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -40,7 +41,9 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): MotoTripDatabase =
-        Room.databaseBuilder(context, MotoTripDatabase::class.java, DATABASE_NAME).build()
+        Room.databaseBuilder(context, MotoTripDatabase::class.java, DATABASE_NAME)
+            .addMigrations(MIGRATION_1_2)
+            .build()
 
     @Provides
     fun provideTripCaptureDao(database: MotoTripDatabase): TripCaptureDao = database.tripCaptureDao()

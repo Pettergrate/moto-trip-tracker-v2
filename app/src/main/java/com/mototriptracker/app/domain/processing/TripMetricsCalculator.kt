@@ -122,6 +122,8 @@ class TripMetricsCalculator @Inject constructor() {
             averageMovingSpeedMps = null,
             minElevationM = elevationMetrics.minElevationM,
             maxElevationM = elevationMetrics.maxElevationM,
+            startElevationM = elevationMetrics.startElevationM,
+            endElevationM = elevationMetrics.endElevationM,
             ascentM = elevationMetrics.ascentM,
             descentM = elevationMetrics.descentM,
             validPointCount = processingResult.processedPoints.size,

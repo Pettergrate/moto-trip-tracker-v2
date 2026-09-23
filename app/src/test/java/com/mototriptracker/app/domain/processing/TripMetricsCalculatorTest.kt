@@ -337,6 +337,26 @@ class TripMetricsCalculatorTest {
     }
 
     @Test
+    fun startAndEndElevationComeFromTheFirstAndLastProcessedPoint() {
+        val points = listOf(processedPoint(0, 0, 10.0, -20.0), processedPoint(1, 1, 10.001, -20.001), processedPoint(2, 2, 10.002, -20.002))
+        val result = ProcessingEngine.Result(
+            assessments = points.map { assessment(it.sourceSequenceNumber!!, TrackPointDecision.ACCEPTED) },
+            processedPoints = points,
+            gaps = emptyList()
+        )
+        val rawPoints = listOf(
+            rawPoint(0, 0L, altitudeMslM = 100.0),
+            rawPoint(1, 1_000_000_000L, altitudeMslM = 110.0),
+            rawPoint(2, 2_000_000_000L, altitudeMslM = 120.0)
+        )
+
+        val stats = calculator.calculate(tripId, version, 0L, listOf(part(0L, 2_000_000_000L)), result, mapOf(captureId to rawPoints))
+
+        assertEquals(100.0, stats.startElevationM!!, 0.0001)
+        assertEquals(120.0, stats.endElevationM!!, 0.0001)
+    }
+
+    @Test
     fun elevationFallsBackToEllipsoidAltitudeWhenMslIsMissing() {
         val points = listOf(processedPoint(0, 0, 10.0, -20.0))
         val result = ProcessingEngine.Result(

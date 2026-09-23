@@ -6,6 +6,7 @@ import com.mototriptracker.app.core.database.entity.ProcessedTrackPointEntity
 import com.mototriptracker.app.core.database.entity.TripEntity
 import com.mototriptracker.app.core.database.entity.TripStatisticsEntity
 import com.mototriptracker.app.core.model.TripStatus
+import com.mototriptracker.app.feature.common.formatDateTime
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
 import kotlinx.coroutines.Dispatchers
@@ -64,10 +65,17 @@ class TripDetailViewModelTest {
         deletedAt = null
     )
 
-    private fun statistics(tripId: String) = TripStatisticsEntity(
+    private fun statistics(
+        tripId: String,
+        computedAt: Long = 1_000L,
+        startElevationM: Double? = null,
+        endElevationM: Double? = null,
+        rejectedPointCount: Int = 0,
+        gapCount: Int = 0
+    ) = TripStatisticsEntity(
         tripId = tripId,
         processingVersion = TripProcessingWorker.CURRENT_PROCESSING_VERSION,
-        computedAt = 1_000L,
+        computedAt = computedAt,
         distanceM = 5_000.0,
         totalDurationMs = 1_800_000L,
         movingDurationMs = 1_500_000L,
@@ -78,12 +86,14 @@ class TripDetailViewModelTest {
         averageMovingSpeedMps = 9.5,
         minElevationM = null,
         maxElevationM = null,
+        startElevationM = startElevationM,
+        endElevationM = endElevationM,
         ascentM = null,
         descentM = null,
         validPointCount = 100,
         suspectPointCount = 0,
-        rejectedPointCount = 0,
-        gapCount = 0
+        rejectedPointCount = rejectedPointCount,
+        gapCount = gapCount
     )
 
     @Test
@@ -103,6 +113,72 @@ class TripDetailViewModelTest {
         assertEquals(5_000.0, state.distanceMeters!!, 0.0001)
         assertEquals(1_800_000L, state.totalDurationMs)
         assertEquals(60_000L, state.manualPauseDurationMs)
+    }
+
+    @Test
+    fun loadedStateHasNoCalculatedAtLabelOrQualityNoteBeforeStatisticsExist() = runBlocking {
+        db.tripDao().insert(trip("trip-1", createdAt = 5_000L))
+
+        viewModel.load("trip-1")
+
+        val state = withTimeout(5_000) {
+            viewModel.uiState.first { it is TripDetailUiState.Loaded }
+        } as TripDetailUiState.Loaded
+        assertNull("nothing to date yet - the footer must not appear", state.calculatedAtLabel)
+        assertNull(state.qualityNote)
+    }
+
+    @Test
+    fun loadedStateExposesCalculatedAtLabelOnceStatisticsExist() = runBlocking {
+        db.tripDao().insert(trip("trip-1", createdAt = 5_000L))
+        db.tripStatisticsDao().upsert(statistics("trip-1", computedAt = 42_000L))
+
+        viewModel.load("trip-1")
+
+        val state = withTimeout(5_000) {
+            viewModel.uiState.first { it is TripDetailUiState.Loaded && it.calculatedAtLabel != null }
+        } as TripDetailUiState.Loaded
+        assertEquals(formatDateTime(42_000L), state.calculatedAtLabel)
+    }
+
+    @Test
+    fun loadedStateHasNoQualityNoteForACleanTrip() = runBlocking {
+        db.tripDao().insert(trip("trip-1", createdAt = 5_000L))
+        db.tripStatisticsDao().upsert(statistics("trip-1", rejectedPointCount = 0, gapCount = 0))
+
+        viewModel.load("trip-1")
+
+        val state = withTimeout(5_000) {
+            viewModel.uiState.first { it is TripDetailUiState.Loaded && it.calculatedAtLabel != null }
+        } as TripDetailUiState.Loaded
+        assertNull("a clean trip gets no decorative quality badge", state.qualityNote)
+    }
+
+    @Test
+    fun loadedStateShowsAQualityNoteWhenPointsWereExcludedOrGapsExist() = runBlocking {
+        db.tripDao().insert(trip("trip-1", createdAt = 5_000L))
+        db.tripStatisticsDao().upsert(statistics("trip-1", rejectedPointCount = 3, gapCount = 1))
+
+        viewModel.load("trip-1")
+
+        val state = withTimeout(5_000) {
+            viewModel.uiState.first { it is TripDetailUiState.Loaded && it.qualityNote != null }
+        } as TripDetailUiState.Loaded
+        assertEquals("3 GPS points excluded · 1 signal gap", state.qualityNote)
+    }
+
+    @Test
+    fun loadedStateExposesStartAndEndElevation() = runBlocking {
+        db.tripDao().insert(trip("trip-1", createdAt = 5_000L))
+        db.tripStatisticsDao().upsert(statistics("trip-1", startElevationM = 100.0, endElevationM = 140.0))
+
+        viewModel.load("trip-1")
+
+        val state = withTimeout(5_000) {
+            viewModel.uiState.first { it is TripDetailUiState.Loaded && it.startElevationM != null }
+        } as TripDetailUiState.Loaded
+        assertEquals(100.0, state.startElevationM!!, 0.0001)
+        assertEquals(140.0, state.endElevationM!!, 0.0001)
     }
 
     @Test

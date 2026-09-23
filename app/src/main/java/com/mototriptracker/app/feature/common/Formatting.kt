@@ -45,3 +45,23 @@ fun formatDateTime(epochMs: Long): String {
     val formatter = SimpleDateFormat("MMM d, yyyy · HH:mm", Locale.getDefault())
     return formatter.format(Date(epochMs))
 }
+
+/**
+ * MET-001: an honest note only when there's something real to report - no
+ * FR-MET requirement or UX wireframe specifies what "calidad del registro"
+ * should look like (ux-navigation.md §9.2's only trace of the concept), so
+ * this stays derived from real counters rather than a decorative badge on
+ * every clean trip. `suspectPointCount` is deliberately not one of the
+ * inputs - nothing in this codebase ever sets it to anything but 0 yet
+ * (`TripMetricsCalculator`), so it isn't real signal.
+ */
+fun buildDataQualityNote(rejectedPointCount: Int, gapCount: Int): String? {
+    val parts = mutableListOf<String>()
+    if (rejectedPointCount > 0) {
+        parts += if (rejectedPointCount == 1) "1 GPS point excluded" else "$rejectedPointCount GPS points excluded"
+    }
+    if (gapCount > 0) {
+        parts += if (gapCount == 1) "1 signal gap" else "$gapCount signal gaps"
+    }
+    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
+}

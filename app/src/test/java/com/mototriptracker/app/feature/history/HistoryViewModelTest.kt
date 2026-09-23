@@ -83,6 +83,8 @@ class HistoryViewModelTest {
         averageMovingSpeedMps = null,
         minElevationM = null,
         maxElevationM = null,
+        startElevationM = null,
+        endElevationM = null,
         ascentM = null,
         descentM = null,
         validPointCount = 0,
