@@ -18,6 +18,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -26,6 +29,8 @@ import com.mototriptracker.app.core.model.CapabilityMode
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationClock
 import com.mototriptracker.app.feature.common.formatDurationCompact
+import com.mototriptracker.app.feature.common.LocationPermissionDeniedDialog
+import com.mototriptracker.app.feature.common.rememberStartWithLocationPermission
 
 /** F0.9 §5: HOME-01. */
 @Composable
@@ -35,20 +40,30 @@ fun HomeScreen(
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    var showPermissionDeniedDialog by remember { mutableStateOf(false) }
 
     // F0.9 §17: re-check readiness whenever Home is (re)composed, so a
     // permission granted/revoked in system Settings is reflected without
     // needing a continuous poll.
     LaunchedEffect(Unit) { viewModel.refreshCapabilityMode() }
 
+    val startTripWithPermission = rememberStartWithLocationPermission(
+        onGranted = viewModel::onStartTripClick,
+        onDenied = { showPermissionDeniedDialog = true }
+    )
+
     HomeContent(
         uiState = uiState,
-        onStartTripClick = viewModel::onStartTripClick,
+        onStartTripClick = startTripWithPermission,
         onPauseClick = viewModel::onPauseClick,
         onResumeClick = viewModel::onResumeClick,
         onViewActiveTrip = onViewActiveTrip,
         onOpenTripDetail = onOpenTripDetail
     )
+
+    if (showPermissionDeniedDialog) {
+        LocationPermissionDeniedDialog(onDismiss = { showPermissionDeniedDialog = false })
+    }
 }
 
 @Composable

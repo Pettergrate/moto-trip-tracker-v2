@@ -24,13 +24,18 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.mototriptracker.app.core.model.CapabilityMode
 import com.mototriptracker.app.experiment.GroundTruthMarkerType
+import com.mototriptracker.app.feature.common.LocationPermissionDeniedDialog
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationClock
+import com.mototriptracker.app.feature.common.rememberStartWithLocationPermission
 
 /** EXP-002/F0.6 §5: not a bottom-nav destination (EXP-001 acceptance: "without becoming user-facing Core UX") - reached from Settings only. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -40,6 +45,11 @@ fun FieldTestHarnessScreen(
     viewModel: FieldTestHarnessViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    var showPermissionDeniedDialog by remember { mutableStateOf(false) }
+    val startSessionWithPermission = rememberStartWithLocationPermission(
+        onGranted = viewModel::startSession,
+        onDenied = { showPermissionDeniedDialog = true }
+    )
 
     Scaffold(
         topBar = {
@@ -62,7 +72,7 @@ fun FieldTestHarnessScreen(
                 onRouteTypeChanged = viewModel::onRouteTypeChanged,
                 onWeatherNotesChanged = viewModel::onWeatherNotesChanged,
                 onNotesChanged = viewModel::onNotesChanged,
-                onStart = viewModel::startSession
+                onStart = startSessionWithPermission
             )
 
             is FieldTestHarnessUiState.Active -> ActiveContent(
@@ -72,6 +82,10 @@ fun FieldTestHarnessScreen(
                 onStop = viewModel::stopAndExportSession
             )
         }
+    }
+
+    if (showPermissionDeniedDialog) {
+        LocationPermissionDeniedDialog(onDismiss = { showPermissionDeniedDialog = false })
     }
 }
 
