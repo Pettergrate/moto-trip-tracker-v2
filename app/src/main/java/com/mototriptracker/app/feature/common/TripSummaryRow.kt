@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Card
@@ -17,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.mototriptracker.app.domain.GeoPoint
 
 /** FAV-001/F0.9 §8.1's minimum row fields: name, date/time, distance, duration, favorite - shared by History (HIS-001) and Favorites. */
 data class TripSummaryUi(
@@ -25,7 +27,9 @@ data class TripSummaryUi(
     val dateTimeLabel: String,
     val distanceMeters: Double?,
     val durationMs: Long?,
-    val isFavorite: Boolean
+    val isFavorite: Boolean,
+    /** HIS-002: only History populates this today (a bounded, sampled preview - see `ProcessedTrackPointDao.observeSampledByTrips`); empty for Favorites' rows, which then render with no thumbnail slot at all, unchanged from before this task. */
+    val routePoints: List<GeoPoint> = emptyList()
 )
 
 /**
@@ -41,12 +45,17 @@ fun TripSummaryRow(trip: TripSummaryUi, onClick: () -> Unit, onToggleFavorite: (
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
-                Text(trip.displayName, style = MaterialTheme.typography.titleSmall)
-                Text(trip.dateTimeLabel, style = MaterialTheme.typography.bodySmall)
-                val distanceText = trip.distanceMeters?.let { formatDistanceKm(it) } ?: "—"
-                val durationText = trip.durationMs?.let { formatDurationCompact(it) } ?: "—"
-                Text("$distanceText · $durationText", style = MaterialTheme.typography.bodyMedium)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (trip.routePoints.size >= 2) {
+                    RouteThumbnail(trip.routePoints, modifier = Modifier.size(48.dp))
+                }
+                Column {
+                    Text(trip.displayName, style = MaterialTheme.typography.titleSmall)
+                    Text(trip.dateTimeLabel, style = MaterialTheme.typography.bodySmall)
+                    val distanceText = trip.distanceMeters?.let { formatDistanceKm(it) } ?: "—"
+                    val durationText = trip.durationMs?.let { formatDurationCompact(it) } ?: "—"
+                    Text("$distanceText · $durationText", style = MaterialTheme.typography.bodyMedium)
+                }
             }
             IconButton(onClick = onToggleFavorite) {
                 Icon(

@@ -47,7 +47,12 @@ class HistoryViewModelTest {
         Dispatchers.setMain(Dispatchers.Unconfined)
         db = TestDatabaseFactory.createInMemory()
         clock = FakeClock(wallMillis = 1_000L)
-        viewModel = HistoryViewModel(tripDao = db.tripDao(), tripStatisticsDao = db.tripStatisticsDao(), clock = clock)
+        viewModel = HistoryViewModel(
+            tripDao = db.tripDao(),
+            tripStatisticsDao = db.tripStatisticsDao(),
+            processedTrackPointDao = db.processedTrackPointDao(),
+            clock = clock
+        )
     }
 
     @After
@@ -112,7 +117,7 @@ class HistoryViewModelTest {
     }
 
     @Test
-    fun toggleSortOrderSwitchesBetweenNewestAndOldestFirst() = runBlocking {
+    fun selectingOldestFirstReversesTheOrder() = runBlocking {
         db.tripDao().insert(trip("older", createdAt = 1_000L))
         db.tripDao().insert(trip("newer", createdAt = 2_000L))
 
@@ -120,10 +125,77 @@ class HistoryViewModelTest {
         assertEquals(SortOrder.NEWEST_FIRST, initial.sortOrder)
         assertEquals(listOf("newer", "older"), initial.trips.map { it.tripId })
 
-        viewModel.onToggleSortOrder()
+        viewModel.onSortOrderSelected(SortOrder.OLDEST_FIRST)
 
-        val toggled = withTimeout(5_000) { viewModel.uiState.first { it.sortOrder == SortOrder.OLDEST_FIRST } }
-        assertEquals(listOf("older", "newer"), toggled.trips.map { it.tripId })
+        val sorted = withTimeout(5_000) { viewModel.uiState.first { it.sortOrder == SortOrder.OLDEST_FIRST } }
+        assertEquals(listOf("older", "newer"), sorted.trips.map { it.tripId })
+    }
+
+    @Test
+    fun selectingLongestDistanceSortsByDistanceDescendingWithUnknownLast() = runBlocking {
+        db.tripDao().insert(trip("no-stats", createdAt = 1_000L))
+        db.tripDao().insert(trip("short", createdAt = 2_000L))
+        db.tripDao().insert(trip("long", createdAt = 3_000L))
+        db.tripStatisticsDao().upsert(statistics("short", distanceM = 1_000.0, totalDurationMs = 60_000L))
+        db.tripStatisticsDao().upsert(statistics("long", distanceM = 50_000.0, totalDurationMs = 3_600_000L))
+
+        viewModel.onSortOrderSelected(SortOrder.LONGEST_DISTANCE)
+
+        val state = withTimeout(5_000) { viewModel.uiState.first { it.trips.size == 3 && it.trips.all { row -> row.tripId != "no-stats" || row.distanceMeters == null } } }
+        assertEquals(listOf("long", "short", "no-stats"), state.trips.map { it.tripId })
+    }
+
+    @Test
+    fun searchQueryFiltersByDisplayNameIncludingTheGeneratedFallback() = runBlocking {
+        db.tripDao().insert(trip("named", createdAt = 1_000L, name = "Coastal loop"))
+        db.tripDao().insert(trip("unnamed", createdAt = 2_000L))
+
+        viewModel.onSearchQueryChanged("coastal")
+
+        val state = withTimeout(5_000) { viewModel.uiState.first { it.trips.size == 1 } }
+        assertEquals(listOf("named"), state.trips.map { it.tripId })
+    }
+
+    @Test
+    fun favoritesOnlyFilterShowsOnlyFavoritedTrips() = runBlocking {
+        db.tripDao().insert(trip("plain", createdAt = 1_000L))
+        db.tripDao().insert(trip("starred", createdAt = 2_000L))
+        db.tripDao().setFavorite("starred", true, updatedAt = 2_000L)
+
+        viewModel.onFavoritesOnlyToggled()
+
+        val state = withTimeout(5_000) { viewModel.uiState.first { it.trips.size == 1 } }
+        assertEquals(listOf("starred"), state.trips.map { it.tripId })
+    }
+
+    @Test
+    fun dateFilterExcludesTripsOlderThanTheSelectedWindow() = runBlocking {
+        // A realistic epoch (unlike the shared `clock`'s 1_000L) so "start of
+        // this month" and "long ago" are genuinely different real dates -
+        // its own FakeClock/ViewModel, so the shared `viewModel` used by
+        // every other test in this class is untouched.
+        val realisticClock = FakeClock(wallMillis = 1_790_000_000_000L)
+        val startOfThisMonth = java.util.Calendar.getInstance().apply {
+            timeInMillis = realisticClock.wallClockMillis()
+            set(java.util.Calendar.DAY_OF_MONTH, 1)
+            set(java.util.Calendar.HOUR_OF_DAY, 0)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+        }.timeInMillis
+        db.tripDao().insert(trip("this-month", createdAt = startOfThisMonth + 1_000L))
+        db.tripDao().insert(trip("long-ago", createdAt = 1_000L))
+        val dateFilterViewModel = HistoryViewModel(
+            tripDao = db.tripDao(),
+            tripStatisticsDao = db.tripStatisticsDao(),
+            processedTrackPointDao = db.processedTrackPointDao(),
+            clock = realisticClock
+        )
+
+        dateFilterViewModel.onDateFilterSelected(DateFilter.THIS_MONTH)
+
+        val state = withTimeout(5_000) { dateFilterViewModel.uiState.first { it.trips.size == 1 } }
+        assertEquals(listOf("this-month"), state.trips.map { it.tripId })
     }
 
     @Test
