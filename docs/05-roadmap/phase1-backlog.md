@@ -640,6 +640,18 @@ After the fix, the full flow was verified live end-to-end on the Honor DNY-NX9: 
 
 **Two more real pilot rides, 2026-09-21 - both usable, one via a labeling equivalence worth recording.** Ride 1 (`S1-A`, ~19 min, "al gym", light rain): 1139 real points, `requestProfileId` correctly stamped `S1-A` throughout, cadence ~1.0 pt/s - a clean, textbook S1-A dataset. Ride 2: typed `S2-B` (not a real profile - the valid ones are `tracking-manual-v0`/`S1-A`/`S1-B`/`S1-C`), which correctly, safely fell back to the default (`tracking-manual-v0`) exactly as designed - 424 real points, all correctly stamped `tracking-manual-v0`, through heavy traffic ("demasiadas presas"). **This ride's data is a legitimate `S1-B` reference despite the label**: `ExperimentLocationProfiles.DEFAULT` and `.S1_B` have identical real parameters (2000ms interval, 0m min-distance, no batching) - only the `id` string differs, so the actual recorded GPS behavior is exactly what a real `S1-B` run would have produced. Worth remembering when this dataset gets used for the real S1 comparison later: ride 2 is `S1-B` data, its `session.json`/`raw-track.csv` just say `tracking-manual-v0`.
 
+**Campaign S1 pilot data collection closed, 2026-09-23 - one real ride per profile, all three now covered.** Confirmed directly against the pulled production database and the on-device exported session files (`files/field-tests/sessions/*/session.json`+`raw-track.csv`), not just the harness's own UI claim:
+
+| Profile | Route/notes | Duration | Distance | Real points | Conditions |
+|---|---|---|---|---|---|
+| `S1-A` | "en la ferretería a casa" | 1m 44s | 0.6 km | 108 | clear |
+| `S1-B` | "voy a Grecia, parada en floristería en Lindora" | 57 min | 29.9 km | 2,564 (6 gaps) | sunny |
+| `S1-C` | "a casa" | 23 min | 19.1 km | 292 | rain/cloudy |
+
+Also found, and worth recording rather than quietly discarding: a fourth, orphaned `S1-A` session (`d7fc9dc2…`, route "trabajo") from during the 2026-09-22 permission-wipe incident (`MET-001`'s own note) - its `session.json` correctly shows all three runtime permissions `false` at the time, and its `raw-track.csv` is genuinely empty (0 lines, not even a header) rather than fabricating placeholder rows - the harness recorded honest metadata for a capture that never actually started, exactly as designed.
+
+**This closes `EXP-002`/`EXP-003`'s own pilot-campaign objective** ("execute F0.6 pilot," "compare interval/min-distance/batching experiment profiles" at the S1 level) - real GPS data now exists for all three candidate intervals under real, varied riding conditions. **It does not close `EXP-008`** (the actual production-profile freeze decision, Hard gate G4): nobody has yet decided whether one real ride per profile is sufficient evidence, or whether `EXP-007`'s held-out validation campaign needs more samples/conditions per profile first before a comparison is trustworthy. That evidence-sufficiency question is recorded as still open under `EXP-008` below, not assumed either way.
+
 ### EXP-003 — Location profile campaign
 **Objective:** compare interval/min-distance/batching experiment profiles.
 
@@ -670,6 +682,8 @@ Verified: 255/255 unit tests green (11 new: `ExperimentLocationProfilesTest`, `I
 ### EXP-008 — Freeze Detector/Location Profile v1
 **Objective:** approve production defaults and version them.  
 **Hard gate:** G4. No freeze without evidence.
+
+**Open question, not yet decided (2026-09-23):** Campaign S1's pilot data collection is done (see `EXP-002`'s own entry - one real ride per `S1-A`/`S1-B`/`S1-C`), but nobody has decided whether N=1 ride per profile is sufficient evidence for this gate, or whether `EXP-007`'s held-out validation campaign needs to run more samples/conditions per profile first before a real comparison (point density, battery cost, GPS accuracy trade-off) can be trusted. This gate stays open until that's explicitly decided, not assumed satisfied by the pilot alone.
 
 ---
 
