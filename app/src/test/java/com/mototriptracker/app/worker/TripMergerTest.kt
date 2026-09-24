@@ -115,6 +115,28 @@ class TripMergerTest {
     }
 
     @Test
+    fun mergingTwoHalvesOfOneSplitOrdersThemByPositionInTheSharedCaptureNotByCaptureStartTime() = runTest {
+        // EDT-002: both halves reference the same capture, so their captures'
+        // startedAt ties - the order must come from where in that capture
+        // each half's first part begins.
+        db.tripDao().insert(trip("half-a", createdAt = 1_000L))
+        db.tripDao().insert(trip("half-b", createdAt = 2_000L))
+        db.tripCaptureDao().insert(capture("shared", startedAt = 100L))
+        db.tripPartDao().insert(part("part-a", "half-a", "shared").copy(endElapsedRealtimeNanos = 50_000_000_000L, endSequenceNumber = 4))
+        db.tripPartDao().insert(
+            part("part-b", "half-b", "shared").copy(startElapsedRealtimeNanos = 50_000_000_000L, startSequenceNumber = 5)
+        )
+
+        // Deliberately the later half first.
+        val result = merger.merge("half-b", "half-a") as TripMerger.Result.Success
+
+        val merged = db.tripPartDao().findAllByTrip(result.mergedTripId)
+        assertEquals(listOf(4L), merged.take(1).map { it.endSequenceNumber })
+        assertEquals(listOf(5L), merged.drop(1).map { it.startSequenceNumber })
+        assertEquals(listOf(0, 1), merged.map { it.orderIndex })
+    }
+
+    @Test
     fun mergeRecordsAnEditOperationAndLineageForBothInputsAndTheOutput() = runTest {
         db.tripDao().insert(trip("a", createdAt = 1_000L))
         db.tripDao().insert(trip("b", createdAt = 2_000L))

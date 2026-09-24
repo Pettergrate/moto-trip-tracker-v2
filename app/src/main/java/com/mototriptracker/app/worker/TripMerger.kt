@@ -85,7 +85,17 @@ class TripMerger @Inject constructor(
             val secondStartedAt = tripCaptureDao.findById(secondParts.first().captureId)?.startedAt
             if (firstStartedAt == null || secondStartedAt == null) return@withTransaction
 
-            val order = if (firstStartedAt <= secondStartedAt) {
+            // EDT-002: two halves of one split share a capture, so
+            // `startedAt` ties - fall back to where in that capture each
+            // Trip's first part begins (elapsedRealtime is comparable
+            // *within* one capture), then to the Trips' own createdAt.
+            val firstIsEarlier = when {
+                firstStartedAt != secondStartedAt -> firstStartedAt < secondStartedAt
+                firstParts.first().startElapsedRealtimeNanos != secondParts.first().startElapsedRealtimeNanos ->
+                    firstParts.first().startElapsedRealtimeNanos < secondParts.first().startElapsedRealtimeNanos
+                else -> first.createdAt <= second.createdAt
+            }
+            val order = if (firstIsEarlier) {
                 MergeOrder(first, firstParts, second, secondParts)
             } else {
                 MergeOrder(second, secondParts, first, firstParts)

@@ -183,6 +183,32 @@ class TripMetricsCalculatorTest {
         assertEquals(10_000L, stats.totalDurationMs)
     }
 
+    @Test
+    fun manualPauseDurationIsClippedToEachPartsOwnRangeSoTwoSplitHalvesNeverBothCountTheSamePause() {
+        // EDT-002: a split leaves two Trips sharing one capture, each part
+        // covering only its half's elapsed range. A pause 2s..8s straddles a
+        // cut at 5s - it must count 3s in each half (6s in total, exactly the
+        // pause's own length), never 6s in both.
+        val result = ProcessingEngine.Result(assessments = emptyList(), processedPoints = emptyList(), gaps = emptyList())
+        val pausesByCapture = mapOf(captureId to listOf(pause(id = "pause-1", startNanos = 2_000_000_000L, endNanos = 8_000_000_000L)))
+
+        val firstHalf = calculator.calculate(tripId, version, 0L, listOf(part(0L, 5_000_000_000L)), result, emptyMap(), pausesByCapture)
+        val secondHalf = calculator.calculate(tripId, version, 0L, listOf(part(5_000_000_000L, 10_000_000_000L)), result, emptyMap(), pausesByCapture)
+
+        assertEquals(3_000L, firstHalf.manualPauseDurationMs)
+        assertEquals(3_000L, secondHalf.manualPauseDurationMs)
+    }
+
+    @Test
+    fun aPauseEntirelyOutsideAPartsRangeDoesNotCountForThatPart() {
+        val result = ProcessingEngine.Result(assessments = emptyList(), processedPoints = emptyList(), gaps = emptyList())
+        val pausesByCapture = mapOf(captureId to listOf(pause(id = "pause-1", startNanos = 1_000_000_000L, endNanos = 2_000_000_000L)))
+
+        val secondHalf = calculator.calculate(tripId, version, 0L, listOf(part(5_000_000_000L, 10_000_000_000L)), result, emptyMap(), pausesByCapture)
+
+        assertEquals(0L, secondHalf.manualPauseDurationMs)
+    }
+
     @Test(expected = IllegalStateException::class)
     fun manualPauseDurationRejectsAnOpenPauseAsAnInconsistentState() {
         // finishCapture always closes an open pause before a Trip can exist,

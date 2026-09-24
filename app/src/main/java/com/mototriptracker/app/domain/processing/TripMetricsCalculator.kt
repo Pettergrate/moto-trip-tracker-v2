@@ -99,11 +99,23 @@ class TripMetricsCalculator @Inject constructor() {
 
         // TRK-003: every pause reaching here is already closed -
         // finishCapture closes any open one before a Trip can exist at all.
-        val manualPauseDurationMs = pausesByCapture.values.flatten().sumOf { pause ->
-            val endNanos = checkNotNull(pause.endElapsedRealtimeNanos) {
-                "ManualPauseInterval ${pause.id} has no endElapsedRealtimeNanos - finishCapture should have closed it"
+        // EDT-002: clipped to each part's own elapsed range - after a split,
+        // two Trips share one capture, and a pause belongs only to the
+        // half(s) of the ride it actually overlaps (a pause straddling the
+        // cut counts partly in each), never to both in full. For a Trip
+        // whose parts are whole captures (every Trip before EDT-001/002)
+        // this clips nothing.
+        val manualPauseDurationMs = parts.sumOf { part ->
+            val partEnd = checkNotNull(part.endElapsedRealtimeNanos) {
+                "TripPart ${part.id} has no endElapsedRealtimeNanos - metrics require a Finished Trip"
             }
-            (endNanos - pause.startElapsedRealtimeNanos) / 1_000_000
+            pausesByCapture[part.captureId].orEmpty().sumOf { pause ->
+                val pauseEnd = checkNotNull(pause.endElapsedRealtimeNanos) {
+                    "ManualPauseInterval ${pause.id} has no endElapsedRealtimeNanos - finishCapture should have closed it"
+                }
+                val overlapNanos = minOf(pauseEnd, partEnd) - maxOf(pause.startElapsedRealtimeNanos, part.startElapsedRealtimeNanos)
+                if (overlapNanos > 0) overlapNanos / 1_000_000 else 0L
+            }
         }
 
         val rejectedPointCount = processingResult.assessments.size - processingResult.processedPoints.size

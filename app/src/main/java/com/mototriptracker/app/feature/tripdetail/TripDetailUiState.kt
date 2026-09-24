@@ -39,6 +39,8 @@ sealed interface TripDetailUiState {
         val routePoints: List<GeoPoint> = emptyList(),
         /** EDT-001: null when there's no chronologically-previous/next COMPLETED Trip to offer merging with. */
         val previousTripCandidate: MergeCandidate? = null,
-        val nextTripCandidate: MergeCandidate? = null
+        val nextTripCandidate: MergeCandidate? = null,
+        /** EDT-002: enough processed points for two drawable halves (`TripSplitter.MIN_POINTS_PER_HALF` each side). */
+        val canSplit: Boolean = false
     ) : TripDetailUiState
 }

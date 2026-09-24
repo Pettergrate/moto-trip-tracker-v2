@@ -73,9 +73,14 @@ import org.maplibre.geojson.Point
  * higher-contrast marker plus an accessible info card, until the selection
  * is changed or dismissed. This is presentation-only, self-contained state -
  * nothing else in the app needs to know what's selected.
+ *
+ * EDT-002: a non-null [markerPoint] puts the map under *external* control
+ * instead - the same high-contrast marker is drawn at that exact point
+ * (Split's cut position, driven by its slider), and tap-selection plus its
+ * info card are switched off so the two can't fight over one marker.
  */
 @Composable
-fun TripRouteMap(points: List<GeoPoint>, modifier: Modifier = Modifier) {
+fun TripRouteMap(points: List<GeoPoint>, modifier: Modifier = Modifier, markerPoint: GeoPoint? = null) {
     if (points.size < 2) {
         MapUnavailablePlaceholder(modifier)
         return
@@ -104,7 +109,7 @@ fun TripRouteMap(points: List<GeoPoint>, modifier: Modifier = Modifier) {
     // Trip's screen reused the first Trip's already-drawn route until this
     // fix, even though the header/metrics above it updated correctly).
     LaunchedEffect(points, map) {
-        map?.let { configureRoute(it, points) }
+        map?.let { configureRoute(it, points, markerPoint) }
     }
 
     // Screen-pixel distance, not ground distance: a real-world meter
@@ -120,8 +125,9 @@ fun TripRouteMap(points: List<GeoPoint>, modifier: Modifier = Modifier) {
     // keyed only on `map` would close over whichever `points` list existed
     // the first time it was registered, the exact stale-closure shape the
     // `configureRoute` comment above already documents for this file.
-    DisposableEffect(points, map) {
+    DisposableEffect(points, map, markerPoint == null) {
         val currentMap = map
+        if (markerPoint != null) return@DisposableEffect onDispose { }
         val listener = MapLibreMap.OnMapClickListener { latLng ->
             val projection = currentMap?.projection
             val tapScreenPoint = projection?.toScreenLocation(latLng)
@@ -141,8 +147,8 @@ fun TripRouteMap(points: List<GeoPoint>, modifier: Modifier = Modifier) {
         onDispose { currentMap?.removeOnMapClickListener(listener) }
     }
 
-    LaunchedEffect(selectedPoint, map) {
-        map?.let { updateSelectedPointLayer(it, selectedPoint) }
+    LaunchedEffect(selectedPoint, markerPoint, map) {
+        map?.let { updateSelectedPointLayer(it, markerPoint ?: selectedPoint) }
     }
 
     DisposableEffect(lifecycleOwner, mapView) {
@@ -190,7 +196,7 @@ fun TripRouteMap(points: List<GeoPoint>, modifier: Modifier = Modifier) {
         ) {
             Text("⤢")
         }
-        selectedPoint?.let { point ->
+        selectedPoint?.takeIf { markerPoint == null }?.let { point ->
             SelectedPointCard(point = point, onDismiss = { selectedPoint = null }, modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
         }
     }
@@ -213,12 +219,12 @@ private fun SelectedPointCard(point: GeoPoint, onDismiss: () -> Unit, modifier: 
     }
 }
 
-private fun configureRoute(map: MapLibreMap, points: List<GeoPoint>) {
+private fun configureRoute(map: MapLibreMap, points: List<GeoPoint>, initialMarker: GeoPoint?) {
     val lineString = LineString.fromLngLats(points.map { Point.fromLngLat(it.longitude, it.latitude) })
     val routeSource = GeoJsonSource(SOURCE_ROUTE, Feature.fromGeometry(lineString))
     val startSource = GeoJsonSource(SOURCE_START, Feature.fromGeometry(Point.fromLngLat(points.first().longitude, points.first().latitude)))
     val endSource = GeoJsonSource(SOURCE_END, Feature.fromGeometry(Point.fromLngLat(points.last().longitude, points.last().latitude)))
-    val selectedSource = GeoJsonSource(SOURCE_SELECTED, FeatureCollection.fromFeatures(emptyList()))
+    val selectedSource = GeoJsonSource(SOURCE_SELECTED, FeatureCollection.fromFeatures(markerFeatures(initialMarker)))
 
     map.setStyle(
         Style.Builder()
@@ -270,13 +276,11 @@ private fun configureRoute(map: MapLibreMap, points: List<GeoPoint>) {
 /** MAP-002: an empty [FeatureCollection] clears the marker - `GeoJsonSource.setGeoJson` on an already-configured style is enough, no full `configureRoute` re-run needed for a selection change. */
 private fun updateSelectedPointLayer(map: MapLibreMap, selected: GeoPoint?) {
     val source = map.style?.getSourceAs<GeoJsonSource>(SOURCE_SELECTED) ?: return
-    val features = if (selected == null) {
-        emptyList()
-    } else {
-        listOf(Feature.fromGeometry(Point.fromLngLat(selected.longitude, selected.latitude)))
-    }
-    source.setGeoJson(FeatureCollection.fromFeatures(features))
+    source.setGeoJson(FeatureCollection.fromFeatures(markerFeatures(selected)))
 }
+
+private fun markerFeatures(point: GeoPoint?): List<Feature> =
+    if (point == null) emptyList() else listOf(Feature.fromGeometry(Point.fromLngLat(point.longitude, point.latitude)))
 
 /** UX contract (`ux-navigation.md` §19): the optional "Ajustar ruta" affordance, also used once on first load. */
 private fun fitCameraToRoute(map: MapLibreMap, points: List<GeoPoint>) {

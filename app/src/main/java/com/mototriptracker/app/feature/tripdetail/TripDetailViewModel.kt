@@ -13,6 +13,7 @@ import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.feature.common.formatDateTime
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
 import com.mototriptracker.app.worker.TripMerger
+import com.mototriptracker.app.worker.TripSplitter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -96,7 +97,8 @@ class TripDetailViewModel @Inject constructor(
                         qualityNote = statistics?.let { buildDataQualityNote(it.rejectedPointCount, it.gapCount) },
                         routePoints = routePoints,
                         previousTripCandidate = adjacent.previous,
-                        nextTripCandidate = adjacent.next
+                        nextTripCandidate = adjacent.next,
+                        canSplit = processedPoints.size >= 2 * TripSplitter.MIN_POINTS_PER_HALF
                     )
                 }
             }

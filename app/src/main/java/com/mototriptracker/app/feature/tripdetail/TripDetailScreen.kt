@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 fun TripDetailScreen(
     tripId: String,
     onBack: () -> Unit,
+    onSplit: (String) -> Unit,
     viewModel: TripDetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -72,7 +73,8 @@ fun TripDetailScreen(
         },
         onMergeWithNext = {
             coroutineScope.launch { if (viewModel.mergeWithNext()) onBack() }
-        }
+        },
+        onSplit = { onSplit(tripId) }
     )
 }
 
@@ -85,7 +87,8 @@ private fun TripDetailContent(
     onToggleFavorite: () -> Unit,
     onTrash: () -> Unit,
     onMergeWithPrevious: () -> Unit,
-    onMergeWithNext: () -> Unit
+    onMergeWithNext: () -> Unit,
+    onSplit: () -> Unit
 ) {
     var showRenameDialog by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
@@ -137,6 +140,15 @@ private fun TripDetailContent(
                                         onClick = {
                                             showOverflowMenu = false
                                             pendingMerge = PendingMerge(candidate, isPrevious = false)
+                                        }
+                                    )
+                                }
+                                if (uiState.canSplit) {
+                                    DropdownMenuItem(
+                                        text = { Text("Split trip") },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            onSplit()
                                         }
                                     )
                                 }

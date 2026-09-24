@@ -73,8 +73,16 @@ class TripProcessingWorker @AssistedInject constructor(
         )
 
         database.withTransaction {
-            for (sourceCaptureId in rawPointsByCapture.keys) {
-                pointAssessmentDao.deleteByCaptureAndVersion(sourceCaptureId, CURRENT_PROCESSING_VERSION)
+            // EDT-002: per part's own sequence range, not per whole capture -
+            // a split leaves two Trips sharing one capture, and each must
+            // only replace its own slice of that capture's assessments.
+            for (part in parts) {
+                pointAssessmentDao.deleteByCaptureVersionAndRange(
+                    part.captureId,
+                    CURRENT_PROCESSING_VERSION,
+                    part.startSequenceNumber ?: Long.MIN_VALUE,
+                    part.endSequenceNumber ?: Long.MAX_VALUE
+                )
             }
             processedTrackPointDao.deleteByTripAndVersion(tripId, CURRENT_PROCESSING_VERSION)
             locationGapDao.deleteByTripAndVersion(tripId, CURRENT_PROCESSING_VERSION)

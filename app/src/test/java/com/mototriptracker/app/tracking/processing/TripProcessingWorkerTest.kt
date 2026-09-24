@@ -87,7 +87,7 @@ class TripProcessingWorkerTest {
         callbackBatchId = null, detectorStateSnapshot = "TRACKING"
     )
 
-    private fun buildWorker(): TripProcessingWorker {
+    private fun buildWorker(forTripId: String = tripId): TripProcessingWorker {
         val factory = object : WorkerFactory() {
             override fun createWorker(
                 appContext: Context,
@@ -112,7 +112,7 @@ class TripProcessingWorkerTest {
             )
         }
         return TestListenableWorkerBuilder<TripProcessingWorker>(ApplicationProvider.getApplicationContext())
-            .setInputData(workDataOf(TripProcessingWorker.KEY_TRIP_ID to tripId, TripProcessingWorker.KEY_CAPTURE_ID to captureId))
+            .setInputData(workDataOf(TripProcessingWorker.KEY_TRIP_ID to forTripId, TripProcessingWorker.KEY_CAPTURE_ID to captureId))
             .setWorkerFactory(factory)
             .build()
     }
@@ -144,6 +144,48 @@ class TripProcessingWorkerTest {
         val version = TripProcessingWorker.CURRENT_PROCESSING_VERSION
         assertEquals(2, db.pointAssessmentDao().findAllByCaptureAndVersion(captureId, version).size)
         assertEquals(2, db.processedTrackPointDao().findAllByTripAndVersion(tripId, version).size)
+    }
+
+    @Test
+    fun twoTripsSharingOneCaptureEachPublishTheirOwnHalfWithoutWipingTheOthers() = runTest {
+        // EDT-002: a split leaves two Trips over one capture, disjoint
+        // sequence ranges. Processing the second must not delete the
+        // assessments the first just published for its own half.
+        for (i in 0L..3L) db.rawTrackPointDao().insert(rawPoint(i, i * 2_000_000_000L))
+        // Replace setUp's whole-capture part with this half-capture one.
+        db.openHelper.writableDatabase.execSQL("DELETE FROM trip_part WHERE id = 'part-1'")
+        db.tripPartDao().insert(
+            TripPartEntity(
+                id = "part-a", tripId = tripId, captureId = captureId, orderIndex = 0,
+                startElapsedRealtimeNanos = 0L, endElapsedRealtimeNanos = 4_000_000_000L,
+                startSequenceNumber = null, endSequenceNumber = 1
+            )
+        )
+        db.tripDao().insert(
+            TripEntity(
+                id = "trip-2", status = TripStatus.COMPLETED, name = null, isFavorite = false,
+                motorcycleId = null, routeId = null, notes = null, createdAt = 0L, updatedAt = 0L, deletedAt = null
+            )
+        )
+        db.tripPartDao().insert(
+            TripPartEntity(
+                id = "part-b", tripId = "trip-2", captureId = captureId, orderIndex = 0,
+                startElapsedRealtimeNanos = 4_000_000_000L, endElapsedRealtimeNanos = 10_000_000_000L,
+                startSequenceNumber = 2, endSequenceNumber = null
+            )
+        )
+
+        buildWorker(tripId).doWork()
+        buildWorker("trip-2").doWork()
+
+        val version = TripProcessingWorker.CURRENT_PROCESSING_VERSION
+        assertEquals(
+            "all four raw points keep an assessment - the second run only replaced its own slice",
+            listOf(0L, 1L, 2L, 3L),
+            db.pointAssessmentDao().findAllByCaptureAndVersion(captureId, version).map { it.sequenceNumber }
+        )
+        assertEquals(2, db.processedTrackPointDao().findAllByTripAndVersion(tripId, version).size)
+        assertEquals(2, db.processedTrackPointDao().findAllByTripAndVersion("trip-2", version).size)
     }
 
     @Test
