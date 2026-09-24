@@ -2,6 +2,9 @@ package com.mototriptracker.app.feature.tripdetail
 
 import com.mototriptracker.app.domain.GeoPoint
 
+/** EDT-001: a chronologically-adjacent COMPLETED Trip Trip Detail can offer to merge with - enough to label the menu item and the confirmation dialog without a second DB round-trip. */
+data class MergeCandidate(val tripId: String, val label: String)
+
 /** F0.9 §9.1: HIS-02's own state - loading/not-found are real cases (a deep link or a deleted-elsewhere Trip), not just placeholders. */
 sealed interface TripDetailUiState {
     data object Loading : TripDetailUiState
@@ -33,6 +36,9 @@ sealed interface TripDetailUiState {
         /** MET-001: null when there's nothing real to report - see `buildDataQualityNote`. */
         val qualityNote: String?,
         /** MAP-001: already simplified (`domain.simplifyRoute`); empty for a Trip whose processing hasn't produced points yet, which `TripRouteMap` itself renders as the honest "Map not available yet" placeholder. */
-        val routePoints: List<GeoPoint> = emptyList()
+        val routePoints: List<GeoPoint> = emptyList(),
+        /** EDT-001: null when there's no chronologically-previous/next COMPLETED Trip to offer merging with. */
+        val previousTripCandidate: MergeCandidate? = null,
+        val nextTripCandidate: MergeCandidate? = null
     ) : TripDetailUiState
 }

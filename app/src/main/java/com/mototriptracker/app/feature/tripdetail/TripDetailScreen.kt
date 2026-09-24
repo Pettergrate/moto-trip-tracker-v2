@@ -32,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +44,7 @@ import com.mototriptracker.app.feature.common.formatDurationCompact
 import com.mototriptracker.app.feature.common.formatElevationM
 import com.mototriptracker.app.feature.map.TripRouteMap
 import com.mototriptracker.app.feature.common.formatSpeedKmh
+import kotlinx.coroutines.launch
 
 /** F0.9 §9: HIS-02. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -53,6 +55,7 @@ fun TripDetailScreen(
     viewModel: TripDetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val coroutineScope = rememberCoroutineScope()
     LaunchedEffect(tripId) { viewModel.load(tripId) }
 
     TripDetailContent(
@@ -63,6 +66,12 @@ fun TripDetailScreen(
         onTrash = {
             viewModel.onTrash()
             onBack()
+        },
+        onMergeWithPrevious = {
+            coroutineScope.launch { if (viewModel.mergeWithPrevious()) onBack() }
+        },
+        onMergeWithNext = {
+            coroutineScope.launch { if (viewModel.mergeWithNext()) onBack() }
         }
     )
 }
@@ -74,11 +83,14 @@ private fun TripDetailContent(
     onBack: () -> Unit,
     onRename: (String) -> Unit,
     onToggleFavorite: () -> Unit,
-    onTrash: () -> Unit
+    onTrash: () -> Unit,
+    onMergeWithPrevious: () -> Unit,
+    onMergeWithNext: () -> Unit
 ) {
     var showRenameDialog by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showTrashDialog by remember { mutableStateOf(false) }
+    var pendingMerge by remember { mutableStateOf<PendingMerge?>(null) }
 
     Scaffold(
         topBar = {
@@ -110,6 +122,24 @@ private fun TripDetailContent(
                                 Icon(Icons.Filled.MoreVert, contentDescription = "More")
                             }
                             DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
+                                uiState.previousTripCandidate?.let { candidate ->
+                                    DropdownMenuItem(
+                                        text = { Text("Merge with previous (${candidate.label})") },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            pendingMerge = PendingMerge(candidate, isPrevious = true)
+                                        }
+                                    )
+                                }
+                                uiState.nextTripCandidate?.let { candidate ->
+                                    DropdownMenuItem(
+                                        text = { Text("Merge with next (${candidate.label})") },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            pendingMerge = PendingMerge(candidate, isPrevious = false)
+                                        }
+                                    )
+                                }
                                 DropdownMenuItem(
                                     text = { Text("Delete") },
                                     onClick = {
@@ -193,7 +223,26 @@ private fun TripDetailContent(
             }
         )
     }
+
+    pendingMerge?.let { merge ->
+        AlertDialog(
+            onDismissRequest = { pendingMerge = null },
+            title = { Text("Combine these two trips?") },
+            text = { Text("This trip and \"${merge.candidate.label}\" will become a single trip with combined distance and duration. The two originals will no longer appear separately.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingMerge = null
+                    if (merge.isPrevious) onMergeWithPrevious() else onMergeWithNext()
+                }) { Text("Combine") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingMerge = null }) { Text("Cancel") }
+            }
+        )
+    }
 }
+
+private data class PendingMerge(val candidate: MergeCandidate, val isPrevious: Boolean)
 
 @Composable
 private fun HeaderSection(state: TripDetailUiState.Loaded) {

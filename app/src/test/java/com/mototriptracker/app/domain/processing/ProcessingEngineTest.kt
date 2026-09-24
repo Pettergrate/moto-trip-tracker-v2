@@ -210,6 +210,54 @@ class ProcessingEngineTest {
     }
 
     @Test
+    fun aRebootBetweenTwoMergedCapturesDoesNotRejectTheSecondCaptureAsOutOfOrder() {
+        // EDT-001: capture-b's elapsedRealtimeNanos is SMALLER than capture-a's
+        // last accepted point - exactly what happens if the device rebooted
+        // between the two rides being merged (elapsedRealtime resets at
+        // boot). Comparing these two clocks directly would reject all of
+        // capture-b as "out of order"; crossing a capture boundary must skip
+        // that comparison instead.
+        val partA = part(captureId = "capture-a", orderIndex = 0)
+        val partB = part(captureId = "capture-b", orderIndex = 1)
+        val pointsA = listOf(point(captureId = "capture-a", sequenceNumber = 0, elapsedNanos = 50_000_000_000L, capturedAt = 50_000L))
+        val pointsB = listOf(point(captureId = "capture-b", sequenceNumber = 0, elapsedNanos = 1_000_000_000L, capturedAt = 500_000L))
+
+        val result = engine.process(
+            "trip-1",
+            version,
+            listOf(partA, partB),
+            mapOf("capture-a" to pointsA, "capture-b" to pointsB)
+        )
+
+        assertTrue("capture-b's point must not be rejected despite its smaller elapsedRealtimeNanos", result.assessments.all { it.decision == TrackPointDecision.ACCEPTED })
+        assertEquals(2, result.processedPoints.size)
+    }
+
+    @Test
+    fun crossingACaptureBoundaryAlwaysRecordsAGapUsingWallClockDuration() {
+        val partA = part(captureId = "capture-a", orderIndex = 0)
+        val partB = part(captureId = "capture-b", orderIndex = 1)
+        // Only 5s apart by wall clock - well under GAP_THRESHOLD_MS - but a
+        // capture boundary always counts as a real discontinuity regardless.
+        val pointsA = listOf(point(captureId = "capture-a", sequenceNumber = 0, elapsedNanos = 0L, capturedAt = 1_000L))
+        val pointsB = listOf(point(captureId = "capture-b", sequenceNumber = 0, elapsedNanos = 0L, capturedAt = 6_000L))
+
+        val result = engine.process(
+            "trip-1",
+            version,
+            listOf(partA, partB),
+            mapOf("capture-a" to pointsA, "capture-b" to pointsB)
+        )
+
+        assertEquals(1, result.gaps.size)
+        val gap = result.gaps.single()
+        assertEquals("CAPTURE_BOUNDARY", gap.reasonCode)
+        assertEquals(5_000L, gap.durationMs)
+        assertEquals("capture-a:0", gap.startSourceRef)
+        assertEquals("capture-b:0", gap.endSourceRef)
+    }
+
+    @Test
     fun aCaptureWithNoRawPointsProducesNoOutputWithoutCrashing() {
         val result = engine.process("trip-1", version, listOf(part()), mapOf("capture-1" to emptyList()))
 

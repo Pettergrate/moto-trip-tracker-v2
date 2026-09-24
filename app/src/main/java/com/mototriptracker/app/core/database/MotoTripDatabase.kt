@@ -12,6 +12,8 @@ import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.database.dao.TripDao
+import com.mototriptracker.app.core.database.dao.TripEditOperationDao
+import com.mototriptracker.app.core.database.dao.TripLineageLinkDao
 import com.mototriptracker.app.core.database.dao.TripPartDao
 import com.mototriptracker.app.core.database.dao.TripStatisticsDao
 import com.mototriptracker.app.core.database.entity.CaptureEventEntity
@@ -85,6 +87,8 @@ abstract class MotoTripDatabase : RoomDatabase() {
     abstract fun captureEventDao(): CaptureEventDao
     abstract fun tripDao(): TripDao
     abstract fun tripPartDao(): TripPartDao
+    abstract fun tripEditOperationDao(): TripEditOperationDao
+    abstract fun tripLineageLinkDao(): TripLineageLinkDao
     abstract fun pointAssessmentDao(): PointAssessmentDao
     abstract fun processedTrackPointDao(): ProcessedTrackPointDao
     abstract fun locationGapDao(): LocationGapDao

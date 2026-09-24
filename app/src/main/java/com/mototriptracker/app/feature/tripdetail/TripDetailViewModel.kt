@@ -12,6 +12,7 @@ import com.mototriptracker.app.feature.common.buildDataQualityNote
 import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.feature.common.formatDateTime
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
+import com.mototriptracker.app.worker.TripMerger
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -38,10 +39,21 @@ class TripDetailViewModel @Inject constructor(
     private val tripDao: TripDao,
     private val tripStatisticsDao: TripStatisticsDao,
     private val processedTrackPointDao: ProcessedTrackPointDao,
+    private val tripMerger: TripMerger,
     private val clock: Clock
 ) : ViewModel() {
 
     private val tripIdFlow = MutableStateFlow<String?>(null)
+
+    /**
+     * EDT-001: a one-shot suspend lookup rather than a third reactive Flow -
+     * adjacency depends on *other* Trips' rows, which [tripDao.observeById]
+     * won't react to, and staleness here (another Trip changing status while
+     * this exact screen is open) is an acceptable, low-likelihood edge case
+     * in a single-user app, the same tradeoff [onRename]/[onTrash] already
+     * make by being one-shot suspend calls rather than Flows.
+     */
+    private val adjacentTripsFlow = MutableStateFlow(AdjacentTrips(null, null))
 
     val uiState: StateFlow<TripDetailUiState> = tripIdFlow.flatMapLatest { tripId ->
         if (tripId == null) {
@@ -50,8 +62,9 @@ class TripDetailViewModel @Inject constructor(
             combine(
                 tripDao.observeById(tripId),
                 tripStatisticsDao.observeByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION),
-                processedTrackPointDao.observeAllByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION)
-            ) { trip, statistics, processedPoints ->
+                processedTrackPointDao.observeAllByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION),
+                adjacentTripsFlow
+            ) { trip, statistics, processedPoints, adjacent ->
                 if (trip == null) {
                     TripDetailUiState.NotFound
                 } else {
@@ -81,7 +94,9 @@ class TripDetailViewModel @Inject constructor(
                         descentM = statistics?.descentM,
                         calculatedAtLabel = statistics?.let { formatDateTime(it.computedAt) },
                         qualityNote = statistics?.let { buildDataQualityNote(it.rejectedPointCount, it.gapCount) },
-                        routePoints = routePoints
+                        routePoints = routePoints,
+                        previousTripCandidate = adjacent.previous,
+                        nextTripCandidate = adjacent.next
                     )
                 }
             }
@@ -90,6 +105,15 @@ class TripDetailViewModel @Inject constructor(
 
     fun load(tripId: String) {
         tripIdFlow.value = tripId
+        viewModelScope.launch {
+            val trip = tripDao.findById(tripId) ?: return@launch
+            val previous = tripDao.findPreviousCompleted(trip.createdAt)
+            val next = tripDao.findNextCompleted(trip.createdAt)
+            adjacentTripsFlow.value = AdjacentTrips(
+                previous = previous?.let { candidate -> MergeCandidate(candidate.id, candidate.name ?: fallbackTripName(candidate.createdAt)) },
+                next = next?.let { candidate -> MergeCandidate(candidate.id, candidate.name ?: fallbackTripName(candidate.createdAt)) }
+            )
+        }
     }
 
     /** FR-HIS-004. A blank [newName] reverts to the generated fallback rather than persisting an empty string. */
@@ -117,6 +141,27 @@ class TripDetailViewModel @Inject constructor(
             tripDao.trash(tripId, deletedAt = clock.wallClockMillis(), updatedAt = clock.wallClockMillis())
         }
     }
+
+    /**
+     * EDT-001. Unlike [onTrash], this is a suspend function the caller
+     * awaits rather than fire-and-forget: [TripMerger] can genuinely fail
+     * its precondition check (ADR-015), and navigating back as if it
+     * succeeded when it didn't would silently hide that from the user. The
+     * caller (the Screen's own coroutine scope) only navigates back when
+     * this returns true.
+     */
+    suspend fun mergeWithPrevious(): Boolean = mergeWithAdjacent(previousOrNext = true)
+
+    suspend fun mergeWithNext(): Boolean = mergeWithAdjacent(previousOrNext = false)
+
+    private suspend fun mergeWithAdjacent(previousOrNext: Boolean): Boolean {
+        val tripId = tripIdFlow.value ?: return false
+        val candidate = if (previousOrNext) adjacentTripsFlow.value.previous else adjacentTripsFlow.value.next
+        val otherTripId = candidate?.tripId ?: return false
+        return tripMerger.merge(tripId, otherTripId) is TripMerger.Result.Success
+    }
+
+    private data class AdjacentTrips(val previous: MergeCandidate?, val next: MergeCandidate?)
 
     private companion object {
         const val STOP_TIMEOUT_MS = 5_000L

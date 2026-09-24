@@ -79,4 +79,22 @@ interface TripDao {
     /** TRS-001: physical delete - cascades to this Trip's own TripPart/TripStatistics/ProcessedTrackPoint/etc. rows (see their FKs), never to RawTrackPoint (ADR-006, keyed off captureId only). */
     @Query("DELETE FROM trip WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    /** EDT-001: the chronologically-previous COMPLETED, non-trashed Trip - Trip Detail's "Merge with previous" candidate. Excludes SUPERSEDED Trips by construction (only ever COMPLETED is queried). */
+    @Query("SELECT * FROM trip WHERE status = :status AND deletedAt IS NULL AND createdAt < :createdAt ORDER BY createdAt DESC LIMIT 1")
+    suspend fun findPreviousCompleted(createdAt: Long, status: TripStatus = TripStatus.COMPLETED): TripEntity?
+
+    /** EDT-001: the chronologically-next COMPLETED, non-trashed Trip - Trip Detail's "Merge with next" candidate. */
+    @Query("SELECT * FROM trip WHERE status = :status AND deletedAt IS NULL AND createdAt > :createdAt ORDER BY createdAt ASC LIMIT 1")
+    suspend fun findNextCompleted(createdAt: Long, status: TripStatus = TripStatus.COMPLETED): TripEntity?
+
+    /**
+     * EDT-001/domain-data-model.md §8.3: marks a merge/split input Trip
+     * SUPERSEDED rather than deleting it - its own rows (including its
+     * TripParts) stay intact for a future undo, and it simply disappears
+     * from every existing list query, all of which already filter to
+     * `status = COMPLETED` (no new WHERE clause needed anywhere else).
+     */
+    @Query("UPDATE trip SET status = :newStatus, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun markSuperseded(id: String, updatedAt: Long, newStatus: TripStatus = TripStatus.SUPERSEDED)
 }

@@ -1,14 +1,24 @@
 package com.mototriptracker.app.feature.tripdetail
 
 import com.mototriptracker.app.core.common.FakeClock
+import com.mototriptracker.app.core.common.FakeIdGenerator
 import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.database.entity.ProcessedTrackPointEntity
+import com.mototriptracker.app.core.database.entity.TripCaptureEntity
 import com.mototriptracker.app.core.database.entity.TripEntity
+import com.mototriptracker.app.core.database.entity.TripPartEntity
 import com.mototriptracker.app.core.database.entity.TripStatisticsEntity
+import com.mototriptracker.app.core.model.CaptureStatus
+import com.mototriptracker.app.core.model.DetectorVersion
+import com.mototriptracker.app.core.model.LocationProfileVersion
+import com.mototriptracker.app.core.model.StartSource
 import com.mototriptracker.app.core.model.TripStatus
+import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.feature.common.formatDateTime
+import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
+import com.mototriptracker.app.worker.TripMerger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -32,16 +42,30 @@ class TripDetailViewModelTest {
 
     private lateinit var db: MotoTripDatabase
     private lateinit var viewModel: TripDetailViewModel
+    private lateinit var processingScheduler: FakeProcessingScheduler
     private val clock = FakeClock(wallMillis = 10_000L, elapsedNanos = 10_000L)
 
     @Before
     fun setUp() {
         Dispatchers.setMain(Dispatchers.Unconfined)
         db = TestDatabaseFactory.createInMemory()
+        processingScheduler = FakeProcessingScheduler()
+        val tripMerger = TripMerger(
+            database = db,
+            tripDao = db.tripDao(),
+            tripPartDao = db.tripPartDao(),
+            tripCaptureDao = db.tripCaptureDao(),
+            tripEditOperationDao = db.tripEditOperationDao(),
+            tripLineageLinkDao = db.tripLineageLinkDao(),
+            processingScheduler = processingScheduler,
+            clock = clock,
+            idGenerator = FakeIdGenerator("merge")
+        )
         viewModel = TripDetailViewModel(
             tripDao = db.tripDao(),
             tripStatisticsDao = db.tripStatisticsDao(),
             processedTrackPointDao = db.processedTrackPointDao(),
+            tripMerger = tripMerger,
             clock = clock
         )
     }
@@ -271,6 +295,81 @@ class TripDetailViewModelTest {
 
         withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded && !it.isFavorite } }
         assertEquals(false, db.tripDao().findById("trip-1")?.isFavorite)
+    }
+
+    private fun capture(id: String, startedAt: Long) = TripCaptureEntity(
+        id = id, status = CaptureStatus.COMPLETED, startedAt = startedAt, endedAt = startedAt + 1_000L,
+        startElapsedRealtimeNanos = 0L, endElapsedRealtimeNanos = 1_000_000_000L, localTimeZoneId = "UTC",
+        startSource = StartSource.MANUAL, endSource = null,
+        detectorVersion = DetectorVersion(0), locationProfileVersion = LocationProfileVersion(0),
+        createdAt = startedAt, updatedAt = startedAt
+    )
+
+    private fun part(id: String, tripId: String, captureId: String) = TripPartEntity(
+        id = id, tripId = tripId, captureId = captureId, orderIndex = 0,
+        startElapsedRealtimeNanos = 0L, endElapsedRealtimeNanos = 1_000_000_000L,
+        startSequenceNumber = null, endSequenceNumber = null
+    )
+
+    @Test
+    fun loadedStateExposesAdjacentTripsAsMergeCandidates() = runBlocking {
+        db.tripDao().insert(trip("previous", createdAt = 1_000L, name = "Coastal loop"))
+        db.tripDao().insert(trip("current", createdAt = 2_000L))
+        db.tripDao().insert(trip("next", createdAt = 3_000L))
+
+        viewModel.load("current")
+
+        val state = withTimeout(5_000) {
+            viewModel.uiState.first { it is TripDetailUiState.Loaded && it.previousTripCandidate != null && it.nextTripCandidate != null }
+        } as TripDetailUiState.Loaded
+        assertEquals("previous", state.previousTripCandidate?.tripId)
+        assertEquals("Coastal loop", state.previousTripCandidate?.label)
+        assertEquals("next", state.nextTripCandidate?.tripId)
+        assertEquals(fallbackTripName(3_000L), state.nextTripCandidate?.label)
+    }
+
+    @Test
+    fun loadedStateHasNoMergeCandidatesWhenNoAdjacentTripExists() = runBlocking {
+        db.tripDao().insert(trip("only-trip", createdAt = 5_000L))
+
+        viewModel.load("only-trip")
+
+        val state = withTimeout(5_000) {
+            viewModel.uiState.first { it is TripDetailUiState.Loaded }
+        } as TripDetailUiState.Loaded
+        assertNull(state.previousTripCandidate)
+        assertNull(state.nextTripCandidate)
+    }
+
+    @Test
+    fun mergeWithPreviousCreatesANewTripAndSupersedesBoth() = runBlocking {
+        db.tripDao().insert(trip("earlier", createdAt = 1_000L))
+        db.tripDao().insert(trip("current", createdAt = 2_000L))
+        db.tripCaptureDao().insert(capture("cap-earlier", startedAt = 100L))
+        db.tripCaptureDao().insert(capture("cap-current", startedAt = 200L))
+        db.tripPartDao().insert(part("part-earlier", "earlier", "cap-earlier"))
+        db.tripPartDao().insert(part("part-current", "current", "cap-current"))
+        viewModel.load("current")
+        withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded && it.previousTripCandidate != null } }
+
+        val success = viewModel.mergeWithPrevious()
+
+        assertTrue(success)
+        assertEquals(TripStatus.SUPERSEDED, db.tripDao().findById("earlier")?.status)
+        assertEquals(TripStatus.SUPERSEDED, db.tripDao().findById("current")?.status)
+        assertEquals(1, processingScheduler.enqueuedRequests.size)
+    }
+
+    @Test
+    fun mergeWithPreviousReturnsFalseWhenThereIsNoPreviousCandidate() = runBlocking {
+        db.tripDao().insert(trip("only-trip", createdAt = 5_000L))
+        viewModel.load("only-trip")
+        withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded } }
+
+        val success = viewModel.mergeWithPrevious()
+
+        assertFalse(success)
+        assertEquals(TripStatus.COMPLETED, db.tripDao().findById("only-trip")?.status)
     }
 
     @Test

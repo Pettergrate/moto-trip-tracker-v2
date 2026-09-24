@@ -11,6 +11,10 @@ interface TripPartDao {
     @Insert
     suspend fun insert(part: TripPartEntity)
 
+    /** EDT-001: bulk-inserts a merged Trip's copied TripParts in one call rather than one `insert` per row. */
+    @Insert
+    suspend fun insertAll(parts: List<TripPartEntity>)
+
     /**
      * ADR-005: a TripPart is what links a captureId to its owning Trip. Used
      * both to build TRK-004's initial part and, on an idempotent Finish

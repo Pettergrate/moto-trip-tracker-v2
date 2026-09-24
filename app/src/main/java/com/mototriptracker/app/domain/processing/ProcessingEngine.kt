@@ -61,7 +61,21 @@ class ProcessingEngine @Inject constructor(
             }
 
             for (point in pointsInPart) {
-                val (decision, reasonCode) = assess(point, lastAccepted)
+                // EDT-001: elapsedRealtimeNanos is only comparable within one
+                // boot session (F0.5 GPS-004) - a merged Trip's parts can
+                // come from two genuinely separate capture sessions, so an
+                // out-of-order/duplicate check across that boundary would be
+                // comparing incomparable clocks (worst case: a reboot between
+                // the two rides makes the second capture's values smaller,
+                // rejecting all of it as "out of order"). Skip that check
+                // exactly at a capture change; each capture's own points are
+                // still guaranteed ordered by the DAO.
+                val crossesCaptureBoundary = lastAccepted != null && lastAccepted.captureId != point.captureId
+                val (decision, reasonCode) = if (crossesCaptureBoundary) {
+                    TrackPointDecision.ACCEPTED to REASON_ACCEPTED
+                } else {
+                    assess(point, lastAccepted)
+                }
                 assessments += PointAssessmentEntity(
                     captureId = point.captureId,
                     sequenceNumber = point.sequenceNumber,
@@ -72,7 +86,11 @@ class ProcessingEngine @Inject constructor(
                 if (decision != TrackPointDecision.ACCEPTED) continue
 
                 val previous = lastAccepted
-                val gap = if (previous != null) detectGap(tripId, processingVersion, previous, point) else null
+                val gap = when {
+                    previous == null -> null
+                    crossesCaptureBoundary -> detectCrossCaptureGap(tripId, processingVersion, previous, point)
+                    else -> detectGap(tripId, processingVersion, previous, point)
+                }
                 if (gap != null) gaps += gap
 
                 processedPoints += ProcessedTrackPointEntity(
@@ -125,6 +143,36 @@ class ProcessingEngine @Inject constructor(
         )
     }
 
+    /**
+     * EDT-001: unlike [detectGap], this always records the discontinuity
+     * regardless of duration - crossing into a different capture means
+     * recording itself stopped and restarted (a Finish then a later Start),
+     * not an ordinary GPS dropout mid-recording, so there is always a real
+     * gap in evidence to disclose. Duration comes from wall-clock
+     * [RawTrackPointEntity.capturedAt], the only clock comparable across two
+     * separate capture sessions - `elapsedRealtimeNanos` is not (see the
+     * caller's own comment).
+     */
+    private fun detectCrossCaptureGap(
+        tripId: String,
+        processingVersion: ProcessingVersion,
+        previous: RawTrackPointEntity,
+        current: RawTrackPointEntity
+    ): LocationGapEntity {
+        val elapsedMs = (current.capturedAt - previous.capturedAt).coerceAtLeast(0L)
+        return LocationGapEntity(
+            id = idGenerator.newId(),
+            tripId = tripId,
+            processingVersion = processingVersion,
+            startedAt = previous.capturedAt,
+            endedAt = current.capturedAt,
+            startSourceRef = "${previous.captureId}:${previous.sequenceNumber}",
+            endSourceRef = "${current.captureId}:${current.sequenceNumber}",
+            durationMs = elapsedMs,
+            reasonCode = REASON_CAPTURE_BOUNDARY
+        )
+    }
+
     companion object {
         /**
          * F0.5 §8.3's own hypothesis interval for TRACKING is 1-2s; a gap
@@ -139,6 +187,7 @@ class ProcessingEngine @Inject constructor(
         const val REASON_OUT_OF_ORDER = "REJECTED_OUT_OF_ORDER"
         const val REASON_DUPLICATE = "REJECTED_DUPLICATE"
         const val REASON_GAP_NO_FIX = "GAP_NO_FIX"
+        const val REASON_CAPTURE_BOUNDARY = "CAPTURE_BOUNDARY"
         const val POINT_ROLE_GAP_BOUNDARY = "GAP_BOUNDARY"
     }
 }
