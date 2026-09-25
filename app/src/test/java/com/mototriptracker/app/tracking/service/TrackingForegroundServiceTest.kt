@@ -68,6 +68,13 @@ class TrackingForegroundServiceTest {
     @Before
     fun setUp() {
         db = TestDatabaseFactory.createInMemory()
+        // REC-002: a sticky restart now validates the location permission first, and
+        // Robolectric denies dangerous permissions by default - grant it so the
+        // pre-existing restart tests keep modelling a healthy device.
+        shadowOf(ApplicationProvider.getApplicationContext<android.app.Application>()).grantPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION
+        )
     }
 
     @After
@@ -238,6 +245,73 @@ class TrackingForegroundServiceTest {
         assertEquals(CaptureStatus.ABORTED, capture.status)
         assertEquals(EndSource.RECOVERY, capture.endSource)
         assertEquals(null, db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE))
+    }
+
+    private fun revokeLocationPermission() {
+        shadowOf(ApplicationProvider.getApplicationContext<android.app.Application>()).denyPermissions(
+            android.Manifest.permission.ACCESS_FINE_LOCATION,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+    }
+
+    /** REC-002/F0.10 §7.3: the restart used to crash with SecurityException in startForeground once the permission was gone. */
+    @Test
+    fun stickyRestartWithoutLocationPermissionDeclaresDegradedInsteadOfCrashingOrFakingARecording() = runBlocking {
+        val firstController = buildServiceController()
+        firstController.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        firstController.get().lastCommandJob?.join()
+        val captureId = requireNotNull(db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE)).id
+        revokeLocationPermission()
+
+        val restartedController = buildServiceController(
+            locationSamples = listOf(LocationSample(2_000L, 9_000L, 9_000L, 1.0, 2.0, 5.0f, requestProfileId = "test-profile"))
+        )
+        restartedController.withIntent(null).startCommand(0, 0)
+        restartedController.get().lastCommandJob?.join()
+
+        assertTrue("nothing to keep in the foreground", shadowOf(restartedController.get()).isStoppedBySelf)
+        assertNull("no location recording was started", restartedController.get().locationRecordingJob)
+        assertEquals("no point may be fabricated or recorded without the permission", 0, db.rawTrackPointDao().findAllByCapture(captureId).size)
+        assertEquals("the evidence and the capture stay for the user/reconciliation to decide", CaptureStatus.ACTIVE, db.tripCaptureDao().findById(captureId)?.status)
+        val events = db.diagnosticEventDao().findAll().filter { it.eventType == TrackingSessionCoordinator.EVENT_RECOVERY_DEGRADED }
+        assertEquals(1, events.size)
+        assertEquals(captureId, events.single().captureId)
+        assertEquals(TrackingForegroundService.REASON_LOCATION_PERMISSION_MISSING, events.single().reasonCode)
+        val manager = ApplicationProvider.getApplicationContext<android.content.Context>().getSystemService(NotificationManager::class.java)
+        assertNotNull(
+            "an honest not-recording alert, not the tracking notification",
+            (shadowOf(manager) as ShadowNotificationManager).getNotification(TrackingNotificationController.REMINDER_NOTIFICATION_ID)
+        )
+    }
+
+    @Test
+    fun repeatedRestartsWithoutPermissionRecordTheDegradedDecisionOnlyOnce() = runBlocking {
+        val firstController = buildServiceController()
+        firstController.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext()))
+            .startCommand(0, 0)
+        firstController.get().lastCommandJob?.join()
+        revokeLocationPermission()
+
+        repeat(3) {
+            val controller = buildServiceController()
+            controller.withIntent(null).startCommand(0, 0)
+            controller.get().lastCommandJob?.join()
+        }
+
+        assertEquals(1, db.diagnosticEventDao().findAll().count { it.eventType == TrackingSessionCoordinator.EVENT_RECOVERY_DEGRADED })
+    }
+
+    @Test
+    fun stickyRestartWithoutPermissionAndNoActiveCaptureJustStopsQuietly() = runBlocking {
+        revokeLocationPermission()
+        val controller = buildServiceController()
+
+        controller.withIntent(null).startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+
+        assertTrue(shadowOf(controller.get()).isStoppedBySelf)
+        assertEquals(0, db.diagnosticEventDao().findAll().count { it.eventType == TrackingSessionCoordinator.EVENT_RECOVERY_DEGRADED })
     }
 
     @Test

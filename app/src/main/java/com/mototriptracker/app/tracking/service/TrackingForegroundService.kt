@@ -1,10 +1,14 @@
 package com.mototriptracker.app.tracking.service
 
+import android.Manifest
+import android.app.Notification
 import android.app.Service
+import android.content.pm.PackageManager
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.mototriptracker.app.core.common.DispatcherProvider
 import com.mototriptracker.app.core.notification.TrackingNotificationController
 import com.mototriptracker.app.core.notification.TrackingNotificationController.Companion.NOTIFICATION_ID
@@ -140,14 +144,35 @@ class TrackingForegroundService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val initialNotification = if (intent?.action == ACTION_AUTO_DETECT) {
+        val action = intent?.action
+
+        // REC-002/F0.10 §7.3: a restart with no command (sticky / `Intent == null`)
+        // must validate before rehydrating. Entering the foreground with the
+        // location type while the permission is gone throws `SecurityException` -
+        // the exact crash a revoked permission used to cause here. Declare the
+        // recording degraded instead of faking a healthy one, and don't ask to be
+        // restarted again (that would just loop).
+        if (action !in COMMAND_ACTIONS && !hasLocationPermission()) {
+            lastCommandJob = serviceScope.launch { handleRestartWithoutLocationPermission() }
+            return START_NOT_STICKY
+        }
+
+        val initialNotification = if (action == ACTION_AUTO_DETECT) {
             notificationController.buildValidatingCandidateNotification()
         } else {
             notificationController.buildTrackingNotification()
         }
-        startForeground(NOTIFICATION_ID, initialNotification)
+        // Even with the permission present the platform can still refuse the
+        // foreground (e.g. revoked between the check and this call). A Finish
+        // only touches Room, so it still runs - the user can always close their
+        // trip; every other command needs a live foreground service to mean
+        // anything, so it stops.
+        if (!tryStartForeground(initialNotification) && action != ACTION_FINISH) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
 
-        lastCommandJob = when (intent?.action) {
+        lastCommandJob = when (action) {
             ACTION_START -> serviceScope.launch {
                 val result = coordinator.startManualCapture()
                 lastStartResult = result
@@ -171,6 +196,26 @@ class TrackingForegroundService : Service() {
         }
 
         return START_STICKY
+    }
+
+    private fun hasLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    /** `false` if the platform refused the foreground (see [onStartCommand]); never throws. */
+    private fun tryStartForeground(notification: Notification): Boolean = try {
+        startForeground(NOTIFICATION_ID, notification)
+        true
+    } catch (refused: RuntimeException) {
+        Log.w(TAG, "startForeground refused", refused)
+        false
+    }
+
+    private suspend fun handleRestartWithoutLocationPermission() {
+        if (coordinator.markRecoveryDegraded(REASON_LOCATION_PERMISSION_MISSING) != null) {
+            notificationController.postRecoveryDegradedAlert()
+        }
+        stopSelf()
     }
 
     /**
@@ -316,6 +361,8 @@ class TrackingForegroundService : Service() {
         const val ACTION_PAUSE = "com.mototriptracker.app.action.PAUSE_TRACKING"
         const val ACTION_RESUME = "com.mototriptracker.app.action.RESUME_TRACKING"
         const val ACTION_AUTO_DETECT = "com.mototriptracker.app.action.AUTO_DETECT"
+        private val COMMAND_ACTIONS = setOf(ACTION_START, ACTION_FINISH, ACTION_PAUSE, ACTION_RESUME, ACTION_AUTO_DETECT)
+        const val REASON_LOCATION_PERMISSION_MISSING = "LOCATION_PERMISSION_MISSING"
 
         fun createStartIntent(context: Context): Intent =
             Intent(context, TrackingForegroundService::class.java).setAction(ACTION_START)

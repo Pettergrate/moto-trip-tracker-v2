@@ -22,6 +22,10 @@ interface DiagnosticEventDao {
     @Query("SELECT COUNT(*) FROM diagnostic_event")
     suspend fun count(): Int
 
+    /** REC-002: lets a recovery decision be recorded once per capture (F0.10 §25 step 8: "emitir evento diagnóstico una sola vez"). */
+    @Query("SELECT COUNT(*) FROM diagnostic_event WHERE captureId = :captureId AND eventType = :eventType")
+    suspend fun countByCaptureAndType(captureId: String, eventType: String): Int
+
     @Query("SELECT * FROM diagnostic_event")
     suspend fun findAll(): List<DiagnosticEventEntity>
 }

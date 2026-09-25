@@ -174,6 +174,27 @@ class TrackingNotificationController @Inject constructor(
         NotificationManagerCompat.from(context).notify(REMINDER_NOTIFICATION_ID, notification)
     }
 
+    /**
+     * REC-002: the honest "not recording" signal when a restarted service can't
+     * re-enter the foreground (location permission removed) - a plain alert on
+     * the reminder channel, *not* the tracking notification, which would claim a
+     * healthy recording that isn't happening (F0.10 §7.3: "no fingir tracking
+     * sano"). Shares [REMINDER_NOTIFICATION_ID]: safe no-op without
+     * `POST_NOTIFICATIONS`, like the reminders above.
+     */
+    fun postRecoveryDegradedAlert() {
+        ensureReminderChannel()
+        val notification = NotificationCompat.Builder(context, REMINDER_CHANNEL_ID)
+            .setContentTitle(context.getString(R.string.recovery_degraded_title))
+            .setContentText(context.getString(R.string.recovery_degraded_text))
+            .setContentIntent(buildOpenActiveTripPendingIntent())
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(context).notify(REMINDER_NOTIFICATION_ID, notification)
+    }
+
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return

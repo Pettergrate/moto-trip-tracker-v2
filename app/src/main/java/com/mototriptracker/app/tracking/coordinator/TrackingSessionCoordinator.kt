@@ -261,6 +261,48 @@ class TrackingSessionCoordinator @Inject constructor(
         logCaptureAbortedAfterReboot(capture.id)
     }
 
+    /**
+     * REC-002/F0.10 §7.3: a sticky restart found the capture ACTIVE but the
+     * service can't legitimately resume it (location permission is gone).
+     * Declares it degraded - a persisted diagnostic event, once per capture and
+     * reason (§25 step 8) - instead of pretending the recording is healthy, and
+     * deliberately leaves the capture `ACTIVE` with all its evidence intact: the
+     * user may restore the permission or Finish it, and sealing an orphaned
+     * capture is the reconciliation policy's job (REC-003/004), not this
+     * method's.
+     *
+     * @return the affected capture's id, or `null` if none is ACTIVE.
+     */
+    suspend fun markRecoveryDegraded(reasonCode: String): String? {
+        val active = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) ?: return null
+        if (diagnosticEventDao.countByCaptureAndType(active.id, EVENT_RECOVERY_DEGRADED) == 0) {
+            diagnosticEventDao.insert(
+                DiagnosticEventEntity(
+                    eventId = idGenerator.newId(),
+                    occurredAt = clock.wallClockMillis(),
+                    elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                    category = DiagnosticCategory.CAPABILITY_PERMISSIONS,
+                    eventType = EVENT_RECOVERY_DEGRADED,
+                    severity = DiagnosticSeverity.WARN,
+                    source = "tracking-service",
+                    captureId = active.id,
+                    tripId = null,
+                    correlationId = null,
+                    stateBefore = "ACTIVE",
+                    stateAfter = "ACTIVE_NOT_RECORDING",
+                    reasonCode = reasonCode,
+                    metadata = emptyMap(),
+                    appVersion = BuildConfig.VERSION_NAME,
+                    schemaVersion = 1,
+                    detectorVersion = DetectorVersion(0),
+                    locationProfileVersion = LocationProfileVersion(0),
+                    processingVersion = ProcessingVersion(0)
+                )
+            )
+        }
+        return active.id
+    }
+
     /** F0.10 §7.1 item 6: "registrar PROCESS_RECOVERED/evento equivalente." */
     private suspend fun logProcessRecovered(captureId: String) {
         diagnosticEventDao.insert(
@@ -1016,5 +1058,8 @@ class TrackingSessionCoordinator @Inject constructor(
          * until a location fix eventually returns.
          */
         private const val TICKER_INTERVAL_MS = 15_000L
+
+        /** REC-002: the [DiagnosticEventEntity.eventType] of a restart that couldn't legitimately resume an ACTIVE capture. */
+        const val EVENT_RECOVERY_DEGRADED = "RECOVERY_DEGRADED"
     }
 }

@@ -9,6 +9,8 @@
     <string name="forgotten_pause_reminder_text">You seem to be moving, but your trip is still paused. Resume if you\'re back on the road.</string>
     <string name="forgotten_finish_reminder_title">Still recording?</string>
     <string name="forgotten_finish_reminder_text">This trip hasn\'t moved in a while. Finish it if your ride is over.</string>
+    <string name="recovery_degraded_title">Trip recording stopped</string>
+    <string name="recovery_degraded_text">Location permission was removed, so this trip can no longer record. Open the app to review or finish it.</string>
     <string name="paused_tracking_notification_title">Moto Trip Tracker</string>
     <string name="paused_tracking_notification_text">Trip paused</string>
     <string name="notification_action_pause">Pause</string>
