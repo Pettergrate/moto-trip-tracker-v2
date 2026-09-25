@@ -18,6 +18,7 @@ import com.mototriptracker.app.tracking.processing.TripProcessingWorker
 import com.mototriptracker.app.worker.TripSplitter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -60,8 +61,12 @@ class SplitViewModel @Inject constructor(
     private var loaded: LoadedTrip? = null
     private var cutIndex: Int = 0
 
+    // Always reload on entry: these ViewModels outlive a single visit (Navigation 3 entries
+    // here share the Activity's store), so a guard on "same tripId" made a cancelled
+    // screen reopen with the previous slider position - found on-device.
     fun load(tripId: String) {
-        if (loaded?.tripId == tripId) return
+        loaded = null
+        _uiState.value = SplitUiState.Loading
         viewModelScope.launch {
             _uiState.value = buildLoaded(tripId)?.let { trip ->
                 loaded = trip
@@ -89,8 +94,15 @@ class SplitViewModel @Inject constructor(
         _uiState.value = ready.copy(isSplitting = true)
         val point = trip.processed[cutIndex]
         val sequence = point.sourceSequenceNumber
-        val success = sequence != null &&
-            tripSplitter.split(trip.tripId, point.sourceCaptureId, sequence) is TripSplitter.Result.Success
+        // A storage failure must not escape into the Screen's coroutine and crash
+        // the app: report it like any other refused split and re-enable the buttons.
+        val success = try {
+            sequence != null && tripSplitter.split(trip.tripId, point.sourceCaptureId, sequence) is TripSplitter.Result.Success
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            false
+        }
         if (!success) _uiState.value = ready.copy(isSplitting = false)
         return success
     }
@@ -103,6 +115,8 @@ class SplitViewModel @Inject constructor(
         if (processed.size < 2 * MIN_CUT_INDEX) return null
 
         val parts = tripPartDao.findAllByTrip(tripId)
+        // ADR-016: a part with no known end would make the duration unknown - never show it as 0.
+        if (parts.isEmpty() || parts.any { it.endElapsedRealtimeNanos == null }) return null
         val rawByCapture = parts.map { it.captureId }.distinct().associateWith { rawTrackPointDao.findAllByCapture(it) }
         val elapsedBySource = rawByCapture.values.flatten().associate { (it.captureId to it.sequenceNumber) to it.elapsedRealtimeNanos }
         val elapsedByIndex = LongArray(processed.size)
@@ -154,7 +168,7 @@ class SplitViewModel @Inject constructor(
     }
 
     private fun List<TripPartEntity>.totalDurationMs(): Long = sumOf { part ->
-        ((part.endElapsedRealtimeNanos ?: part.startElapsedRealtimeNanos) - part.startElapsedRealtimeNanos) / 1_000_000
+        (checkNotNull(part.endElapsedRealtimeNanos) - part.startElapsedRealtimeNanos) / 1_000_000
     }
 
     private companion object {

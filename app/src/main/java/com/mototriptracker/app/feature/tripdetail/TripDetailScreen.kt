@@ -53,6 +53,7 @@ fun TripDetailScreen(
     tripId: String,
     onBack: () -> Unit,
     onSplit: (String) -> Unit,
+    onTrim: (String) -> Unit,
     viewModel: TripDetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -74,7 +75,8 @@ fun TripDetailScreen(
         onMergeWithNext = {
             coroutineScope.launch { if (viewModel.mergeWithNext()) onBack() }
         },
-        onSplit = { onSplit(tripId) }
+        onSplit = { onSplit(tripId) },
+        onTrim = { onTrim(tripId) }
     )
 }
 
@@ -88,7 +90,8 @@ private fun TripDetailContent(
     onTrash: () -> Unit,
     onMergeWithPrevious: () -> Unit,
     onMergeWithNext: () -> Unit,
-    onSplit: () -> Unit
+    onSplit: () -> Unit,
+    onTrim: () -> Unit
 ) {
     var showRenameDialog by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
@@ -149,6 +152,15 @@ private fun TripDetailContent(
                                         onClick = {
                                             showOverflowMenu = false
                                             onSplit()
+                                        }
+                                    )
+                                }
+                                if (uiState.canTrim) {
+                                    DropdownMenuItem(
+                                        text = { Text("Trim trip") },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            onTrim()
                                         }
                                     )
                                 }

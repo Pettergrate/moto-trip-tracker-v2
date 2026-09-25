@@ -12,6 +12,7 @@ import com.mototriptracker.app.feature.common.buildDataQualityNote
 import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.feature.common.formatDateTime
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
+import com.mototriptracker.app.worker.TripBoundaryEditor
 import com.mototriptracker.app.worker.TripMerger
 import com.mototriptracker.app.worker.TripSplitter
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -98,7 +99,8 @@ class TripDetailViewModel @Inject constructor(
                         routePoints = routePoints,
                         previousTripCandidate = adjacent.previous,
                         nextTripCandidate = adjacent.next,
-                        canSplit = processedPoints.size >= 2 * TripSplitter.MIN_POINTS_PER_HALF
+                        canSplit = processedPoints.size >= 2 * TripSplitter.MIN_POINTS_PER_HALF,
+                        canTrim = processedPoints.size >= TripBoundaryEditor.MIN_POINTS + 1
                     )
                 }
             }

@@ -1,4 +1,4 @@
-package com.mototriptracker.app.feature.split
+package com.mototriptracker.app.feature.trim
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,8 +19,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -38,22 +38,22 @@ import com.mototriptracker.app.feature.map.TripRouteMap
 import kotlinx.coroutines.launch
 
 /**
- * F0.9 §12 SPL-01: route map, one selectable cut point, and a live
- * preview of "Part 1"/"Part 2" *before* anything is confirmed (UX-10). The
- * slider is the accessible, glance-free way to pick the cut (UX-14: never
- * required while riding; no coordinates are ever typed - §12).
+ * EDT-003/`FR-EDT-005`: move a Trip's start and/or end inward with a two-thumb
+ * slider, previewing the resulting distance/duration first. The excluded
+ * points are never deleted (§8.5) - the Trip just stops using them. No UX
+ * wireframe exists for this (F0.9 only specifies Split's), so this reuses
+ * Split's proven layout on purpose.
  *
- * [onSplitDone] rather than a plain back: a successful split supersedes the
- * Trip this whole stack (Split -> Trip Detail) was about, so the caller pops
- * both.
+ * [onTrimDone] pops both this screen and the Trip Detail beneath it: a
+ * successful trim supersedes the Trip they were about.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SplitScreen(
+fun TrimScreen(
     tripId: String,
     onBack: () -> Unit,
-    onSplitDone: () -> Unit,
-    viewModel: SplitViewModel = hiltViewModel()
+    onTrimDone: () -> Unit,
+    viewModel: TrimViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
@@ -62,63 +62,62 @@ fun SplitScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Split trip") },
+                title = { Text("Trim trip") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                 }
             )
         }
     ) { innerPadding ->
         when (val state = uiState) {
-            SplitUiState.Loading -> CenteredMessage("Loading…", Modifier.padding(innerPadding))
-            SplitUiState.NotAvailable -> CenteredMessage("This trip can't be split", Modifier.padding(innerPadding))
-            is SplitUiState.Ready -> Column(
+            TrimUiState.Loading -> CenteredMessage("Loading…", Modifier.padding(innerPadding))
+            TrimUiState.NotAvailable -> CenteredMessage("This trip cannot be trimmed", Modifier.padding(innerPadding))
+            is TrimUiState.Ready -> Column(
                 modifier = Modifier.fillMaxSize().padding(innerPadding).verticalScroll(rememberScrollState()).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 TripRouteMap(
                     points = state.routePoints,
                     modifier = Modifier.fillMaxWidth().aspectRatio(1.5f),
-                    markerPoints = listOf(state.cutPoint)
+                    markerPoints = listOf(state.startPoint, state.endPoint)
                 )
-                Text("Choose where to cut", style = MaterialTheme.typography.titleMedium)
-                Slider(
-                    value = state.cutIndex.toFloat(),
-                    onValueChange = { viewModel.onCutIndexChanged(it.toInt()) },
-                    valueRange = state.minCutIndex.toFloat()..state.maxCutIndex.toFloat(),
-                    enabled = !state.isSplitting
+                Text("Choose where the trip starts and ends", style = MaterialTheme.typography.titleMedium)
+                RangeSlider(
+                    value = state.startIndex.toFloat()..state.endIndex.toFloat(),
+                    onValueChange = { range -> viewModel.onRangeChanged(range.start.toInt(), range.endInclusive.toInt()) },
+                    valueRange = 0f..state.maxIndex.toFloat(),
+                    enabled = !state.isSaving
                 )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    PartCard("Part 1", state.first, Modifier.weight(1f))
-                    PartCard("Part 2", state.second, Modifier.weight(1f))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Trimmed trip", style = MaterialTheme.typography.titleSmall)
+                        Text(formatDistanceKm(state.kept.distanceMeters), style = MaterialTheme.typography.headlineSmall)
+                        Text(formatDurationCompact(state.kept.durationMs), style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (state.hasChanges) {
+                                "Removes ${formatDurationCompact(state.kept.removedDurationMs)} from the recording"
+                            } else {
+                                "Drag the handles to remove time from the start or end"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 Text(
-                    "Both parts keep every recorded point. The original trip is replaced by these two.",
+                    "Nothing is deleted: the excluded points stay in the recording. The original trip is replaced by the trimmed one.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedButton(onClick = onBack, enabled = !state.isSplitting, modifier = Modifier.weight(1f)) { Text("Cancel") }
+                    OutlinedButton(onClick = onBack, enabled = !state.isSaving, modifier = Modifier.weight(1f)) { Text("Cancel") }
                     Button(
-                        onClick = { coroutineScope.launch { if (viewModel.split()) onSplitDone() } },
-                        enabled = !state.isSplitting,
+                        onClick = { coroutineScope.launch { if (viewModel.save()) onTrimDone() } },
+                        enabled = state.hasChanges && !state.isSaving,
                         modifier = Modifier.weight(1f)
-                    ) { Text("Split") }
+                    ) { Text("Trim") }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun PartCard(title: String, preview: SplitPartPreview, modifier: Modifier = Modifier) {
-    Card(modifier = modifier) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Text(formatDistanceKm(preview.distanceMeters), style = MaterialTheme.typography.headlineSmall)
-            Text(formatDurationCompact(preview.durationMs), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

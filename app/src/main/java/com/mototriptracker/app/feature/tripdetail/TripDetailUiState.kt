@@ -41,6 +41,8 @@ sealed interface TripDetailUiState {
         val previousTripCandidate: MergeCandidate? = null,
         val nextTripCandidate: MergeCandidate? = null,
         /** EDT-002: enough processed points for two drawable halves (`TripSplitter.MIN_POINTS_PER_HALF` each side). */
-        val canSplit: Boolean = false
+        val canSplit: Boolean = false,
+        /** EDT-003: enough processed points to keep two and remove at least one. */
+        val canTrim: Boolean = false
     ) : TripDetailUiState
 }

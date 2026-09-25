@@ -1,4 +1,4 @@
-package com.mototriptracker.app.feature.split
+package com.mototriptracker.app.feature.trim
 
 import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.common.FakeIdGenerator
@@ -16,7 +16,7 @@ import com.mototriptracker.app.core.model.TripStatus
 import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
-import com.mototriptracker.app.worker.TripSplitter
+import com.mototriptracker.app.worker.TripBoundaryEditor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -33,29 +33,27 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
-/** EDT-002/UX-10: the Split screen's live preview of both halves before anything is committed. */
+/** EDT-003: the Trim screen's preview of the trimmed Trip before anything is committed. */
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
-class SplitViewModelTest {
+class TrimViewModelTest {
 
     private lateinit var db: MotoTripDatabase
-    private lateinit var viewModel: SplitViewModel
+    private lateinit var viewModel: TrimViewModel
     private val version = TripProcessingWorker.CURRENT_PROCESSING_VERSION
-
-    // Latitude steps of 0.001 degrees are ~111.19 m apart along a meridian.
-    private val metersPerStep = 111.19
+    private val metersPerStep = 111.19 // 0.001 degrees of latitude
 
     @Before
     fun setUp() {
         Dispatchers.setMain(Dispatchers.Unconfined)
         db = TestDatabaseFactory.createInMemory()
-        val splitter = TripSplitter(
+        val editor = TripBoundaryEditor(
             database = db, tripDao = db.tripDao(), tripPartDao = db.tripPartDao(), rawTrackPointDao = db.rawTrackPointDao(),
             processedTrackPointDao = db.processedTrackPointDao(), tripEditOperationDao = db.tripEditOperationDao(),
             tripLineageLinkDao = db.tripLineageLinkDao(), processingScheduler = FakeProcessingScheduler(),
-            clock = FakeClock(wallMillis = 9_000_000L), idGenerator = FakeIdGenerator("split")
+            clock = FakeClock(wallMillis = 9_000_000L), idGenerator = FakeIdGenerator("trim")
         )
-        viewModel = SplitViewModel(db.tripDao(), db.tripPartDao(), db.rawTrackPointDao(), db.processedTrackPointDao(), splitter)
+        viewModel = TrimViewModel(db.tripDao(), db.tripPartDao(), db.rawTrackPointDao(), db.processedTrackPointDao(), editor)
     }
 
     @After
@@ -64,7 +62,7 @@ class SplitViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private suspend fun seedTrip(pointCount: Int) {
+    private suspend fun seedTrip(pointCount: Int, partEndNanos: Long? = 100_000_000_000L) {
         db.tripDao().insert(
             TripEntity(
                 id = "trip", status = TripStatus.COMPLETED, name = null, isFavorite = false, motorcycleId = null,
@@ -83,7 +81,7 @@ class SplitViewModelTest {
         db.tripPartDao().insert(
             TripPartEntity(
                 id = "part", tripId = "trip", captureId = "cap", orderIndex = 0,
-                startElapsedRealtimeNanos = 0L, endElapsedRealtimeNanos = 100_000_000_000L,
+                startElapsedRealtimeNanos = 0L, endElapsedRealtimeNanos = partEndNanos,
                 startSequenceNumber = null, endSequenceNumber = null
             )
         )
@@ -111,112 +109,91 @@ class SplitViewModelTest {
         )
     }
 
-    private suspend fun loadReady(): SplitUiState.Ready {
+    private suspend fun loadReady(): TrimUiState.Ready {
         viewModel.load("trip")
-        return withTimeout(5_000) { viewModel.uiState.first { it !is SplitUiState.Loading } } as SplitUiState.Ready
+        return withTimeout(5_000) { viewModel.uiState.first { it !is TrimUiState.Loading } } as TrimUiState.Ready
     }
 
     @Test
-    fun startsWithTheCutInTheMiddleAndBothHalvesPreviewedBeforeAnythingIsCommitted() = runBlocking {
-        seedTrip(pointCount = 10)
+    fun startsCoveringTheWholeTripWithNothingToSave() = runBlocking {
+        seedTrip(10)
 
         val ready = loadReady()
 
-        assertEquals(5, ready.cutIndex)
-        assertEquals(2, ready.minCutIndex)
-        assertEquals(8, ready.maxCutIndex)
-        // First half = points 0..4 (4 edges); second = points 5..9 (4 edges); the edge crossing the cut is in neither.
-        assertEquals(4 * metersPerStep, ready.first.distanceMeters, 1.0)
-        assertEquals(4 * metersPerStep, ready.second.distanceMeters, 1.0)
-        assertEquals(50_000L, ready.first.durationMs)
-        assertEquals(50_000L, ready.second.durationMs)
+        assertEquals(0, ready.startIndex)
+        assertEquals(9, ready.endIndex)
+        assertFalse(ready.hasChanges)
+        assertEquals(9 * metersPerStep, ready.kept.distanceMeters, 1.0)
+        assertEquals(100_000L, ready.kept.durationMs)
+        assertEquals(0L, ready.kept.removedDurationMs)
     }
 
     @Test
-    fun movingTheCutUpdatesBothPreviewsAndTheirDurationsStillAddUp() = runBlocking {
-        seedTrip(pointCount = 10)
+    fun movingTheHandlesPreviewsTheTrimmedTripAndWhatIsRemoved() = runBlocking {
+        seedTrip(10)
         loadReady()
 
-        viewModel.onCutIndexChanged(2)
+        viewModel.onRangeChanged(2, 7)
 
-        val ready = viewModel.uiState.value as SplitUiState.Ready
-        assertEquals(2, ready.cutIndex)
-        assertEquals(1 * metersPerStep, ready.first.distanceMeters, 1.0)
-        assertEquals(7 * metersPerStep, ready.second.distanceMeters, 1.0)
-        assertEquals(100_000L, ready.first.durationMs + ready.second.durationMs)
+        val ready = viewModel.uiState.value as TrimUiState.Ready
+        assertTrue(ready.hasChanges)
+        assertEquals(5 * metersPerStep, ready.kept.distanceMeters, 1.0)
+        assertEquals(50_000L, ready.kept.durationMs)
+        assertEquals(50_000L, ready.kept.removedDurationMs)
     }
 
     @Test
-    fun reopeningTheScreenStartsFromTheMiddleAgainNotFromTheCancelledCut() = runBlocking {
-        seedTrip(pointCount = 10)
+    fun theHandlesCanNeverLeaveFewerThanTwoPoints() = runBlocking {
+        seedTrip(10)
         loadReady()
-        viewModel.onCutIndexChanged(2)
+
+        viewModel.onRangeChanged(8, 3)
+
+        val ready = viewModel.uiState.value as TrimUiState.Ready
+        assertTrue("end is pushed at least one point past start", ready.endIndex >= ready.startIndex + 1)
+    }
+
+    @Test
+    fun reopeningTheScreenStartsFromTheFullRangeAgainNotFromTheCancelledSelection() = runBlocking {
+        seedTrip(10)
+        loadReady()
+        viewModel.onRangeChanged(2, 7)
 
         val reopened = loadReady()
 
-        assertEquals(5, reopened.cutIndex)
+        assertEquals(0, reopened.startIndex)
+        assertEquals(9, reopened.endIndex)
+        assertFalse(reopened.hasChanges)
     }
 
     @Test
-    fun theCutIsClampedSoEachHalfKeepsADrawableRoute() = runBlocking {
-        seedTrip(pointCount = 10)
-        loadReady()
-
-        viewModel.onCutIndexChanged(0)
-        assertEquals(2, (viewModel.uiState.value as SplitUiState.Ready).cutIndex)
-
-        viewModel.onCutIndexChanged(99)
-        assertEquals(8, (viewModel.uiState.value as SplitUiState.Ready).cutIndex)
-    }
-
-    @Test
-    fun aTripTooShortForTwoDrawableHalvesIsNotAvailableToSplit() = runBlocking {
-        seedTrip(pointCount = 3)
+    fun aPartWithAnUnknownEndIsNotAvailableRatherThanShowingAZeroDuration() = runBlocking {
+        seedTrip(10, partEndNanos = null)
 
         viewModel.load("trip")
 
-        val state = withTimeout(5_000) { viewModel.uiState.first { it !is SplitUiState.Loading } }
-        assertEquals(SplitUiState.NotAvailable, state)
+        assertEquals(TrimUiState.NotAvailable, withTimeout(5_000) { viewModel.uiState.first { it !is TrimUiState.Loading } })
     }
 
     @Test
-    fun anUnknownTripIsNotAvailableToSplit() = runBlocking {
-        viewModel.load("does-not-exist")
+    fun aTripTooShortToTrimIsNotAvailable() = runBlocking {
+        seedTrip(2)
 
-        val state = withTimeout(5_000) { viewModel.uiState.first { it !is SplitUiState.Loading } }
-        assertEquals(SplitUiState.NotAvailable, state)
+        viewModel.load("trip")
+
+        assertEquals(TrimUiState.NotAvailable, withTimeout(5_000) { viewModel.uiState.first { it !is TrimUiState.Loading } })
     }
 
     @Test
-    fun splitCommitsAtTheCurrentCutAndSupersedesTheSource() = runBlocking {
-        seedTrip(pointCount = 10)
+    fun savingWithoutChangesIsANoOpAndSavingWithChangesSupersedesTheSource() = runBlocking {
+        seedTrip(10)
         loadReady()
-        viewModel.onCutIndexChanged(4)
+        assertFalse("nothing to save yet", viewModel.save())
+        assertEquals(TripStatus.COMPLETED, db.tripDao().findById("trip")?.status)
 
-        val success = viewModel.split()
+        viewModel.onRangeChanged(1, 8)
 
-        assertTrue(success)
+        assertTrue(viewModel.save())
         assertEquals(TripStatus.SUPERSEDED, db.tripDao().findById("trip")?.status)
-    }
-
-    @Test
-    fun aSecondTapAfterASuccessfulSplitIsIgnored() = runBlocking {
-        seedTrip(pointCount = 10)
-        loadReady()
-        assertTrue(viewModel.split())
-
-        assertFalse("a double tap must not attempt a second split", viewModel.split())
-    }
-
-    @Test
-    fun splitFailsAndReEnablesTheScreenWhenTheTripChangedUnderneath() = runBlocking {
-        seedTrip(pointCount = 10)
-        loadReady()
-        // Trashed by some other action after the screen loaded - ADR-015's re-check must refuse it.
-        db.tripDao().trash("trip", deletedAt = 1L, updatedAt = 1L)
-
-        assertFalse(viewModel.split())
-
-        assertFalse("the buttons must come back so the user isn't stuck", (viewModel.uiState.value as SplitUiState.Ready).isSplitting)
     }
 }

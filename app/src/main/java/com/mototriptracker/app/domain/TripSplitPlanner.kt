@@ -42,11 +42,11 @@ object TripSplitPlanner {
      * half with no part at all.
      */
     fun plan(parts: List<TripPartEntity>, cut: Cut, captureSequences: List<Long>): Plan? {
-        val cutPartIndex = parts.indexOfFirst { it.contains(cut.captureId, cut.sequenceNumber) }
+        val cutPartIndex = parts.indexOfFirst { it.covers(cut.captureId, cut.sequenceNumber) }
         if (cutPartIndex < 0) return null
         val cutPart = parts[cutPartIndex]
 
-        val firstSequenceInPart = captureSequences.firstOrNull { cutPart.contains(cut.captureId, it) }
+        val firstSequenceInPart = captureSequences.firstOrNull { cutPart.covers(cut.captureId, it) }
         val cutIsFirstPointOfItsPart = firstSequenceInPart == cut.sequenceNumber
 
         val first = parts.subList(0, cutPartIndex).toMutableList()
@@ -72,8 +72,10 @@ object TripSplitPlanner {
         return Plan(first, second)
     }
 
-    private fun TripPartEntity.contains(captureId: String, sequenceNumber: Long): Boolean =
-        this.captureId == captureId &&
-            (startSequenceNumber?.let { sequenceNumber >= it } ?: true) &&
-            (endSequenceNumber?.let { sequenceNumber <= it } ?: true)
 }
+
+/** Whether this part's capture + sequence range includes the given raw point (null bound = open-ended). Shared by [TripSplitPlanner] and [TripBoundaryPlanner]. */
+internal fun TripPartEntity.covers(captureId: String, sequenceNumber: Long): Boolean =
+    this.captureId == captureId &&
+        (startSequenceNumber?.let { sequenceNumber >= it } ?: true) &&
+        (endSequenceNumber?.let { sequenceNumber <= it } ?: true)

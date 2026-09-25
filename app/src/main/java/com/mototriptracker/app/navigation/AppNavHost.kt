@@ -30,6 +30,7 @@ import com.mototriptracker.app.feature.settings.SettingsPlaceholderScreen
 import com.mototriptracker.app.feature.trash.TrashScreen
 import com.mototriptracker.app.feature.split.SplitScreen
 import com.mototriptracker.app.feature.tripdetail.TripDetailScreen
+import com.mototriptracker.app.feature.trim.TrimScreen
 
 /**
  * ADR-011/F0.9 §3: the app shell. `backStack` is a plain
@@ -75,6 +76,10 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
 
     fun navigateToSplit(tripId: String) {
         backStack.add(Destination.Split(tripId))
+    }
+
+    fun navigateToTrim(tripId: String) {
+        backStack.add(Destination.Trim(tripId))
     }
 
     fun navigateToFieldTestHarness() {
@@ -136,7 +141,21 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
                     TripDetailScreen(
                         tripId = destination.tripId,
                         onBack = { backStack.removeLastOrNull() },
-                        onSplit = ::navigateToSplit
+                        onSplit = ::navigateToSplit,
+                        onTrim = ::navigateToTrim
+                    )
+                }
+
+                is Destination.Trim -> NavEntry(destination) {
+                    TrimScreen(
+                        tripId = destination.tripId,
+                        onBack = { backStack.removeLastOrNull() },
+                        // A successful trim supersedes the Trip both this screen and the
+                        // Trip Detail beneath it were about - pop both.
+                        onTrimDone = {
+                            backStack.removeLastOrNull()
+                            backStack.removeLastOrNull()
+                        }
                     )
                 }
 
@@ -200,7 +219,7 @@ private fun Destination.tabLabel(): String = when (this) {
     Destination.Home -> "Home"
     Destination.History -> "History"
     Destination.Favorites -> "Favorites"
-    Destination.Settings, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, is Destination.TripDetail, is Destination.Split ->
+    Destination.Settings, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, is Destination.TripDetail, is Destination.Split, is Destination.Trim ->
         error("$this is not a bottom-nav tab")
 }
 
@@ -208,6 +227,6 @@ private fun Destination.tabIcon() = when (this) {
     Destination.Home -> Icons.Default.Home
     Destination.History -> Icons.AutoMirrored.Filled.List
     Destination.Favorites -> Icons.Default.Star
-    Destination.Settings, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, is Destination.TripDetail, is Destination.Split ->
+    Destination.Settings, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, is Destination.TripDetail, is Destination.Split, is Destination.Trim ->
         error("$this is not a bottom-nav tab")
 }
