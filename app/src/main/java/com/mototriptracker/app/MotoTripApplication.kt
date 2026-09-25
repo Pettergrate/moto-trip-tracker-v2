@@ -5,9 +5,14 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.mototriptracker.app.tracking.activityrecognition.ActivityRecognitionRegistrar
+import com.mototriptracker.app.worker.DerivedDataReconciler
 import com.mototriptracker.app.worker.TrashPurgeScheduler
 import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -46,6 +51,9 @@ class MotoTripApplication : Application() {
      */
     @Inject lateinit var trashPurgeScheduler: Lazy<TrashPurgeScheduler>
 
+    /** `Lazy` for the same reason as [trashPurgeScheduler]: it enqueues through WorkManager. */
+    @Inject lateinit var derivedDataReconciler: Lazy<DerivedDataReconciler>
+
     override fun onCreate() {
         super.onCreate()
         if (!WorkManager.isInitialized()) {
@@ -57,5 +65,11 @@ class MotoTripApplication : Application() {
         activityRecognitionRegistrar.register()
         // TRS-001: ExistingPeriodicWorkPolicy.KEEP makes this idempotent too.
         trashPurgeScheduler.get().schedulePeriodicPurge()
+        // EDT-004: heal Trips left without derived data (e.g. a crash between a
+        // merge/split/trim commit and its processing being enqueued). Off the main
+        // thread; a failure here must never take the app down.
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching { derivedDataReconciler.get().reconcile() }
+        }
     }
 }

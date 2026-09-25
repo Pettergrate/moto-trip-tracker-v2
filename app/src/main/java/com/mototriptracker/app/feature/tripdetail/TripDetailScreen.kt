@@ -273,6 +273,13 @@ private fun HeaderSection(state: TripDetailUiState.Loaded) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(state.displayName, style = MaterialTheme.typography.headlineSmall)
         Text(state.dateTimeLabel, style = MaterialTheme.typography.bodyMedium)
+        if (state.isCalculating) {
+            Text(
+                "Calculating trip data…",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 

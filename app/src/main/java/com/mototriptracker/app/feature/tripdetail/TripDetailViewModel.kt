@@ -100,7 +100,8 @@ class TripDetailViewModel @Inject constructor(
                         previousTripCandidate = adjacent.previous,
                         nextTripCandidate = adjacent.next,
                         canSplit = processedPoints.size >= 2 * TripSplitter.MIN_POINTS_PER_HALF,
-                        canTrim = processedPoints.size >= TripBoundaryEditor.MIN_POINTS + 1
+                        canTrim = processedPoints.size >= TripBoundaryEditor.MIN_POINTS + 1,
+                        isCalculating = statistics == null
                     )
                 }
             }

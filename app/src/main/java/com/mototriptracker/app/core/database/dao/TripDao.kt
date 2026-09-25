@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
 import com.mototriptracker.app.core.database.entity.TripEntity
+import com.mototriptracker.app.core.model.ProcessingVersion
 import com.mototriptracker.app.core.model.TripStatus
 import kotlinx.coroutines.flow.Flow
 
@@ -79,6 +80,22 @@ interface TripDao {
     /** TRS-001: physical delete - cascades to this Trip's own TripPart/TripStatistics/ProcessedTrackPoint/etc. rows (see their FKs), never to RawTrackPoint (ADR-006, keyed off captureId only). */
     @Query("DELETE FROM trip WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    /**
+     * EDT-004: COMPLETED Trips with no `trip_statistics` row for [version] - the
+     * "derived data is missing/invalidated, recompute it" set (a crash between a
+     * structural edit's commit and its processing being enqueued, a failed
+     * worker, or a future `processingVersion` bump). SUPERSEDED/TRASHED Trips are
+     * excluded on purpose: they aren't shown, so nothing needs their numbers.
+     */
+    @Query(
+        """
+        SELECT * FROM trip t
+        WHERE t.status = :status AND t.deletedAt IS NULL
+          AND NOT EXISTS (SELECT 1 FROM trip_statistics s WHERE s.tripId = t.id AND s.processingVersion = :version)
+        """
+    )
+    suspend fun findCompletedWithoutStatistics(version: ProcessingVersion, status: TripStatus = TripStatus.COMPLETED): List<TripEntity>
 
     /** EDT-001: the chronologically-previous COMPLETED, non-trashed Trip - Trip Detail's "Merge with previous" candidate. Excludes SUPERSEDED Trips by construction (only ever COMPLETED is queried). */
     @Query("SELECT * FROM trip WHERE status = :status AND deletedAt IS NULL AND createdAt < :createdAt ORDER BY createdAt DESC LIMIT 1")

@@ -153,6 +153,20 @@ class TripDetailViewModelTest {
     }
 
     @Test
+    fun aTripWithNoStatisticsIsFlaggedAsStillCalculatingAndClearsOnceTheyExist() = runBlocking {
+        db.tripDao().insert(trip("trip-1", createdAt = 5_000L))
+        viewModel.load("trip-1")
+
+        val before = withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded } } as TripDetailUiState.Loaded
+        assertTrue("EDT-004: unknown numbers are on their way, not zero", before.isCalculating)
+
+        db.tripStatisticsDao().upsert(statistics("trip-1"))
+
+        val after = withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded && !it.isCalculating } } as TripDetailUiState.Loaded
+        assertFalse(after.isCalculating)
+    }
+
+    @Test
     fun loadedStateExposesCalculatedAtLabelOnceStatisticsExist() = runBlocking {
         db.tripDao().insert(trip("trip-1", createdAt = 5_000L))
         db.tripStatisticsDao().upsert(statistics("trip-1", computedAt = 42_000L))

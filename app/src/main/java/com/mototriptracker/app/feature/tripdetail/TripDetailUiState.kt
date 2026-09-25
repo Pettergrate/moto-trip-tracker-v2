@@ -43,6 +43,8 @@ sealed interface TripDetailUiState {
         /** EDT-002: enough processed points for two drawable halves (`TripSplitter.MIN_POINTS_PER_HALF` each side). */
         val canSplit: Boolean = false,
         /** EDT-003: enough processed points to keep two and remove at least one. */
-        val canTrim: Boolean = false
+        val canTrim: Boolean = false,
+        /** EDT-004: no statistics exist yet for this Trip (just merged/split/trimmed, or awaiting a recompute) - the numbers below are unknown, not zero, and are on their way. */
+        val isCalculating: Boolean = false
     ) : TripDetailUiState
 }
