@@ -5,6 +5,7 @@ import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.mototriptracker.app.tracking.activityrecognition.ActivityRecognitionRegistrar
+import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.worker.DerivedDataReconciler
 import com.mototriptracker.app.worker.TrashPurgeScheduler
 import dagger.Lazy
@@ -54,6 +55,9 @@ class MotoTripApplication : Application() {
     /** `Lazy` for the same reason as [trashPurgeScheduler]: it enqueues through WorkManager. */
     @Inject lateinit var derivedDataReconciler: Lazy<DerivedDataReconciler>
 
+    /** REC-003: `Lazy` for the same WorkManager-ordering reason as the two above. */
+    @Inject lateinit var trackingCoordinator: Lazy<TrackingSessionCoordinator>
+
     override fun onCreate() {
         super.onCreate()
         if (!WorkManager.isInitialized()) {
@@ -69,6 +73,9 @@ class MotoTripApplication : Application() {
         // merge/split/trim commit and its processing being enqueued). Off the main
         // thread; a failure here must never take the app down.
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            // REC-003/F0.10 §25: a capture left ACTIVE by a previous boot is sealed on
+            // the next process start too (definitive elapsedRealtime test only).
+            runCatching { trackingCoordinator.get().reconcileActiveCaptureAfterReboot() }
             runCatching { derivedDataReconciler.get().reconcile() }
         }
     }

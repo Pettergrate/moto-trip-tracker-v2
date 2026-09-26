@@ -45,6 +45,8 @@ sealed interface TripDetailUiState {
         /** EDT-003: enough processed points to keep two and remove at least one. */
         val canTrim: Boolean = false,
         /** EDT-004: no statistics exist yet for this Trip (just merged/split/trimmed, or awaiting a recompute) - the numbers below are unknown, not zero, and are on their way. */
-        val isCalculating: Boolean = false
+        val isCalculating: Boolean = false,
+        /** REC-003/F0.10 §22: one of this Trip's captures was sealed as interrupted (device restart, force stop...) - the route may be incomplete. */
+        val wasInterrupted: Boolean = false
     ) : TripDetailUiState
 }

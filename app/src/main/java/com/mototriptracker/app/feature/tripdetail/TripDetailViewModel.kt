@@ -5,6 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.mototriptracker.app.core.common.Clock
 import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripDao
+import com.mototriptracker.app.core.database.dao.TripCaptureDao
+import com.mototriptracker.app.core.database.dao.TripPartDao
+import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.database.dao.TripStatisticsDao
 import com.mototriptracker.app.domain.GeoPoint
 import com.mototriptracker.app.domain.simplifyRoute
@@ -41,6 +44,8 @@ class TripDetailViewModel @Inject constructor(
     private val tripDao: TripDao,
     private val tripStatisticsDao: TripStatisticsDao,
     private val processedTrackPointDao: ProcessedTrackPointDao,
+    private val tripPartDao: TripPartDao,
+    private val tripCaptureDao: TripCaptureDao,
     private val tripMerger: TripMerger,
     private val clock: Clock
 ) : ViewModel() {
@@ -57,6 +62,9 @@ class TripDetailViewModel @Inject constructor(
      */
     private val adjacentTripsFlow = MutableStateFlow(AdjacentTrips(null, null))
 
+    /** REC-003: loaded once with the adjacency lookup - a capture's ABORTED status never changes afterwards. */
+    private val interruptedFlow = MutableStateFlow(false)
+
     val uiState: StateFlow<TripDetailUiState> = tripIdFlow.flatMapLatest { tripId ->
         if (tripId == null) {
             flowOf(TripDetailUiState.Loading)
@@ -65,8 +73,9 @@ class TripDetailViewModel @Inject constructor(
                 tripDao.observeById(tripId),
                 tripStatisticsDao.observeByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION),
                 processedTrackPointDao.observeAllByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION),
-                adjacentTripsFlow
-            ) { trip, statistics, processedPoints, adjacent ->
+                adjacentTripsFlow,
+                interruptedFlow
+            ) { trip, statistics, processedPoints, adjacent, interrupted ->
                 if (trip == null) {
                     TripDetailUiState.NotFound
                 } else {
@@ -101,7 +110,8 @@ class TripDetailViewModel @Inject constructor(
                         nextTripCandidate = adjacent.next,
                         canSplit = processedPoints.size >= 2 * TripSplitter.MIN_POINTS_PER_HALF,
                         canTrim = processedPoints.size >= TripBoundaryEditor.MIN_POINTS + 1,
-                        isCalculating = statistics == null
+                        isCalculating = statistics == null,
+                        wasInterrupted = interrupted
                     )
                 }
             }
@@ -109,11 +119,18 @@ class TripDetailViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), TripDetailUiState.Loading)
 
     fun load(tripId: String) {
+        // These describe *other* rows and are filled asynchronously below; without
+        // this reset a switch to another Trip briefly showed the previous Trip's
+        // merge candidates and interrupted flag.
+        adjacentTripsFlow.value = AdjacentTrips(null, null)
+        interruptedFlow.value = false
         tripIdFlow.value = tripId
         viewModelScope.launch {
             val trip = tripDao.findById(tripId) ?: return@launch
             val previous = tripDao.findPreviousCompleted(trip.createdAt)
             val next = tripDao.findNextCompleted(trip.createdAt)
+            interruptedFlow.value = tripPartDao.findAllByTrip(tripId).map { it.captureId }.distinct()
+                .any { tripCaptureDao.findById(it)?.status == CaptureStatus.ABORTED }
             adjacentTripsFlow.value = AdjacentTrips(
                 previous = previous?.let { candidate -> MergeCandidate(candidate.id, candidate.name ?: fallbackTripName(candidate.createdAt)) },
                 next = next?.let { candidate -> MergeCandidate(candidate.id, candidate.name ?: fallbackTripName(candidate.createdAt)) }

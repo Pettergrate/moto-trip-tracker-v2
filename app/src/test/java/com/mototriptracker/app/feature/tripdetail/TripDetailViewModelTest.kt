@@ -65,6 +65,8 @@ class TripDetailViewModelTest {
             tripDao = db.tripDao(),
             tripStatisticsDao = db.tripStatisticsDao(),
             processedTrackPointDao = db.processedTrackPointDao(),
+            tripPartDao = db.tripPartDao(),
+            tripCaptureDao = db.tripCaptureDao(),
             tripMerger = tripMerger,
             clock = clock
         )
@@ -384,6 +386,24 @@ class TripDetailViewModelTest {
 
         assertFalse(success)
         assertEquals(TripStatus.COMPLETED, db.tripDao().findById("only-trip")?.status)
+    }
+
+    @Test
+    fun aTripWhoseCaptureWasSealedAsInterruptedIsFlaggedAsPossiblyIncomplete() = runBlocking {
+        db.tripDao().insert(trip("interrupted", createdAt = 5_000L))
+        db.tripCaptureDao().insert(capture("cap-x", startedAt = 100L).copy(status = CaptureStatus.ABORTED))
+        db.tripPartDao().insert(part("part-x", "interrupted", "cap-x"))
+        db.tripDao().insert(trip("normal", createdAt = 6_000L))
+        db.tripCaptureDao().insert(capture("cap-y", startedAt = 200L))
+        db.tripPartDao().insert(part("part-y", "normal", "cap-y"))
+
+        viewModel.load("interrupted")
+        val flagged = withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded && it.wasInterrupted } } as TripDetailUiState.Loaded
+        assertTrue(flagged.wasInterrupted)
+
+        viewModel.load("normal")
+        val clean = withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded && it.tripId == "normal" } } as TripDetailUiState.Loaded
+        assertFalse("a complete recording must not carry the warning", clean.wasInterrupted)
     }
 
     @Test

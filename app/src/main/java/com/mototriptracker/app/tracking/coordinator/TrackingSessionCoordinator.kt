@@ -246,19 +246,132 @@ class TrackingSessionCoordinator @Inject constructor(
      * this from a hypothetical future user-initiated abort action
      * (`EndSource.ABORTED`, unused today - no such action exists yet).
      */
-    private suspend fun abortCaptureAfterReboot(capture: TripCaptureEntity) {
-        val lastPoint = rawTrackPointDao.findAllByCapture(capture.id).maxByOrNull { it.sequenceNumber }
-        val endedAt = lastPoint?.capturedAt ?: capture.startedAt
-        val endElapsedRealtimeNanos = lastPoint?.elapsedRealtimeNanos ?: capture.startElapsedRealtimeNanos
-        tripCaptureDao.completeActiveCapture(
-            id = capture.id,
-            endedAt = endedAt,
-            endElapsedRealtimeNanos = endElapsedRealtimeNanos,
-            endSource = EndSource.RECOVERY,
-            updatedAt = clock.wallClockMillis(),
-            newStatus = CaptureStatus.ABORTED
-        )
+    private suspend fun abortCaptureAfterReboot(capture: TripCaptureEntity): String? {
+        val tripId = sealInterruptedCapture(capture)
         logCaptureAbortedAfterReboot(capture.id)
+        return tripId
+    }
+
+    /**
+     * REC-003. What [recoverActiveCaptureIfAny]'s reboot branch and
+     * [sealActiveCaptureAfterBoot] share: closes an ACTIVE capture as
+     * `ABORTED`/`RECOVERY` using only its *last persisted evidence*, then -
+     * F0.10 §22 ("un registro incompleto es preferible a un registro
+     * inventado o desaparecido"; §10.2 rule 5, "hacer visible que el registro
+     * quedó parcial") - gives it a visible partial Trip when there is a route
+     * worth showing, so the interrupted ride doesn't silently vanish into an
+     * unreachable `ABORTED` row. One transaction (REL-INV-008); processing is
+     * enqueued only after it commits (ADR-015).
+     *
+     * A capture with fewer than [MIN_POINTS_FOR_PARTIAL_TRIP] raw points has
+     * no route to show, so it is sealed without a Trip (its evidence still
+     * stays). An open manual pause must be closed here too: a Trip's metrics
+     * refuse an open one (`TripMetricsCalculator`), and closing it at the last
+     * evidence - never at an invented "now" - is the same honesty rule.
+     *
+     * @return the partial Trip's id, or `null` if none was created.
+     */
+    private suspend fun sealInterruptedCapture(capture: TripCaptureEntity): String? {
+        var partialTripId: String? = null
+        database.withTransaction {
+            val lastPoint = rawTrackPointDao.findAllByCapture(capture.id).maxByOrNull { it.sequenceNumber }
+            val pointCount = rawTrackPointDao.countByCapture(capture.id)
+            val endedAt = lastPoint?.capturedAt ?: capture.startedAt
+            val endElapsedRealtimeNanos = lastPoint?.elapsedRealtimeNanos ?: capture.startElapsedRealtimeNanos
+
+            manualPauseIntervalDao.findOpenByCapture(capture.id)?.let { openPause ->
+                // A pause opened after the last evidence would otherwise be "closed" before it started.
+                val closeAt = maxOf(endElapsedRealtimeNanos, openPause.startElapsedRealtimeNanos)
+                manualPauseIntervalDao.closePause(
+                    id = openPause.id,
+                    endedAt = maxOf(endedAt, openPause.startedAt),
+                    endElapsedRealtimeNanos = closeAt,
+                    endReason = "CAPTURE_INTERRUPTED"
+                )
+            }
+
+            tripCaptureDao.completeActiveCapture(
+                id = capture.id,
+                endedAt = endedAt,
+                endElapsedRealtimeNanos = endElapsedRealtimeNanos,
+                endSource = EndSource.RECOVERY,
+                updatedAt = clock.wallClockMillis(),
+                newStatus = CaptureStatus.ABORTED
+            )
+
+            if (lastPoint != null && pointCount >= MIN_POINTS_FOR_PARTIAL_TRIP) {
+                val tripId = idGenerator.newId()
+                val now = clock.wallClockMillis()
+                tripDao.insert(
+                    TripEntity(
+                        id = tripId,
+                        status = TripStatus.COMPLETED,
+                        name = null,
+                        isFavorite = false,
+                        motorcycleId = null,
+                        routeId = null,
+                        notes = null,
+                        // The same "when the ride ended" every Trip's createdAt means: the last evidence.
+                        createdAt = endedAt,
+                        updatedAt = now,
+                        deletedAt = null
+                    )
+                )
+                tripPartDao.insert(
+                    TripPartEntity(
+                        id = idGenerator.newId(),
+                        tripId = tripId,
+                        captureId = capture.id,
+                        orderIndex = 0,
+                        startElapsedRealtimeNanos = capture.startElapsedRealtimeNanos,
+                        endElapsedRealtimeNanos = endElapsedRealtimeNanos,
+                        startSequenceNumber = 0L,
+                        endSequenceNumber = lastPoint.sequenceNumber
+                    )
+                )
+                partialTripId = tripId
+            }
+        }
+        partialTripId?.let { processingScheduler.enqueueTripProcessing(it, capture.id) }
+        return partialTripId
+    }
+
+    /** REC-003's answer to "did anything need sealing, and did it get a visible Trip". */
+    sealed interface ReconcileOutcome {
+        data object NothingToReconcile : ReconcileOutcome
+        data class SealedAfterReboot(val captureId: String, val partialTripId: String?) : ReconcileOutcome
+    }
+
+    /**
+     * REC-003/F0.10 §10.3 + §25: `BOOT_COMPLETED` is the *certain* signal that
+     * a reboot happened, so any capture still `ACTIVE` at that moment belongs to
+     * the previous boot and must be sealed - without this it stays `ACTIVE`
+     * forever after a reboot, the "Trip in progress" card never goes away and
+     * ADR-020's single-active rule blocks every future Start. Deliberately does
+     * **not** use [recoverActiveCaptureIfAny]'s `elapsedRealtime` comparison
+     * here: a capture started in the first seconds of the previous boot can
+     * have a *smaller* start value than the fresh boot's current one, and that
+     * heuristic would then wrongly call it "same boot".
+     *
+     * Idempotent: once sealed, nothing is `ACTIVE` any more.
+     */
+    suspend fun sealActiveCaptureAfterBoot(): ReconcileOutcome {
+        val active = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) ?: return ReconcileOutcome.NothingToReconcile
+        return ReconcileOutcome.SealedAfterReboot(active.id, abortCaptureAfterReboot(active))
+    }
+
+    /**
+     * REC-003/F0.10 §25: the same reconciliation for any *other* process entry
+     * (app launch, worker) that finds the capture left over from a previous
+     * boot, using only the definitive §10.1 discontinuity test - not a wall-clock
+     * guess, which a manual clock change (§19.3) could fool into aborting a live
+     * trip. Same-boot captures are left alone: process death within one boot is
+     * the sticky service's job to resume ([recoverActiveCaptureIfAny]).
+     */
+    suspend fun reconcileActiveCaptureAfterReboot(): ReconcileOutcome {
+        val active = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) ?: return ReconcileOutcome.NothingToReconcile
+        if (clock.elapsedRealtimeNanos() >= active.startElapsedRealtimeNanos) return ReconcileOutcome.NothingToReconcile
+        return ReconcileOutcome.SealedAfterReboot(active.id, abortCaptureAfterReboot(active))
     }
 
     /**
@@ -1061,5 +1174,8 @@ class TrackingSessionCoordinator @Inject constructor(
 
         /** REC-002: the [DiagnosticEventEntity.eventType] of a restart that couldn't legitimately resume an ACTIVE capture. */
         const val EVENT_RECOVERY_DEGRADED = "RECOVERY_DEGRADED"
+
+        /** REC-003: below this a sealed capture has no route worth showing, so it gets no partial Trip (its evidence stays). */
+        const val MIN_POINTS_FOR_PARTIAL_TRIP = 2
     }
 }

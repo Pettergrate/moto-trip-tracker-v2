@@ -280,6 +280,13 @@ private fun HeaderSection(state: TripDetailUiState.Loaded) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        if (state.wasInterrupted) {
+            Text(
+                "Recording was interrupted, so this trip may be incomplete.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
     }
 }
 

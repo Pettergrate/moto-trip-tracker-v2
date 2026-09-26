@@ -853,6 +853,107 @@ class TrackingSessionCoordinatorTest {
         assertTrue(snapshot!!.isPaused)
     }
 
+    // --- REC-003: sealing an orphaned capture after a reboot ------------
+
+    private suspend fun startWithPoints(vararg elapsed: Long): String {
+        val captureId = (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinatorWith(elapsed.map { sample(elapsedNanos = it, lat = 10.0 + it * 0.000001) }).recordLocationUpdates(captureId)
+        return captureId
+    }
+
+    @Test
+    fun bootCompletedSealsAnActiveCaptureAndGivesItAVisiblePartialTrip() = runTest {
+        val captureId = startWithPoints(2_000L, 3_000L, 4_000L)
+
+        val outcome = coordinator.sealActiveCaptureAfterBoot() as TrackingSessionCoordinator.ReconcileOutcome.SealedAfterReboot
+
+        val capture = requireNotNull(db.tripCaptureDao().findById(captureId))
+        assertEquals(CaptureStatus.ABORTED, capture.status)
+        assertEquals(EndSource.RECOVERY, capture.endSource)
+        assertEquals("the last raw point's own time, never an invented now", 4_000L, capture.endElapsedRealtimeNanos)
+        val tripId = requireNotNull(outcome.partialTripId)
+        assertEquals(com.mototriptracker.app.core.model.TripStatus.COMPLETED, requireNotNull(db.tripDao().findById(tripId)).status)
+        val part = db.tripPartDao().findAllByTrip(tripId).single()
+        assertEquals(captureId, part.captureId)
+        assertEquals(4_000L, part.endElapsedRealtimeNanos)
+        assertEquals(0L, part.startSequenceNumber)
+        assertEquals(2L, part.endSequenceNumber)
+        assertEquals(3, db.rawTrackPointDao().countByCapture(captureId))
+        assertEquals(listOf(tripId), processingScheduler.enqueuedRequests.map { it.tripId })
+        assertNull("nothing is ACTIVE any more, so a new Start is possible again (ADR-020)", coordinator.findActiveCapture())
+    }
+
+    @Test
+    fun bootCompletedSealsEvenWhenElapsedTimeAloneWouldCallItTheSameBoot() = runTest {
+        val captureId = startWithPoints(2_000L, 3_000L)
+        // The fresh boot's clock (5_000) is already past the capture's recorded
+        // start (1_000): the elapsedRealtime heuristic alone says "same boot".
+        clock.setElapsedRealtimeNanos(5_000L)
+        assertEquals(TrackingSessionCoordinator.ReconcileOutcome.NothingToReconcile, coordinator.reconcileActiveCaptureAfterReboot())
+
+        coordinator.sealActiveCaptureAfterBoot()
+
+        assertEquals("BOOT_COMPLETED knows a reboot happened", CaptureStatus.ABORTED, db.tripCaptureDao().findById(captureId)?.status)
+    }
+
+    @Test
+    fun aSealedCaptureWithFewerThanTwoPointsGetsNoTripButKeepsItsEvidence() = runTest {
+        val captureId = startWithPoints(2_000L)
+
+        val outcome = coordinator.sealActiveCaptureAfterBoot() as TrackingSessionCoordinator.ReconcileOutcome.SealedAfterReboot
+
+        assertNull(outcome.partialTripId)
+        assertEquals(CaptureStatus.ABORTED, db.tripCaptureDao().findById(captureId)?.status)
+        assertEquals(1, db.rawTrackPointDao().countByCapture(captureId))
+        assertTrue(processingScheduler.enqueuedRequests.isEmpty())
+    }
+
+    @Test
+    fun anOpenManualPauseIsClosedAtTheLastEvidenceSoTheTripsMetricsCanBeComputed() = runTest {
+        val captureId = startWithPoints(2_000L, 3_000L, 4_000L)
+        clock.setElapsedRealtimeNanos(3_500L)
+        coordinator.pauseCapture()
+
+        coordinator.sealActiveCaptureAfterBoot()
+
+        val pause = db.manualPauseIntervalDao().findAllByCapture(captureId).single()
+        assertEquals("CAPTURE_INTERRUPTED", pause.endReason)
+        assertNotNull("TripMetricsCalculator rejects an open pause", pause.endElapsedRealtimeNanos)
+        assertTrue("never closed before it started", pause.endElapsedRealtimeNanos!! >= pause.startElapsedRealtimeNanos)
+    }
+
+    @Test
+    fun sealingIsIdempotentAndDoesNothingWhenNoCaptureIsActive() = runTest {
+        assertEquals(TrackingSessionCoordinator.ReconcileOutcome.NothingToReconcile, coordinator.sealActiveCaptureAfterBoot())
+        startWithPoints(2_000L, 3_000L)
+        coordinator.sealActiveCaptureAfterBoot()
+
+        assertEquals(TrackingSessionCoordinator.ReconcileOutcome.NothingToReconcile, coordinator.sealActiveCaptureAfterBoot())
+        assertEquals(1, processingScheduler.enqueuedRequests.size)
+    }
+
+    @Test
+    fun appStartReconciliationSealsOnlyOnTheDefinitiveDiscontinuityAndLeavesASameBootCaptureAlone() = runTest {
+        val captureId = startWithPoints(2_000L, 3_000L)
+        assertEquals(TrackingSessionCoordinator.ReconcileOutcome.NothingToReconcile, coordinator.reconcileActiveCaptureAfterReboot())
+        assertEquals(CaptureStatus.ACTIVE, db.tripCaptureDao().findById(captureId)?.status)
+
+        clock.setElapsedRealtimeNanos(500L) // a real reboot: the clock domain restarted
+
+        assertTrue(coordinator.reconcileActiveCaptureAfterReboot() is TrackingSessionCoordinator.ReconcileOutcome.SealedAfterReboot)
+        assertEquals(CaptureStatus.ABORTED, db.tripCaptureDao().findById(captureId)?.status)
+    }
+
+    @Test
+    fun theRebootBranchOfServiceRecoveryAlsoGivesTheInterruptedRideAVisibleTrip() = runTest {
+        val captureId = startWithPoints(2_000L, 3_000L)
+        clock.setElapsedRealtimeNanos(500L)
+
+        coordinator.recoverActiveCaptureIfAny()
+
+        assertNotNull(db.tripPartDao().findByCaptureId(captureId))
+    }
+
     // --- REC-001: recoverActiveCaptureIfAny -------------------------------
 
     @Test
