@@ -49,6 +49,16 @@ interface AppModule {
     @Binds
     fun bindClock(impl: AndroidClock): Clock
 
+    /** REC-004. */
+    @Binds
+    fun bindProcessExitReasonReader(impl: com.mototriptracker.app.tracking.recovery.AndroidProcessExitReasonReader): com.mototriptracker.app.tracking.recovery.ProcessExitReasonReader
+
+    @Binds
+    fun bindBootCountReader(impl: com.mototriptracker.app.tracking.recovery.AndroidBootCountReader): com.mototriptracker.app.tracking.recovery.BootCountReader
+
+    @Binds
+    fun bindHandledExitStore(impl: com.mototriptracker.app.tracking.recovery.DataStoreHandledExitStore): com.mototriptracker.app.tracking.recovery.HandledExitStore
+
     @Binds
     fun bindIdGenerator(impl: UuidIdGenerator): IdGenerator
 

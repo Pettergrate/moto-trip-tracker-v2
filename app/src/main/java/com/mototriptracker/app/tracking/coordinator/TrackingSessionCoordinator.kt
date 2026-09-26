@@ -1,6 +1,7 @@
 package com.mototriptracker.app.tracking.coordinator
 
 import androidx.room.withTransaction
+import android.util.Log
 import com.mototriptracker.app.BuildConfig
 import com.mototriptracker.app.core.common.Clock
 import com.mototriptracker.app.core.common.IdGenerator
@@ -227,7 +228,7 @@ class TrackingSessionCoordinator @Inject constructor(
         val active = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) ?: return RecoveryOutcome.NoActiveCapture
 
         return if (clock.elapsedRealtimeNanos() < active.startElapsedRealtimeNanos) {
-            abortCaptureAfterReboot(active)
+            abortCaptureAfterReboot(active, "service-recovery")
             RecoveryOutcome.AbortedAfterReboot(active.id)
         } else {
             logProcessRecovered(active.id)
@@ -246,11 +247,14 @@ class TrackingSessionCoordinator @Inject constructor(
      * this from a hypothetical future user-initiated abort action
      * (`EndSource.ABORTED`, unused today - no such action exists yet).
      */
-    private suspend fun abortCaptureAfterReboot(capture: TripCaptureEntity): String? {
-        val tripId = sealInterruptedCapture(capture)
+    private suspend fun abortCaptureAfterReboot(capture: TripCaptureEntity, source: String): SealedCapture? {
+        val sealed = sealInterruptedCapture(capture, source) ?: return null
         logCaptureAbortedAfterReboot(capture.id)
-        return tripId
+        return sealed
     }
+
+    /** REC-003/004: what sealing produced. Not being returned at all means another caller already sealed the capture. */
+    private data class SealedCapture(val partialTripId: String?)
 
     /**
      * REC-003. What [recoverActiveCaptureIfAny]'s reboot branch and
@@ -271,10 +275,17 @@ class TrackingSessionCoordinator @Inject constructor(
      *
      * @return the partial Trip's id, or `null` if none was created.
      */
-    private suspend fun sealInterruptedCapture(capture: TripCaptureEntity): String? {
+    private suspend fun sealInterruptedCapture(capture: TripCaptureEntity, source: String): SealedCapture? {
         var partialTripId: String? = null
+        var sealed = false
         database.withTransaction {
-            val lastPoint = rawTrackPointDao.findAllByCapture(capture.id).maxByOrNull { it.sequenceNumber }
+            // REL-INV-007/ADR-015: revalidate INSIDE the transaction. Callers read the
+            // capture *before* it (two reconciliations can overlap - app start, boot
+            // receiver, a service restart), and `completeActiveCapture` is guarded by
+            // `status = ACTIVE` but would not stop a second Trip being inserted.
+            if (tripCaptureDao.findById(capture.id)?.status != CaptureStatus.ACTIVE) return@withTransaction
+            sealed = true
+            val lastPoint = rawTrackPointDao.findLastByCapture(capture.id)
             val pointCount = rawTrackPointDao.countByCapture(capture.id)
             val endedAt = lastPoint?.capturedAt ?: capture.startedAt
             val endElapsedRealtimeNanos = lastPoint?.elapsedRealtimeNanos ?: capture.startElapsedRealtimeNanos
@@ -332,8 +343,10 @@ class TrackingSessionCoordinator @Inject constructor(
                 partialTripId = tripId
             }
         }
+        Log.i(TAG, "seal capture=${capture.id} source=$source sealed=$sealed partialTrip=$partialTripId")
+        if (!sealed) return null
         partialTripId?.let { processingScheduler.enqueueTripProcessing(it, capture.id) }
-        return partialTripId
+        return SealedCapture(partialTripId)
     }
 
     /** REC-003's answer to "did anything need sealing, and did it get a visible Trip". */
@@ -343,9 +356,10 @@ class TrackingSessionCoordinator @Inject constructor(
     }
 
     /**
-     * REC-003/F0.10 §10.3 + §25: `BOOT_COMPLETED` is the *certain* signal that
-     * a reboot happened, so any capture still `ACTIVE` at that moment belongs to
-     * the previous boot and must be sealed - without this it stays `ACTIVE`
+     * REC-003/F0.10 §10.3 + §25: called once `RebootReconciler` has *confirmed* a
+     * real reboot (the platform boot count changed - `BOOT_COMPLETED` alone is not
+     * proof: Android also sends it to an app relaunched after a Force stop). Any
+     * capture still `ACTIVE` then belongs to the previous boot and must be sealed - without this it stays `ACTIVE`
      * forever after a reboot, the "Trip in progress" card never goes away and
      * ADR-020's single-active rule blocks every future Start. Deliberately does
      * **not** use [recoverActiveCaptureIfAny]'s `elapsedRealtime` comparison
@@ -357,7 +371,48 @@ class TrackingSessionCoordinator @Inject constructor(
      */
     suspend fun sealActiveCaptureAfterBoot(): ReconcileOutcome {
         val active = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) ?: return ReconcileOutcome.NothingToReconcile
-        return ReconcileOutcome.SealedAfterReboot(active.id, abortCaptureAfterReboot(active))
+        val sealed = abortCaptureAfterReboot(active, "boot-completed") ?: return ReconcileOutcome.NothingToReconcile
+        return ReconcileOutcome.SealedAfterReboot(active.id, sealed.partialTripId)
+    }
+
+    /**
+     * REC-004/F0.10 §9.2: the previous process was ended by the user (see
+     * `UserStopReconciler`), so a capture still `ACTIVE` is sealed - same evidence
+     * rules as a reboot (last persisted evidence, visible partial Trip) - rather
+     * than blindly resumed. The reason is recorded distinctly from a reboot, since
+     * it is a different decision the user made.
+     */
+    suspend fun sealActiveCaptureAfterUserStop(): ReconcileOutcome {
+        val active = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) ?: return ReconcileOutcome.NothingToReconcile
+        val sealed = sealInterruptedCapture(active, "user-stop") ?: return ReconcileOutcome.NothingToReconcile
+        logCaptureSealed(active.id, EVENT_CAPTURE_SEALED_AFTER_USER_STOP, "PROCESS_EXIT_USER_REQUESTED")
+        return ReconcileOutcome.SealedAfterReboot(active.id, sealed.partialTripId)
+    }
+
+    private suspend fun logCaptureSealed(captureId: String, eventType: String, reasonCode: String) {
+        diagnosticEventDao.insert(
+            DiagnosticEventEntity(
+                eventId = idGenerator.newId(),
+                occurredAt = clock.wallClockMillis(),
+                elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                category = DiagnosticCategory.RECOVERY_SYSTEM,
+                eventType = eventType,
+                severity = DiagnosticSeverity.WARN,
+                source = "tracking-service",
+                captureId = captureId,
+                tripId = null,
+                correlationId = null,
+                stateBefore = "ACTIVE",
+                stateAfter = "ABORTED",
+                reasonCode = reasonCode,
+                metadata = emptyMap(),
+                appVersion = BuildConfig.VERSION_NAME,
+                schemaVersion = 1,
+                detectorVersion = DetectorVersion(0),
+                locationProfileVersion = LocationProfileVersion(0),
+                processingVersion = ProcessingVersion(0)
+            )
+        )
     }
 
     /**
@@ -371,7 +426,8 @@ class TrackingSessionCoordinator @Inject constructor(
     suspend fun reconcileActiveCaptureAfterReboot(): ReconcileOutcome {
         val active = tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) ?: return ReconcileOutcome.NothingToReconcile
         if (clock.elapsedRealtimeNanos() >= active.startElapsedRealtimeNanos) return ReconcileOutcome.NothingToReconcile
-        return ReconcileOutcome.SealedAfterReboot(active.id, abortCaptureAfterReboot(active))
+        val sealed = abortCaptureAfterReboot(active, "app-start-discontinuity") ?: return ReconcileOutcome.NothingToReconcile
+        return ReconcileOutcome.SealedAfterReboot(active.id, sealed.partialTripId)
     }
 
     /**
@@ -1177,5 +1233,8 @@ class TrackingSessionCoordinator @Inject constructor(
 
         /** REC-003: below this a sealed capture has no route worth showing, so it gets no partial Trip (its evidence stays). */
         const val MIN_POINTS_FOR_PARTIAL_TRIP = 2
+        private const val TAG = "TrackingCoordinator"
+
+        const val EVENT_CAPTURE_SEALED_AFTER_USER_STOP = "CAPTURE_SEALED_AFTER_USER_STOP"
     }
 }

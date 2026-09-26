@@ -24,6 +24,10 @@ interface TripPartDao {
     @Query("SELECT * FROM trip_part WHERE captureId = :captureId LIMIT 1")
     suspend fun findByCaptureId(captureId: String): TripPartEntity?
 
+    /** REC-004: how many Trips reference a capture - a sealed capture must have exactly one partial Trip, however many reconciliations overlapped. */
+    @Query("SELECT COUNT(*) FROM trip_part WHERE captureId = :captureId")
+    suspend fun countByCaptureId(captureId: String): Int
+
     @Query("SELECT * FROM trip_part WHERE tripId = :tripId ORDER BY orderIndex ASC")
     suspend fun findAllByTrip(tripId: String): List<TripPartEntity>
 }

@@ -33,6 +33,10 @@ interface RawTrackPointDao {
     @Query("SELECT * FROM raw_track_point WHERE captureId = :captureId ORDER BY sequenceNumber ASC")
     fun observeAllByCapture(captureId: String): Flow<List<RawTrackPointEntity>>
 
+    /** REC-004: the last recorded point without loading the capture's whole history - sealing now also runs at every process start, so it must stay cheap for a long trip. */
+    @Query("SELECT * FROM raw_track_point WHERE captureId = :captureId ORDER BY sequenceNumber DESC LIMIT 1")
+    suspend fun findLastByCapture(captureId: String): RawTrackPointEntity?
+
     @Query("SELECT COUNT(*) FROM raw_track_point WHERE captureId = :captureId")
     suspend fun countByCapture(captureId: String): Int
 }

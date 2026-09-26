@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.mototriptracker.app.tracking.activityrecognition.ActivityRecognitionRegistrar
-import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
+import com.mototriptracker.app.tracking.recovery.RebootReconciler
 import dagger.Lazy
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -21,9 +21,11 @@ import kotlinx.coroutines.launch
  * No GPS/foreground work starts here (F0.8 §15's own note on this
  * component: "no deja GPS continuo") — only the passive AR registration.
  *
- * REC-003/F0.10 §10.3: `BOOT_COMPLETED` additionally reconciles an orphaned
- * capture - one still `ACTIVE` from before the reboot is sealed as
- * interrupted (with a visible partial Trip when there is a route). It never
+ * REC-003/F0.10 §10.3: `BOOT_COMPLETED` additionally *checks* for an orphaned
+ * capture - one still `ACTIVE` from before a real reboot is sealed as
+ * interrupted, but only after [RebootReconciler] confirms the boot count changed
+ * (the system also sends `BOOT_COMPLETED` to an app relaunched after a Force
+ * stop, so it is only a trigger, never proof) (with a visible partial Trip when there is a route). It never
  * starts a location foreground service or claims the trip continued ("no se usa
  * como regla universal para arrancar inmediatamente un location FGS"). An app
  * *update* is not a reboot - the same boot's `elapsedRealtime` still applies -
@@ -34,8 +36,8 @@ class BootReceiver : BroadcastReceiver() {
 
     @Inject lateinit var registrar: ActivityRecognitionRegistrar
 
-    /** `Lazy`: the coordinator needs WorkManager (processing scheduler), initialised in `Application.onCreate` after injection. */
-    @Inject lateinit var coordinator: Lazy<TrackingSessionCoordinator>
+    /** `Lazy`: it (via the coordinator) needs WorkManager, initialised in `Application.onCreate` after injection. */
+    @Inject lateinit var rebootReconciler: Lazy<RebootReconciler>
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
@@ -45,7 +47,7 @@ class BootReceiver : BroadcastReceiver() {
                 val pending = goAsync()
                 CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                     try {
-                        val outcome = coordinator.get().sealActiveCaptureAfterBoot()
+                        val outcome = rebootReconciler.get().reconcile()
                         Log.i(TAG, "Boot reconciliation: $outcome")
                     } catch (failure: Exception) {
                         // Never let reconciliation take the receiver down; the next app start retries the same check.

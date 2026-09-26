@@ -6,6 +6,8 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.mototriptracker.app.tracking.activityrecognition.ActivityRecognitionRegistrar
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
+import com.mototriptracker.app.tracking.recovery.RebootReconciler
+import com.mototriptracker.app.tracking.recovery.UserStopReconciler
 import com.mototriptracker.app.worker.DerivedDataReconciler
 import com.mototriptracker.app.worker.TrashPurgeScheduler
 import dagger.Lazy
@@ -58,6 +60,12 @@ class MotoTripApplication : Application() {
     /** REC-003: `Lazy` for the same WorkManager-ordering reason as the two above. */
     @Inject lateinit var trackingCoordinator: Lazy<TrackingSessionCoordinator>
 
+    /** REC-004: `Lazy` for the same reason - it (via the coordinator) enqueues through WorkManager. */
+    @Inject lateinit var userStopReconciler: Lazy<UserStopReconciler>
+
+    /** REC-003: `Lazy` for the same reason. */
+    @Inject lateinit var rebootReconciler: Lazy<RebootReconciler>
+
     override fun onCreate() {
         super.onCreate()
         if (!WorkManager.isInitialized()) {
@@ -75,6 +83,10 @@ class MotoTripApplication : Application() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             // REC-003/F0.10 §25: a capture left ACTIVE by a previous boot is sealed on
             // the next process start too (definitive elapsedRealtime test only).
+            // REC-004/F0.10 §9: a user Stop / Force stop must not be silently revived.
+            runCatching { userStopReconciler.get().reconcile() }
+            // REC-003: also on every process start, for OEMs that restrict boot receivers.
+            runCatching { rebootReconciler.get().reconcile() }
             runCatching { trackingCoordinator.get().reconcileActiveCaptureAfterReboot() }
             runCatching { derivedDataReconciler.get().reconcile() }
         }
