@@ -18,6 +18,9 @@ import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBu
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.tracking.persistence.PersistenceHealthBus
 import com.mototriptracker.app.tracking.persistence.PersistenceState
+import com.mototriptracker.app.tracking.persistence.PersistenceLevel
+import com.mototriptracker.app.tracking.recovery.ProcessStateSummary
+import com.mototriptracker.app.tracking.recovery.ProcessStateTracker
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -54,6 +57,7 @@ class TrackingForegroundService : Service() {
     @Inject lateinit var dispatchers: DispatcherProvider
     @Inject lateinit var activityTransitionBus: ActivityTransitionBus
     @Inject lateinit var persistenceHealthBus: PersistenceHealthBus
+    @Inject lateinit var processState: ProcessStateTracker
 
     private lateinit var serviceScope: CoroutineScope
 
@@ -197,6 +201,7 @@ class TrackingForegroundService : Service() {
             ACTION_START -> serviceScope.launch {
                 val result = coordinator.startManualCapture()
                 lastStartResult = result
+                processState.update { it.copy(recording = true) }
                 ensureLocationRecording(result.captureId)
                 ensureNotificationRefreshTicker(result.captureId)
                 refreshNotification(result.captureId)
@@ -205,11 +210,13 @@ class TrackingForegroundService : Service() {
             ACTION_PAUSE -> serviceScope.launch {
                 val result = coordinator.pauseCapture()
                 lastPauseResult = result
+                pausedCaptureId(result)?.let { processState.update { s -> s.copy(paused = true) } }
                 pausedCaptureId(result)?.let { refreshNotification(it) }
             }
             ACTION_RESUME -> serviceScope.launch {
                 val result = coordinator.resumeCapture()
                 lastResumeResult = result
+                resumedCaptureId(result)?.let { processState.update { s -> s.copy(paused = false) } }
                 resumedCaptureId(result)?.let { refreshNotification(it) }
             }
             ACTION_AUTO_DETECT -> ensureAutoDetection()
@@ -264,6 +271,7 @@ class TrackingForegroundService : Service() {
             lastFinishResult = coordinator.finishCapture(active.id)
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
+        processState.reset()
         stopSelf()
     }
 
@@ -288,6 +296,7 @@ class TrackingForegroundService : Service() {
                 stopSelf()
             }
             is TrackingSessionCoordinator.RecoveryOutcome.Resumed -> {
+                processState.update { it.copy(recording = true) }
                 ensureLocationRecording(outcome.captureId)
                 ensureNotificationRefreshTicker(outcome.captureId)
                 refreshNotification(outcome.captureId)
@@ -328,6 +337,15 @@ class TrackingForegroundService : Service() {
     /** REC-006: shown at once, and never depends on the database being readable (see [refreshNotification]). */
     private suspend fun onPersistenceStateChanged(captureId: String, state: PersistenceState) {
         persistence = state
+        processState.update {
+            it.copy(
+                persistence = when (state.level) {
+                    PersistenceLevel.HEALTHY -> ProcessStateSummary.PERSISTENCE_OK
+                    PersistenceLevel.DEGRADED -> ProcessStateSummary.PERSISTENCE_DEGRADED
+                    PersistenceLevel.CRITICAL -> ProcessStateSummary.PERSISTENCE_CRITICAL
+                }
+            )
+        }
         persistenceHealthBus.publish(state)
         refreshNotification(captureId)
     }
@@ -338,6 +356,16 @@ class TrackingForegroundService : Service() {
             TrackingSessionCoordinator.LocationSignalReport.APPROXIMATE_ONLY -> approximateOnly = true
             TrackingSessionCoordinator.LocationSignalReport.PRECISE_RESTORED -> approximateOnly = false
             else -> locationSignal = report
+        }
+        processState.update {
+            it.copy(
+                approximateOnly = approximateOnly,
+                signal = when (locationSignal) {
+                    TrackingSessionCoordinator.LocationSignalReport.LOST_NO_FIX -> ProcessStateSummary.SIGNAL_GAP
+                    TrackingSessionCoordinator.LocationSignalReport.LOST_LOCATION_SERVICES_OFF -> ProcessStateSummary.SIGNAL_OFF
+                    else -> ProcessStateSummary.SIGNAL_OK
+                }
+            )
         }
         refreshNotification(captureId)
     }
@@ -391,6 +419,7 @@ class TrackingForegroundService : Service() {
         val outcome = coordinator.runAutoDetection(
             activityEvents = activityTransitionBus.events,
             onCaptureStarted = { captureId ->
+                processState.update { it.copy(recording = true) }
                 startForeground(NOTIFICATION_ID, notificationController.buildTrackingNotification())
                 ensureNotificationRefreshTicker(captureId)
                 refreshNotification(captureId)
@@ -409,6 +438,7 @@ class TrackingForegroundService : Service() {
     override fun onDestroy() {
         serviceScope.cancel()
         persistenceHealthBus.reset()
+        processState.reset()
         super.onDestroy()
     }
 

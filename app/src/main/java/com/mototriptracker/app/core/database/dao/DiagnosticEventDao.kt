@@ -2,6 +2,7 @@ package com.mototriptracker.app.core.database.dao
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.mototriptracker.app.core.database.entity.DiagnosticEventEntity
 import kotlinx.coroutines.flow.Flow
@@ -16,6 +17,14 @@ interface DiagnosticEventDao {
 
     @Insert
     suspend fun insert(event: DiagnosticEventEntity)
+
+    /**
+     * DIA-004: for evidence that has a natural, stable identity (a process exit is identified by its pid and
+     * timestamp): writing it twice must not duplicate it, whatever happened to the cursor that normally
+     * prevents that. Returns the new row id, or -1 when the event was already there.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertOrIgnore(event: DiagnosticEventEntity): Long
 
     @Query("SELECT * FROM diagnostic_event WHERE eventId = :eventId")
     suspend fun findById(eventId: String): DiagnosticEventEntity?
@@ -40,6 +49,20 @@ interface DiagnosticEventDao {
             "ORDER BY elapsedRealtimeNanos DESC LIMIT 1"
     )
     fun observeOpenGapReason(captureId: String, startedType: String, endedType: String): Flow<String?>
+
+    /**
+     * DIA-004/F0.13 §12.2: retention. Deletes diagnostic rows only - never a Trip, a capture or raw points
+     * (there is no foreign key between them by design). [keepTypes] are exempt: see `DiagnosticPurger`.
+     */
+    @Query("DELETE FROM diagnostic_event WHERE occurredAt < :cutoff AND eventType NOT IN (:keepTypes)")
+    suspend fun deleteOlderThan(cutoff: Long, keepTypes: List<String>): Int
+
+    /** The `n` oldest purgeable rows, for the capacity limit (F0.13 §12.2: "purgar por antigüedad y luego por capacidad"). */
+    @Query(
+        "DELETE FROM diagnostic_event WHERE eventId IN (SELECT eventId FROM diagnostic_event " +
+            "WHERE eventType NOT IN (:keepTypes) ORDER BY occurredAt ASC LIMIT :n)"
+    )
+    suspend fun deleteOldest(n: Int, keepTypes: List<String>): Int
 
     @Query("SELECT * FROM diagnostic_event")
     suspend fun findAll(): List<DiagnosticEventEntity>

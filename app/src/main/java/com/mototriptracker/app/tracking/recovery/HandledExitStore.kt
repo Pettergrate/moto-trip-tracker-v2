@@ -21,6 +21,10 @@ interface HandledExitStore {
     /** REC-003: the `BOOT_COUNT` seen by the previous run, or `null` if there was none (first run). */
     suspend fun lastSeenBootCount(): Int?
     suspend fun setLastSeenBootCount(bootCount: Int)
+
+    /** DIA-004: the newest process exit already written to the diagnostic evidence - a cursor separate from [lastHandledTimestamp], which is recovery's. */
+    suspend fun lastRecordedExitTimestamp(): Long
+    suspend fun markExitRecorded(timestampMillis: Long)
 }
 
 class DataStoreHandledExitStore @Inject constructor(
@@ -38,8 +42,15 @@ class DataStoreHandledExitStore @Inject constructor(
         dataStore.edit { it[BOOT_KEY] = bootCount }
     }
 
+    override suspend fun lastRecordedExitTimestamp(): Long = dataStore.data.first()[RECORDED_KEY] ?: 0L
+
+    override suspend fun markExitRecorded(timestampMillis: Long) {
+        dataStore.edit { it[RECORDED_KEY] = timestampMillis }
+    }
+
     private companion object {
         val KEY = longPreferencesKey("last_handled_process_exit_timestamp")
+        val RECORDED_KEY = longPreferencesKey("last_recorded_process_exit_timestamp")
         val BOOT_KEY = intPreferencesKey("last_seen_boot_count")
     }
 }

@@ -78,6 +78,12 @@ interface AppModule {
     fun bindTrashPurgeScheduler(impl: WorkManagerTrashPurgeScheduler): TrashPurgeScheduler
 
     @Binds
+    fun bindDiagnosticPurgeScheduler(impl: com.mototriptracker.app.worker.WorkManagerDiagnosticPurgeScheduler): com.mototriptracker.app.worker.DiagnosticPurgeScheduler
+
+    @Binds
+    fun bindProcessStateSummaryPublisher(impl: com.mototriptracker.app.tracking.recovery.AndroidProcessStateSummaryPublisher): com.mototriptracker.app.tracking.recovery.ProcessStateSummaryPublisher
+
+    @Binds
     fun bindCapabilityInputsProvider(impl: AndroidCapabilityInputsProvider): CapabilityInputsProvider
 
     @Binds

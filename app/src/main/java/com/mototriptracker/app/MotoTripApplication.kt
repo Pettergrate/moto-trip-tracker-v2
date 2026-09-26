@@ -6,9 +6,11 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.mototriptracker.app.tracking.activityrecognition.ActivityRecognitionRegistrar
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
+import com.mototriptracker.app.tracking.recovery.ProcessExitRecorder
 import com.mototriptracker.app.tracking.recovery.RebootReconciler
 import com.mototriptracker.app.tracking.recovery.UserStopReconciler
 import com.mototriptracker.app.worker.DerivedDataReconciler
+import com.mototriptracker.app.worker.DiagnosticPurgeScheduler
 import com.mototriptracker.app.worker.TrashPurgeScheduler
 import dagger.Lazy
 import dagger.hilt.android.HiltAndroidApp
@@ -54,6 +56,9 @@ class MotoTripApplication : Application() {
      */
     @Inject lateinit var trashPurgeScheduler: Lazy<TrashPurgeScheduler>
 
+    /** DIA-004: `Lazy` for the same WorkManager-ordering reason as [trashPurgeScheduler]. */
+    @Inject lateinit var diagnosticPurgeScheduler: Lazy<DiagnosticPurgeScheduler>
+
     /** `Lazy` for the same reason as [trashPurgeScheduler]: it enqueues through WorkManager. */
     @Inject lateinit var derivedDataReconciler: Lazy<DerivedDataReconciler>
 
@@ -66,6 +71,9 @@ class MotoTripApplication : Application() {
     /** REC-003: `Lazy` for the same reason. */
     @Inject lateinit var rebootReconciler: Lazy<RebootReconciler>
 
+    /** DIA-004: records how earlier processes ended (evidence only; recovery decisions stay with [userStopReconciler]). */
+    @Inject lateinit var processExitRecorder: Lazy<ProcessExitRecorder>
+
     override fun onCreate() {
         super.onCreate()
         if (!WorkManager.isInitialized()) {
@@ -77,6 +85,8 @@ class MotoTripApplication : Application() {
         activityRecognitionRegistrar.register()
         // TRS-001: ExistingPeriodicWorkPolicy.KEEP makes this idempotent too.
         trashPurgeScheduler.get().schedulePeriodicPurge()
+        // DIA-004/F0.13 §12.2: bound the diagnostic evidence (14 days / 20,000 events). Idempotent too.
+        diagnosticPurgeScheduler.get().schedulePeriodicPurge()
         // EDT-004: heal Trips left without derived data (e.g. a crash between a
         // merge/split/trim commit and its processing being enqueued). Off the main
         // thread; a failure here must never take the app down.
@@ -85,6 +95,7 @@ class MotoTripApplication : Application() {
             // the next process start too (definitive elapsedRealtime test only).
             // REC-004/F0.10 §9: a user Stop / Force stop must not be silently revived.
             runCatching { userStopReconciler.get().reconcile() }
+            runCatching { processExitRecorder.get().record() }
             // REC-003: also on every process start, for OEMs that restrict boot receivers.
             runCatching { rebootReconciler.get().reconcile() }
             runCatching { trackingCoordinator.get().reconcileActiveCaptureAfterReboot() }
