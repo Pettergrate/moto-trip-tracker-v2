@@ -6,9 +6,11 @@ import android.app.Service
 import android.content.pm.PackageManager
 import android.content.Context
 import android.content.Intent
+import android.location.LocationManager
 import android.os.IBinder
 import android.util.Log
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import com.mototriptracker.app.core.common.DispatcherProvider
 import com.mototriptracker.app.core.notification.TrackingNotificationController
 import com.mototriptracker.app.core.notification.TrackingNotificationController.Companion.NOTIFICATION_ID
@@ -51,6 +53,14 @@ class TrackingForegroundService : Service() {
     @Inject lateinit var activityTransitionBus: ActivityTransitionBus
 
     private lateinit var serviceScope: CoroutineScope
+
+    /**
+     * REC-005: the recording's last reported location-signal state, only ever used to word the
+     * notification (the diagnostic events are the persisted record). A restarted service
+     * begins at "restored" and learns otherwise at the next gap transition.
+     */
+    @Volatile
+    private var locationSignal = TrackingSessionCoordinator.LocationSignalReport.RESTORED
 
     /**
      * The [Job] for the command handled by the most recent [onStartCommand].
@@ -276,7 +286,9 @@ class TrackingForegroundService : Service() {
             coordinator.recordLocationUpdates(
                 captureId,
                 onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() },
-                onForgottenFinishWarning = { notificationController.postForgottenFinishReminder() }
+                onForgottenFinishWarning = { notificationController.postForgottenFinishReminder() },
+                locationServicesEnabled = ::isLocationServicesEnabled,
+                onLocationSignalChanged = { report -> onLocationSignalChanged(captureId, report) }
             )
         }
     }
@@ -291,6 +303,15 @@ class TrackingForegroundService : Service() {
         is TrackingSessionCoordinator.ResumeResult.Resumed -> result.captureId
         is TrackingSessionCoordinator.ResumeResult.AlreadyResumed -> result.captureId
         TrackingSessionCoordinator.ResumeResult.NoActiveCapture -> null
+    }
+
+    private fun isLocationServicesEnabled(): Boolean =
+        getSystemService(LocationManager::class.java)?.let { LocationManagerCompat.isLocationEnabled(it) } ?: false
+
+    /** REC-005: word the notification honestly the moment the signal changes instead of waiting for the next periodic refresh. */
+    private suspend fun onLocationSignalChanged(captureId: String, report: TrackingSessionCoordinator.LocationSignalReport) {
+        locationSignal = report
+        refreshNotification(captureId)
     }
 
     /** NOT-001: started once a capture is confirmed active; not order-sensitive like [locationRecordingJob], so `onDestroy`'s `serviceScope.cancel()` cleaning it up on Finish/stop is enough - no explicit cancel needed here. */
@@ -310,7 +331,7 @@ class TrackingForegroundService : Service() {
         val notification = if (snapshot.isPaused) {
             notificationController.buildPausedTrackingNotification(snapshot.elapsedMs)
         } else {
-            notificationController.buildTrackingNotification(snapshot.distanceMeters, snapshot.elapsedMs)
+            notificationController.buildTrackingNotification(snapshot.distanceMeters, snapshot.elapsedMs, locationSignal)
         }
         startForeground(NOTIFICATION_ID, notification)
     }
@@ -337,7 +358,9 @@ class TrackingForegroundService : Service() {
                 ensureNotificationRefreshTicker(captureId)
                 refreshNotification(captureId)
             },
-            onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() }
+            onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() },
+            locationServicesEnabled = ::isLocationServicesEnabled,
+            onLocationSignalChanged = { report -> coordinator.findActiveCapture()?.let { onLocationSignalChanged(it.id, report) } }
         )
         lastAutoDetectionOutcome = outcome
         stopForeground(STOP_FOREGROUND_REMOVE)

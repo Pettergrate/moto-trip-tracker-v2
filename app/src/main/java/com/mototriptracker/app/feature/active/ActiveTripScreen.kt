@@ -113,6 +113,12 @@ private fun ActiveTripContent(
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
+                    signalNotice(uiState.signal)?.let { notice ->
+                        // REC-005: honest, not alarming - the trip is still recording; a gap is marked, never filled in.
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Text(notice, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(12.dp))
+                        }
+                    }
 
                     // MAP-001 isn't built yet - an honest placeholder, not a fake route.
                     Card(modifier = Modifier.fillMaxWidth().aspectRatio(1.2f)) {
@@ -157,4 +163,14 @@ private fun ActiveTripContent(
             }
         )
     }
+}
+
+/** REC-005 / F0.10 §21 DEGRADED: what the rider is told while the location signal is not healthy; `null` when there is nothing to say. */
+internal fun signalNotice(signal: ActiveTripSignal): String? = when (signal) {
+    ActiveTripSignal.OK -> null
+    ActiveTripSignal.SEARCHING -> "Waiting for the first GPS fix…"
+    ActiveTripSignal.LOST_NO_FIX ->
+        "No GPS signal. The trip keeps recording; the stretch without signal is marked as a gap, not filled in."
+    ActiveTripSignal.LOST_LOCATION_SERVICES_OFF ->
+        "Location is turned off, so no route is being recorded. Turn it on to keep tracking; the stretch without location is marked as a gap."
 }

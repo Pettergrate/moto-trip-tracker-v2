@@ -41,11 +41,18 @@ import com.mototriptracker.app.domain.detection.ForgottenFinishDecision
 import com.mototriptracker.app.domain.detection.ForgottenFinishEngine
 import com.mototriptracker.app.domain.detection.ForgottenPauseDecision
 import com.mototriptracker.app.domain.detection.ForgottenPauseEngine
+import com.mototriptracker.app.domain.detection.LocationSignalWatch
 import com.mototriptracker.app.domain.liveDistanceMeters
 import com.mototriptracker.app.tracking.location.LocationGateway
 import com.mototriptracker.app.tracking.processing.ProcessingScheduler
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
@@ -769,7 +776,9 @@ class TrackingSessionCoordinator @Inject constructor(
     suspend fun runAutoDetection(
         activityEvents: Flow<ActivityTransitionSample>,
         onCaptureStarted: suspend (captureId: String) -> Unit = {},
-        onForgottenPauseWarning: suspend () -> Unit = {}
+        onForgottenPauseWarning: suspend () -> Unit = {},
+        locationServicesEnabled: () -> Boolean = { true },
+        onLocationSignalChanged: suspend (LocationSignalReport) -> Unit = {}
     ): AutoDetectionOutcome {
         val activityFlow: Flow<DetectionEvent> = activityEvents.map { DetectionEvent.Activity(it) }
         val locationFlow: Flow<DetectionEvent> = locationGateway.locationUpdates().map { DetectionEvent.Location(it) }
@@ -785,6 +794,8 @@ class TrackingSessionCoordinator @Inject constructor(
         var activeCaptureId: String? = null
         var nextSequenceNumber = 0L
         val forgottenPauseWatch = ForgottenPauseWatch()
+        // REC-005: created once the capture is confirmed (before that there is no evidence to lose).
+        var signal: LocationSignalTracker? = null
 
         try {
             merge(activityFlow, locationFlow, tickerFlow).collect { event ->
@@ -797,6 +808,7 @@ class TrackingSessionCoordinator @Inject constructor(
                                     activeCaptureId = started.captureId
                                     nextSequenceNumber = (rawTrackPointDao.maxSequenceNumber(started.captureId) ?: -1) + 1
                                     stopEngine = CandidateStopEngine()
+                                    signal = LocationSignalTracker(started.captureId, null, locationServicesEnabled, onLocationSignalChanged)
                                     onCaptureStarted(started.captureId)
                                 }
                                 // Another Start (most likely manual - DP-005 "manual
@@ -809,6 +821,11 @@ class TrackingSessionCoordinator @Inject constructor(
                     }
                 } else {
                     val openPause = manualPauseIntervalDao.findOpenByCapture(captureId)
+                    when (event) {
+                        is DetectionEvent.Location -> signal?.onSample(event.sample, paused = openPause != null)
+                        is DetectionEvent.TimeTick -> signal?.onTick(paused = openPause != null)
+                        else -> Unit
+                    }
                     if (openPause == null) {
                         forgottenPauseWatch.onResumed()
                         if (event is DetectionEvent.Location) {
@@ -821,6 +838,7 @@ class TrackingSessionCoordinator @Inject constructor(
                         }
                         when (val decision = checkNotNull(stopEngine).accept(event)) {
                             is CandidateStopDecision.Confirmed -> {
+                                signal?.onRecordingStopped()
                                 val result = finishCapture(captureId, EndSource.AUTO)
                                 throw StopAutoDetection(AutoDetectionOutcome.TripCompleted(captureId, result.tripId))
                             }
@@ -947,7 +965,11 @@ class TrackingSessionCoordinator @Inject constructor(
     suspend fun recordLocationUpdates(
         captureId: String,
         onForgottenPauseWarning: suspend () -> Unit = {},
-        onForgottenFinishWarning: suspend () -> Unit = {}
+        onForgottenFinishWarning: suspend () -> Unit = {},
+        locationServicesEnabled: () -> Boolean = { true },
+        onLocationSignalChanged: suspend (LocationSignalReport) -> Unit = {},
+        /** Only tests pass this: the silence check must be exercisable without waiting [TICKER_INTERVAL_MS] of real time. */
+        tickIntervalMs: Long = TICKER_INTERVAL_MS
     ) {
         var nextSequenceNumber = (rawTrackPointDao.maxSequenceNumber(captureId) ?: -1) + 1
         val forgottenPauseWatch = ForgottenPauseWatch()
@@ -956,29 +978,223 @@ class TrackingSessionCoordinator @Inject constructor(
         // `CandidateStopEngine`. A manual capture has no such safety net,
         // which is the actual gap this closes.
         val forgottenFinishWatch = ForgottenFinishWatch()
-        locationGateway.locationUpdates().collect { sample ->
-            val openPause = manualPauseIntervalDao.findOpenByCapture(captureId)
-            if (openPause == null) {
-                forgottenPauseWatch.onResumed()
-                try {
-                    rawTrackPointDao.insert(sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
-                    nextSequenceNumber++
-                } catch (error: Exception) {
-                    logRawTrackPointPersistenceFailure(captureId, error)
+        // REC-005: seeded with the last stored fix so a sticky restart reports the
+        // silence it slept through as a gap instead of pretending it was continuous.
+        val signal = LocationSignalTracker(
+            captureId = captureId,
+            seedElapsedRealtimeNanos = rawTrackPointDao.findLastByCapture(captureId)?.elapsedRealtimeNanos,
+            locationServicesEnabled = locationServicesEnabled,
+            onReport = onLocationSignalChanged
+        )
+        coroutineScope {
+            // No fix arriving means no sample to react to, so the silence needs its own clock.
+            val ticker = launch {
+                while (true) {
+                    delay(tickIntervalMs)
+                    signal.onTick(paused = manualPauseIntervalDao.findOpenByCapture(captureId) != null)
                 }
-                forgottenFinishWatch.onSample(sample) { decision ->
-                    logForgottenFinishWarning(captureId, decision)
-                    onForgottenFinishWarning()
+            }
+            try {
+                locationGateway.locationUpdates().collect { sample ->
+                    val openPause = manualPauseIntervalDao.findOpenByCapture(captureId)
+                    // Every received fix counts as signal, persisted or not (a paused recording still
+                    // hears the GPS; resuming must not look like a gap).
+                    signal.onSample(sample, paused = openPause != null)
+                    if (openPause == null) {
+                        forgottenPauseWatch.onResumed()
+                        try {
+                            rawTrackPointDao.insert(sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
+                            nextSequenceNumber++
+                        } catch (error: Exception) {
+                            logRawTrackPointPersistenceFailure(captureId, error)
+                        }
+                        forgottenFinishWatch.onSample(sample) { decision ->
+                            logForgottenFinishWarning(captureId, decision)
+                            onForgottenFinishWarning()
+                        }
+                    } else {
+                        forgottenFinishWatch.onPaused()
+                        forgottenPauseWatch.onPausedSample(openPause.id, sample) { decision ->
+                            logForgottenPauseWarning(captureId, openPause.id, decision)
+                            onForgottenPauseWarning()
+                        }
+                    }
                 }
-            } else {
-                forgottenFinishWatch.onPaused()
-                forgottenPauseWatch.onPausedSample(openPause.id, sample) { decision ->
-                    logForgottenPauseWarning(captureId, openPause.id, decision)
-                    onForgottenPauseWarning()
-                }
+            } finally {
+                ticker.cancel()
+                // Runs on Finish too (the service cancels this collector first): close an open gap.
+                withContext(NonCancellable) { signal.onRecordingStopped() }
             }
         }
     }
+
+    /**
+     * REC-005: what the Android side is told when the recording's location signal
+     * changes, so it can show honest state without ever reading the diagnostic
+     * table back. Recording itself is untouched by any of these (§13.2).
+     */
+    enum class LocationSignalReport {
+        /** Fixes are arriving again after a gap. */
+        RESTORED,
+
+        /** Silence past the gap threshold with Location Services on: no valid fix (tunnel, garage, urban canyon, OEM battery policy). */
+        LOST_NO_FIX,
+
+        /** Silence past the gap threshold and Location Services are switched off. */
+        LOST_LOCATION_SERVICES_OFF
+    }
+
+    /**
+     * REC-005 / F0.10 §13.1: owns one recording's [LocationSignalWatch] and turns its
+     * transitions into `LOCATION_GAP_STARTED`/`LOCATION_GAP_ENDED` diagnostic events
+     * plus a [LocationSignalReport]. It records and reports; it never touches the
+     * capture, never invents a point and never ends the trip (§13.2). A failure to
+     * write the diagnostic must not stop the recording either, so it is logged and
+     * swallowed here.
+     */
+    private inner class LocationSignalTracker(
+        private val captureId: String,
+        seedElapsedRealtimeNanos: Long?,
+        private val locationServicesEnabled: () -> Boolean,
+        private val onReport: suspend (LocationSignalReport) -> Unit
+    ) {
+        private val watch = LocationSignalWatch(initialSignalAtElapsedRealtimeNanos = seedElapsedRealtimeNanos)
+
+        // The ticker and the collector are sibling coroutines that may run on different threads;
+        // the watch is a plain state machine, so both entry points take turns.
+        private val turn = Mutex()
+
+        /** [paused]: the rider asked for no route evidence, so this fix is heard but the silence before it is not judged. */
+        suspend fun onSample(sample: LocationSample, paused: Boolean) = turn.withLock {
+            val transitions = if (paused) {
+                listOfNotNull(watch.onSuspended(sample.elapsedRealtimeNanos))
+            } else {
+                watch.onSignal(sample.elapsedRealtimeNanos)
+            }
+            apply(transitions, gapStartedRetroactively = true)
+        }
+
+        suspend fun onTick(paused: Boolean) = turn.withLock {
+            val now = clock.elapsedRealtimeNanos()
+            val transition = if (paused) watch.onSuspended(now) else watch.onTick(now)
+            transition?.let { apply(listOf(it), gapStartedRetroactively = false) }
+        }
+
+        /**
+         * The recording itself is ending (Finish, service stopping): a gap still open is closed so the
+         * evidence is never left with a start and no end. No report - nothing is left to show it to,
+         * and re-posting a notification for a stopping service would be worse than saying nothing.
+         */
+        suspend fun onRecordingStopped() = turn.withLock {
+            watch.onSuspended(clock.elapsedRealtimeNanos())?.let {
+                bestEffort { logLocationGapEnded(captureId, it, REASON_RECORDING_STOPPED) }
+                Log.i(TAG, "location gap ended capture=$captureId durationMs=${it.durationMs} closedByStop=true")
+            }
+        }
+
+        private suspend fun apply(transitions: List<LocationSignalWatch.Transition>, gapStartedRetroactively: Boolean) {
+            for (transition in transitions) {
+                when (transition) {
+                    is LocationSignalWatch.Transition.GapStarted -> {
+                        // Off *now* is knowable; what the state was during a gap only noticed
+                        // afterwards (a fix already arrived) is not, so that is marked as such.
+                        val servicesOff = !gapStartedRetroactively && !locationServicesEnabled()
+                        val reason = if (servicesOff) REASON_LOCATION_SERVICES_OFF else REASON_NO_FIX
+                        bestEffort { logLocationGapStarted(captureId, transition, reason, gapStartedRetroactively) }
+                        Log.i(TAG, "location gap started capture=$captureId reason=$reason silenceMs=${transition.silenceMs} retroactive=$gapStartedRetroactively")
+                        bestEffort { onReport(if (servicesOff) LocationSignalReport.LOST_LOCATION_SERVICES_OFF else LocationSignalReport.LOST_NO_FIX) }
+                    }
+                    is LocationSignalWatch.Transition.GapEnded -> {
+                        bestEffort { logLocationGapEnded(captureId, transition, REASON_MANUAL_PAUSE) }
+                        Log.i(TAG, "location gap ended capture=$captureId durationMs=${transition.durationMs} closedByPause=${transition.closedBySuspension}")
+                        bestEffort { onReport(LocationSignalReport.RESTORED) }
+                    }
+                }
+            }
+        }
+
+        /** Recording the gap and telling the rider about it are independent: one failing must not hide the other, and neither may stop the recording. */
+        private suspend fun bestEffort(step: suspend () -> Unit) {
+            try {
+                step()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "location gap bookkeeping failed (${error::class.simpleName}); recording continues")
+            }
+        }
+    }
+
+    private suspend fun logLocationGapStarted(
+        captureId: String,
+        transition: LocationSignalWatch.Transition.GapStarted,
+        reasonCode: String,
+        retroactive: Boolean
+    ) {
+        diagnosticEventDao.insert(
+            locationDiagnostic(
+                captureId = captureId,
+                eventType = EVENT_LOCATION_GAP_STARTED,
+                severity = DiagnosticSeverity.WARN,
+                // The event is *about* the moment the signal was last heard.
+                occurredAt = clock.wallClockMillis() - transition.silenceMs,
+                elapsedRealtimeNanos = transition.lastSignalAtElapsedRealtimeNanos,
+                reasonCode = reasonCode,
+                metadata = mapOf(
+                    "silenceMsWhenDetected" to transition.silenceMs.toString(),
+                    "detection" to if (retroactive) "RETROACTIVE" else "LIVE"
+                )
+            )
+        )
+    }
+
+    private suspend fun logLocationGapEnded(
+        captureId: String,
+        transition: LocationSignalWatch.Transition.GapEnded,
+        reasonWhenClosedBySuspension: String
+    ) {
+        diagnosticEventDao.insert(
+            locationDiagnostic(
+                captureId = captureId,
+                eventType = EVENT_LOCATION_GAP_ENDED,
+                severity = DiagnosticSeverity.INFO,
+                occurredAt = clock.wallClockMillis(),
+                elapsedRealtimeNanos = transition.resumedAtElapsedRealtimeNanos,
+                reasonCode = if (transition.closedBySuspension) reasonWhenClosedBySuspension else REASON_SIGNAL_RESTORED,
+                metadata = mapOf("durationMs" to transition.durationMs.toString())
+            )
+        )
+    }
+
+    private fun locationDiagnostic(
+        captureId: String,
+        eventType: String,
+        severity: DiagnosticSeverity,
+        occurredAt: Long,
+        elapsedRealtimeNanos: Long,
+        reasonCode: String,
+        metadata: Map<String, String>
+    ) = DiagnosticEventEntity(
+        eventId = idGenerator.newId(),
+        occurredAt = occurredAt,
+        elapsedRealtimeNanos = elapsedRealtimeNanos,
+        category = DiagnosticCategory.LOCATION,
+        eventType = eventType,
+        severity = severity,
+        source = "tracking-service",
+        captureId = captureId,
+        tripId = null,
+        correlationId = null,
+        stateBefore = null,
+        stateAfter = null,
+        reasonCode = reasonCode,
+        metadata = metadata,
+        appVersion = BuildConfig.VERSION_NAME,
+        schemaVersion = 1,
+        detectorVersion = DetectorVersion(0),
+        locationProfileVersion = LocationProfileVersion(0),
+        processingVersion = ProcessingVersion(0)
+    )
 
     private fun LocationSample.toRawTrackPointEntity(captureId: String, sequenceNumber: Long) =
         RawTrackPointEntity(
@@ -1236,5 +1452,14 @@ class TrackingSessionCoordinator @Inject constructor(
         private const val TAG = "TrackingCoordinator"
 
         const val EVENT_CAPTURE_SEALED_AFTER_USER_STOP = "CAPTURE_SEALED_AFTER_USER_STOP"
+
+        /** REC-005: F0.13 §5.3's names (`domain-data-model.md` §8 lists the same events as `GPS_GAP_*`; the diagnostics spec is the naming authority). */
+        const val EVENT_LOCATION_GAP_STARTED = "LOCATION_GAP_STARTED"
+        const val EVENT_LOCATION_GAP_ENDED = "LOCATION_GAP_ENDED"
+        const val REASON_NO_FIX = "NO_FIX"
+        const val REASON_LOCATION_SERVICES_OFF = "LOCATION_SERVICES_OFF"
+        const val REASON_SIGNAL_RESTORED = "SIGNAL_RESTORED"
+        const val REASON_MANUAL_PAUSE = "MANUAL_PAUSE"
+        const val REASON_RECORDING_STOPPED = "RECORDING_STOPPED"
     }
 }

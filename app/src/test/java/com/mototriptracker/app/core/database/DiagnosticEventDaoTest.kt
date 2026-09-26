@@ -7,6 +7,7 @@ import com.mototriptracker.app.core.model.DiagnosticSeverity
 import com.mototriptracker.app.core.model.LocationProfileVersion
 import com.mototriptracker.app.core.model.ProcessingVersion
 import com.mototriptracker.app.testing.TestDatabaseFactory
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -94,5 +95,56 @@ class DiagnosticEventDaoTest {
         val reloaded = dao.findById("event-2")
         assertNotNull(reloaded)
         assertEquals(emptyMap<String, String>(), reloaded?.metadata)
+    }
+
+    private fun gapEvent(id: String, type: String, elapsedNanos: Long, reason: String, captureId: String = "capture-1") = DiagnosticEventEntity(
+        eventId = id, occurredAt = elapsedNanos / 1_000_000, elapsedRealtimeNanos = elapsedNanos,
+        category = DiagnosticCategory.LOCATION, eventType = type, severity = DiagnosticSeverity.WARN, source = "tracking-service",
+        captureId = captureId, tripId = null, correlationId = null, stateBefore = null, stateAfter = null, reasonCode = reason,
+        metadata = emptyMap(), appVersion = "0.1-w0", schemaVersion = 1, detectorVersion = DetectorVersion(0),
+        locationProfileVersion = LocationProfileVersion(0), processingVersion = ProcessingVersion(0)
+    )
+
+    private suspend fun openGapReason(captureId: String = "capture-1") =
+        db.diagnosticEventDao().observeOpenGapReason(captureId, "GAP_STARTED", "GAP_ENDED").first()
+
+    /** REC-005: the Active Trip screen reads "is a location gap open, and why" straight from these events. */
+    @Test
+    fun aCaptureWithNoGapEventsHasNoOpenGap() = runTest {
+        assertEquals(null, openGapReason())
+    }
+
+    @Test
+    fun aStartedWithoutAnEndedIsAnOpenGapWithItsReason() = runTest {
+        db.diagnosticEventDao().insert(gapEvent("a", "GAP_STARTED", 1_000_000_000L, "NO_FIX"))
+
+        assertEquals("NO_FIX", openGapReason())
+    }
+
+    @Test
+    fun aGapThatEndedIsNoLongerOpen() = runTest {
+        val dao = db.diagnosticEventDao()
+        dao.insert(gapEvent("a", "GAP_STARTED", 1_000_000_000L, "NO_FIX"))
+        dao.insert(gapEvent("b", "GAP_ENDED", 5_000_000_000L, "SIGNAL_RESTORED"))
+
+        assertEquals(null, openGapReason())
+    }
+
+    /** A fix that ends one gap and is itself the last before the next shares a timestamp with it - the tie must not hide the new gap. */
+    @Test
+    fun aSecondGapStartingAtTheInstantTheFirstEndedIsStillSeenAsOpen() = runTest {
+        val dao = db.diagnosticEventDao()
+        dao.insert(gapEvent("a", "GAP_STARTED", 1_000_000_000L, "NO_FIX"))
+        dao.insert(gapEvent("b", "GAP_ENDED", 5_000_000_000L, "SIGNAL_RESTORED"))
+        dao.insert(gapEvent("c", "GAP_STARTED", 5_000_000_000L, "LOCATION_SERVICES_OFF"))
+
+        assertEquals("LOCATION_SERVICES_OFF", openGapReason())
+    }
+
+    @Test
+    fun anotherCapturesGapDoesNotLeakIn() = runTest {
+        db.diagnosticEventDao().insert(gapEvent("a", "GAP_STARTED", 1_000_000_000L, "NO_FIX", captureId = "capture-2"))
+
+        assertEquals(null, openGapReason("capture-1"))
     }
 }

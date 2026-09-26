@@ -13,6 +13,7 @@ import com.mototriptracker.app.MainActivity
 import com.mototriptracker.app.R
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationCompact
+import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.tracking.service.TrackingForegroundService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -35,13 +36,25 @@ class TrackingNotificationController @Inject constructor(
      * needs live data; only the text falls back to a generic placeholder
      * until the Service's first async refresh replaces it.
      */
-    fun buildTrackingNotification(distanceMeters: Double? = null, elapsedMs: Long? = null): Notification {
+    fun buildTrackingNotification(
+        distanceMeters: Double? = null,
+        elapsedMs: Long? = null,
+        signal: TrackingSessionCoordinator.LocationSignalReport = TrackingSessionCoordinator.LocationSignalReport.RESTORED
+    ): Notification {
         ensureChannel()
-        val text = if (distanceMeters != null && elapsedMs != null) {
+        val figures = if (distanceMeters != null && elapsedMs != null) {
             "${formatDistanceKm(distanceMeters)} · ${formatDurationCompact(elapsedMs)}"
         } else {
-            context.getString(R.string.tracking_notification_text)
+            null
         }
+        // REC-005/F0.10 §21: while there is no signal the notification must not read as a healthy
+        // recording, but it also must not suggest the trip stopped - it is still recording.
+        val signalNote = when (signal) {
+            TrackingSessionCoordinator.LocationSignalReport.RESTORED -> null
+            TrackingSessionCoordinator.LocationSignalReport.LOST_NO_FIX -> context.getString(R.string.tracking_notification_signal_lost)
+            TrackingSessionCoordinator.LocationSignalReport.LOST_LOCATION_SERVICES_OFF -> context.getString(R.string.tracking_notification_location_off)
+        }
+        val text = listOfNotNull(signalNote, figures).joinToString(" · ").ifEmpty { context.getString(R.string.tracking_notification_text) }
         return NotificationCompat.Builder(context, CHANNEL_ID)
             .setContentTitle(context.getString(R.string.tracking_notification_title))
             .setContentText(text)

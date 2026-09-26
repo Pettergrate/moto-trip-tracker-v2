@@ -8,6 +8,7 @@ import com.mototriptracker.app.core.database.entity.RawTrackPointEntity
 import com.mototriptracker.app.core.database.entity.TripPartEntity
 import com.mototriptracker.app.core.model.ProcessingVersion
 import com.mototriptracker.app.core.model.TrackPointDecision
+import com.mototriptracker.app.domain.detection.LocationSignalWatch
 import javax.inject.Inject
 
 /**
@@ -181,7 +182,7 @@ class ProcessingEngine @Inject constructor(
          * explicit, documented placeholder, same posture as TRK-001/TRK-002's
          * version-0 stamps. Revisit once EXP-003 closes a real value.
          */
-        const val GAP_THRESHOLD_MS = 30_000L
+        const val GAP_THRESHOLD_MS = LocationSignalWatch.DEFAULT_GAP_THRESHOLD_MS
 
         const val REASON_ACCEPTED = "ACCEPTED"
         const val REASON_OUT_OF_ORDER = "REJECTED_OUT_OF_ORDER"

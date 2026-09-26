@@ -3,6 +3,8 @@
     <string name="tracking_notification_channel_name">Trip tracking</string>
     <string name="tracking_notification_title">Moto Trip Tracker</string>
     <string name="tracking_notification_text">Recording your trip</string>
+    <string name="tracking_notification_signal_lost">No GPS signal</string>
+    <string name="tracking_notification_location_off">Location is off</string>
     <string name="validating_candidate_notification_text">Checking for a possible trip…</string>
     <string name="forgotten_pause_reminder_channel_name">Trip reminders</string>
     <string name="forgotten_pause_reminder_title">Still paused?</string>
