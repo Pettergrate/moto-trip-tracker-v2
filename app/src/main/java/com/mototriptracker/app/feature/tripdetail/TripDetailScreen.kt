@@ -287,6 +287,13 @@ private fun HeaderSection(state: TripDetailUiState.Loaded) {
                 color = MaterialTheme.colorScheme.error
             )
         }
+        if (state.hadDataLoss) {
+            Text(
+                "Some location points could not be saved while recording, so part of the route may be missing.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
     }
 }
 

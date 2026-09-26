@@ -3,6 +3,7 @@ package com.mototriptracker.app.feature.tripdetail
 import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.common.FakeIdGenerator
 import com.mototriptracker.app.core.database.MotoTripDatabase
+import com.mototriptracker.app.core.database.entity.DiagnosticEventEntity
 import com.mototriptracker.app.core.database.entity.ProcessedTrackPointEntity
 import com.mototriptracker.app.core.database.entity.TripCaptureEntity
 import com.mototriptracker.app.core.database.entity.TripEntity
@@ -10,13 +11,17 @@ import com.mototriptracker.app.core.database.entity.TripPartEntity
 import com.mototriptracker.app.core.database.entity.TripStatisticsEntity
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.DetectorVersion
+import com.mototriptracker.app.core.model.DiagnosticCategory
+import com.mototriptracker.app.core.model.DiagnosticSeverity
 import com.mototriptracker.app.core.model.LocationProfileVersion
+import com.mototriptracker.app.core.model.ProcessingVersion
 import com.mototriptracker.app.core.model.StartSource
 import com.mototriptracker.app.core.model.TripStatus
 import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.feature.common.formatDateTime
 import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
+import com.mototriptracker.app.tracking.persistence.RawPointWriter
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
 import com.mototriptracker.app.worker.TripMerger
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +72,7 @@ class TripDetailViewModelTest {
             processedTrackPointDao = db.processedTrackPointDao(),
             tripPartDao = db.tripPartDao(),
             tripCaptureDao = db.tripCaptureDao(),
+            diagnosticEventDao = db.diagnosticEventDao(),
             tripMerger = tripMerger,
             clock = clock
         )
@@ -404,6 +410,35 @@ class TripDetailViewModelTest {
         viewModel.load("normal")
         val clean = withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded && it.tripId == "normal" } } as TripDetailUiState.Loaded
         assertFalse("a complete recording must not carry the warning", clean.wasInterrupted)
+    }
+
+    /** REC-006: points that could not be saved are a fact about the trip, not just a diagnostic. */
+    @Test
+    fun aTripWhoseRecordingLostPointsIsFlaggedAndACleanOneIsNot() = runBlocking {
+        db.tripDao().insert(trip("lossy", createdAt = 5_000L))
+        db.tripCaptureDao().insert(capture("cap-l", startedAt = 100L))
+        db.tripPartDao().insert(part("part-l", "lossy", "cap-l"))
+        db.diagnosticEventDao().insert(
+            DiagnosticEventEntity(
+                eventId = "loss-1", occurredAt = 1L, elapsedRealtimeNanos = 1L, category = DiagnosticCategory.PERSISTENCE,
+                eventType = RawPointWriter.EVENT_DATA_LOSS, severity = DiagnosticSeverity.ERROR, source = "test",
+                captureId = "cap-l", tripId = null, correlationId = null, stateBefore = null, stateAfter = null,
+                reasonCode = "POINTS_NOT_SAVED", metadata = emptyMap(), appVersion = "test", schemaVersion = 1,
+                detectorVersion = DetectorVersion(0), locationProfileVersion = LocationProfileVersion(0),
+                processingVersion = ProcessingVersion(0)
+            )
+        )
+        db.tripDao().insert(trip("clean", createdAt = 6_000L))
+        db.tripCaptureDao().insert(capture("cap-c", startedAt = 200L))
+        db.tripPartDao().insert(part("part-c", "clean", "cap-c"))
+
+        viewModel.load("lossy")
+        val flagged = withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded && it.hadDataLoss } } as TripDetailUiState.Loaded
+        assertTrue(flagged.hadDataLoss)
+
+        viewModel.load("clean")
+        val clean = withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded && it.tripId == "clean" } } as TripDetailUiState.Loaded
+        assertFalse(clean.hadDataLoss)
     }
 
     @Test

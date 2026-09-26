@@ -3,6 +3,7 @@ package com.mototriptracker.app.feature.tripdetail
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mototriptracker.app.core.common.Clock
+import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
 import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
@@ -14,6 +15,7 @@ import com.mototriptracker.app.domain.simplifyRoute
 import com.mototriptracker.app.feature.common.buildDataQualityNote
 import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.feature.common.formatDateTime
+import com.mototriptracker.app.tracking.persistence.RawPointWriter
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
 import com.mototriptracker.app.worker.TripBoundaryEditor
 import com.mototriptracker.app.worker.TripMerger
@@ -46,6 +48,7 @@ class TripDetailViewModel @Inject constructor(
     private val processedTrackPointDao: ProcessedTrackPointDao,
     private val tripPartDao: TripPartDao,
     private val tripCaptureDao: TripCaptureDao,
+    private val diagnosticEventDao: DiagnosticEventDao,
     private val tripMerger: TripMerger,
     private val clock: Clock
 ) : ViewModel() {
@@ -65,6 +68,9 @@ class TripDetailViewModel @Inject constructor(
     /** REC-003: loaded once with the adjacency lookup - a capture's ABORTED status never changes afterwards. */
     private val interruptedFlow = MutableStateFlow(false)
 
+    /** REC-006: loaded once with the adjacency lookup, like [interruptedFlow]. */
+    private val dataLossFlow = MutableStateFlow(false)
+
     val uiState: StateFlow<TripDetailUiState> = tripIdFlow.flatMapLatest { tripId ->
         if (tripId == null) {
             flowOf(TripDetailUiState.Loading)
@@ -74,8 +80,9 @@ class TripDetailViewModel @Inject constructor(
                 tripStatisticsDao.observeByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION),
                 processedTrackPointDao.observeAllByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION),
                 adjacentTripsFlow,
-                interruptedFlow
-            ) { trip, statistics, processedPoints, adjacent, interrupted ->
+                // combine has typed overloads only up to five flows: the two recording flags travel together.
+                combine(interruptedFlow, dataLossFlow) { interrupted, dataLoss -> interrupted to dataLoss }
+            ) { trip, statistics, processedPoints, adjacent, (interrupted, dataLoss) ->
                 if (trip == null) {
                     TripDetailUiState.NotFound
                 } else {
@@ -111,7 +118,8 @@ class TripDetailViewModel @Inject constructor(
                         canSplit = processedPoints.size >= 2 * TripSplitter.MIN_POINTS_PER_HALF,
                         canTrim = processedPoints.size >= TripBoundaryEditor.MIN_POINTS + 1,
                         isCalculating = statistics == null,
-                        wasInterrupted = interrupted
+                        wasInterrupted = interrupted,
+                        hadDataLoss = dataLoss
                     )
                 }
             }
@@ -124,13 +132,15 @@ class TripDetailViewModel @Inject constructor(
         // merge candidates and interrupted flag.
         adjacentTripsFlow.value = AdjacentTrips(null, null)
         interruptedFlow.value = false
+        dataLossFlow.value = false
         tripIdFlow.value = tripId
         viewModelScope.launch {
             val trip = tripDao.findById(tripId) ?: return@launch
             val previous = tripDao.findPreviousCompleted(trip.createdAt)
             val next = tripDao.findNextCompleted(trip.createdAt)
-            interruptedFlow.value = tripPartDao.findAllByTrip(tripId).map { it.captureId }.distinct()
-                .any { tripCaptureDao.findById(it)?.status == CaptureStatus.ABORTED }
+            val captureIds = tripPartDao.findAllByTrip(tripId).map { it.captureId }.distinct()
+            interruptedFlow.value = captureIds.any { tripCaptureDao.findById(it)?.status == CaptureStatus.ABORTED }
+            dataLossFlow.value = captureIds.any { diagnosticEventDao.countByCaptureAndType(it, RawPointWriter.EVENT_DATA_LOSS) > 0 }
             adjacentTripsFlow.value = AdjacentTrips(
                 previous = previous?.let { candidate -> MergeCandidate(candidate.id, candidate.name ?: fallbackTripName(candidate.createdAt)) },
                 next = next?.let { candidate -> MergeCandidate(candidate.id, candidate.name ?: fallbackTripName(candidate.createdAt)) }

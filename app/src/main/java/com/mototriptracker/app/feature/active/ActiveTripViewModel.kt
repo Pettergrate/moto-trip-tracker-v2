@@ -11,6 +11,7 @@ import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.domain.liveDistanceMeters
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
+import com.mototriptracker.app.tracking.persistence.PersistenceHealthBus
 import com.mototriptracker.app.tracking.service.TrackingForegroundService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -34,6 +35,7 @@ class ActiveTripViewModel @Inject constructor(
     private val rawTrackPointDao: RawTrackPointDao,
     private val manualPauseIntervalDao: ManualPauseIntervalDao,
     private val diagnosticEventDao: DiagnosticEventDao,
+    private val persistenceHealthBus: PersistenceHealthBus,
     private val clock: Clock
 ) : ViewModel() {
 
@@ -57,14 +59,16 @@ class ActiveTripViewModel @Inject constructor(
                         TrackingSessionCoordinator.EVENT_LOCATION_GAP_STARTED,
                         TrackingSessionCoordinator.EVENT_LOCATION_GAP_ENDED
                     ),
-                    ticker
-                ) { points, openPause, openGapReason, _ ->
+                    ticker,
+                    persistenceHealthBus.state
+                ) { points, openPause, openGapReason, _, persistence ->
                     ActiveTripUiState.Active(
                         isPaused = openPause != null,
                         distanceMeters = liveDistanceMeters(points),
                         elapsedMs = (clock.elapsedRealtimeNanos() - capture.startElapsedRealtimeNanos) / 1_000_000,
                         pauseElapsedMs = openPause?.let { (clock.elapsedRealtimeNanos() - it.startElapsedRealtimeNanos) / 1_000_000 },
-                        signal = activeTripSignal(isPaused = openPause != null, pointCount = points.size, openGapReason = openGapReason)
+                        signal = activeTripSignal(isPaused = openPause != null, pointCount = points.size, openGapReason = openGapReason),
+                        persistence = persistence
                     )
                 }
             }

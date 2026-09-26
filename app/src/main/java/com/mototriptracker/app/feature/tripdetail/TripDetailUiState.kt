@@ -47,6 +47,8 @@ sealed interface TripDetailUiState {
         /** EDT-004: no statistics exist yet for this Trip (just merged/split/trimmed, or awaiting a recompute) - the numbers below are unknown, not zero, and are on their way. */
         val isCalculating: Boolean = false,
         /** REC-003/F0.10 §22: one of this Trip's captures was sealed as interrupted (device restart, force stop...) - the route may be incomplete. */
-        val wasInterrupted: Boolean = false
+        val wasInterrupted: Boolean = false,
+        /** REC-006/F0.10 §14.2: a `DATA_LOSS_DETECTED` was recorded for one of this Trip captures - points could not be saved (full storage, a database failure) and are gone. */
+        val hadDataLoss: Boolean = false
     ) : TripDetailUiState
 }

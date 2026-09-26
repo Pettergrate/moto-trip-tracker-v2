@@ -44,6 +44,8 @@ import com.mototriptracker.app.domain.detection.ForgottenPauseEngine
 import com.mototriptracker.app.domain.detection.LocationSignalWatch
 import com.mototriptracker.app.domain.liveDistanceMeters
 import com.mototriptracker.app.tracking.location.LocationGateway
+import com.mototriptracker.app.tracking.persistence.PersistenceState
+import com.mototriptracker.app.tracking.persistence.RawPointWriter
 import com.mototriptracker.app.tracking.processing.ProcessingScheduler
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -778,7 +780,8 @@ class TrackingSessionCoordinator @Inject constructor(
         onCaptureStarted: suspend (captureId: String) -> Unit = {},
         onForgottenPauseWarning: suspend () -> Unit = {},
         locationServicesEnabled: () -> Boolean = { true },
-        onLocationSignalChanged: suspend (LocationSignalReport) -> Unit = {}
+        onLocationSignalChanged: suspend (LocationSignalReport) -> Unit = {},
+        onPersistenceStateChanged: suspend (PersistenceState) -> Unit = {}
     ): AutoDetectionOutcome {
         val activityFlow: Flow<DetectionEvent> = activityEvents.map { DetectionEvent.Activity(it) }
         val locationFlow: Flow<DetectionEvent> = locationGateway.locationUpdates().map { DetectionEvent.Location(it) }
@@ -796,6 +799,8 @@ class TrackingSessionCoordinator @Inject constructor(
         val forgottenPauseWatch = ForgottenPauseWatch()
         // REC-005: created once the capture is confirmed (before that there is no evidence to lose).
         var signal: LocationSignalTracker? = null
+        // REC-006: the only path raw points take to Room, once the capture is confirmed.
+        var writer: RawPointWriter? = null
 
         try {
             merge(activityFlow, locationFlow, tickerFlow).collect { event ->
@@ -809,6 +814,10 @@ class TrackingSessionCoordinator @Inject constructor(
                                     nextSequenceNumber = (rawTrackPointDao.maxSequenceNumber(started.captureId) ?: -1) + 1
                                     stopEngine = CandidateStopEngine()
                                     signal = LocationSignalTracker(started.captureId, null, locationServicesEnabled, onLocationSignalChanged)
+                                    writer = RawPointWriter(
+                                        rawTrackPointDao, diagnosticEventDao, clock, idGenerator, started.captureId,
+                                        onStateChanged = onPersistenceStateChanged
+                                    )
                                     onCaptureStarted(started.captureId)
                                 }
                                 // Another Start (most likely manual - DP-005 "manual
@@ -823,21 +832,21 @@ class TrackingSessionCoordinator @Inject constructor(
                     val openPause = manualPauseIntervalDao.findOpenByCapture(captureId)
                     when (event) {
                         is DetectionEvent.Location -> signal?.onSample(event.sample, paused = openPause != null)
-                        is DetectionEvent.TimeTick -> signal?.onTick(paused = openPause != null)
+                        is DetectionEvent.TimeTick -> {
+                            signal?.onTick(paused = openPause != null)
+                            writer?.retryPending()
+                        }
                         else -> Unit
                     }
                     if (openPause == null) {
                         forgottenPauseWatch.onResumed()
                         if (event is DetectionEvent.Location) {
-                            try {
-                                rawTrackPointDao.insert(event.sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
-                                nextSequenceNumber++
-                            } catch (error: Exception) {
-                                logRawTrackPointPersistenceFailure(captureId, error)
-                            }
+                            checkNotNull(writer).write(event.sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
+                            nextSequenceNumber++
                         }
                         when (val decision = checkNotNull(stopEngine).accept(event)) {
                             is CandidateStopDecision.Confirmed -> {
+                                writer?.finish()
                                 signal?.onRecordingStopped()
                                 val result = finishCapture(captureId, EndSource.AUTO)
                                 throw StopAutoDetection(AutoDetectionOutcome.TripCompleted(captureId, result.tripId))
@@ -861,6 +870,8 @@ class TrackingSessionCoordinator @Inject constructor(
             return AutoDetectionOutcome.CandidateAbandoned
         } catch (stop: StopAutoDetection) {
             return stop.outcome
+        } finally {
+            withContext(NonCancellable) { writer?.finish() }
         }
     }
 
@@ -968,6 +979,7 @@ class TrackingSessionCoordinator @Inject constructor(
         onForgottenFinishWarning: suspend () -> Unit = {},
         locationServicesEnabled: () -> Boolean = { true },
         onLocationSignalChanged: suspend (LocationSignalReport) -> Unit = {},
+        onPersistenceStateChanged: suspend (PersistenceState) -> Unit = {},
         /** Only tests pass this: the silence check must be exercisable without waiting [TICKER_INTERVAL_MS] of real time. */
         tickIntervalMs: Long = TICKER_INTERVAL_MS
     ) {
@@ -986,12 +998,18 @@ class TrackingSessionCoordinator @Inject constructor(
             locationServicesEnabled = locationServicesEnabled,
             onReport = onLocationSignalChanged
         )
+        // REC-006: every raw point goes through the writer - bounded buffer plus retry on failure.
+        val writer = RawPointWriter(
+            rawTrackPointDao, diagnosticEventDao, clock, idGenerator, captureId,
+            onStateChanged = onPersistenceStateChanged
+        )
         coroutineScope {
             // No fix arriving means no sample to react to, so the silence needs its own clock.
             val ticker = launch {
                 while (true) {
                     delay(tickIntervalMs)
                     signal.onTick(paused = manualPauseIntervalDao.findOpenByCapture(captureId) != null)
+                    writer.retryPending()
                 }
             }
             try {
@@ -1002,12 +1020,8 @@ class TrackingSessionCoordinator @Inject constructor(
                     signal.onSample(sample, paused = openPause != null)
                     if (openPause == null) {
                         forgottenPauseWatch.onResumed()
-                        try {
-                            rawTrackPointDao.insert(sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
-                            nextSequenceNumber++
-                        } catch (error: Exception) {
-                            logRawTrackPointPersistenceFailure(captureId, error)
-                        }
+                        writer.write(sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
+                        nextSequenceNumber++
                         forgottenFinishWatch.onSample(sample) { decision ->
                             logForgottenFinishWarning(captureId, decision)
                             onForgottenFinishWarning()
@@ -1022,8 +1036,13 @@ class TrackingSessionCoordinator @Inject constructor(
                 }
             } finally {
                 ticker.cancel()
-                // Runs on Finish too (the service cancels this collector first): close an open gap.
-                withContext(NonCancellable) { signal.onRecordingStopped() }
+                // Runs on Finish too (the service cancels this collector first), so before the
+                // Finish transaction reads the last sequence number: flush what is held (or record
+                // it as lost), then close an open gap.
+                withContext(NonCancellable) {
+                    writer.finish()
+                    signal.onRecordingStopped()
+                }
             }
         }
     }
@@ -1219,32 +1238,6 @@ class TrackingSessionCoordinator @Inject constructor(
             callbackBatchId = null,
             detectorStateSnapshot = DetectorState.TRACKING.name
         )
-
-    private suspend fun logRawTrackPointPersistenceFailure(captureId: String, error: Throwable) {
-        diagnosticEventDao.insert(
-            DiagnosticEventEntity(
-                eventId = idGenerator.newId(),
-                occurredAt = clock.wallClockMillis(),
-                elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
-                category = DiagnosticCategory.PERSISTENCE,
-                eventType = "RAW_TRACK_POINT_INSERT_FAILED",
-                severity = DiagnosticSeverity.ERROR,
-                source = "tracking-service",
-                captureId = captureId,
-                tripId = null,
-                correlationId = null,
-                stateBefore = null,
-                stateAfter = null,
-                reasonCode = error::class.simpleName,
-                metadata = emptyMap(),
-                appVersion = BuildConfig.VERSION_NAME,
-                schemaVersion = 1,
-                detectorVersion = DetectorVersion(0),
-                locationProfileVersion = LocationProfileVersion(0),
-                processingVersion = ProcessingVersion(0)
-            )
-        )
-    }
 
     /**
      * `DETECTOR` for an auto-triggered command, `USER_COMMAND` for a manual

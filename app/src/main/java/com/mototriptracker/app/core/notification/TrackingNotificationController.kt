@@ -14,6 +14,7 @@ import com.mototriptracker.app.R
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationCompact
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
+import com.mototriptracker.app.tracking.persistence.PersistenceLevel
 import com.mototriptracker.app.tracking.service.TrackingForegroundService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -39,7 +40,8 @@ class TrackingNotificationController @Inject constructor(
     fun buildTrackingNotification(
         distanceMeters: Double? = null,
         elapsedMs: Long? = null,
-        signal: TrackingSessionCoordinator.LocationSignalReport = TrackingSessionCoordinator.LocationSignalReport.RESTORED
+        signal: TrackingSessionCoordinator.LocationSignalReport = TrackingSessionCoordinator.LocationSignalReport.RESTORED,
+        persistence: PersistenceLevel = PersistenceLevel.HEALTHY
     ): Notification {
         ensureChannel()
         val figures = if (distanceMeters != null && elapsedMs != null) {
@@ -54,7 +56,14 @@ class TrackingNotificationController @Inject constructor(
             TrackingSessionCoordinator.LocationSignalReport.LOST_NO_FIX -> context.getString(R.string.tracking_notification_signal_lost)
             TrackingSessionCoordinator.LocationSignalReport.LOST_LOCATION_SERVICES_OFF -> context.getString(R.string.tracking_notification_location_off)
         }
-        val text = listOfNotNull(signalNote, figures).joinToString(" · ").ifEmpty { context.getString(R.string.tracking_notification_text) }
+        // REC-006/F0.10 §14: a recording that cannot save must never read as healthy - and the most
+        // serious thing goes first, where a one-line notification still shows it.
+        val persistenceNote = when (persistence) {
+            PersistenceLevel.HEALTHY -> null
+            PersistenceLevel.DEGRADED -> context.getString(R.string.tracking_notification_saving_problem)
+            PersistenceLevel.CRITICAL -> context.getString(R.string.tracking_notification_data_loss)
+        }
+        val text = listOfNotNull(persistenceNote, signalNote, figures).joinToString(" · ").ifEmpty { context.getString(R.string.tracking_notification_text) }
         return NotificationCompat.Builder(context, CHANNEL_ID)
             .setContentTitle(context.getString(R.string.tracking_notification_title))
             .setContentText(text)

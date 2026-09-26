@@ -17,6 +17,7 @@ import com.mototriptracker.app.testing.FakeLocationGateway
 import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.location.LocationGateway
+import com.mototriptracker.app.tracking.persistence.RawPointWriter
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -178,9 +179,13 @@ class TrackingSessionCoordinatorTest {
         coordinatorWith(listOf(sample(1_000L))).recordLocationUpdates(orphanCaptureId)
 
         assertEquals(0, db.rawTrackPointDao().countByCapture(orphanCaptureId))
-        val failureEvent = db.diagnosticEventDao().findAll().single { it.captureId == orphanCaptureId }
+        val events = db.diagnosticEventDao().findAll().filter { it.captureId == orphanCaptureId }
+        val failureEvent = events.single { it.eventType == RawPointWriter.EVENT_INSERT_FAILED }
         assertEquals(DiagnosticCategory.PERSISTENCE, failureEvent.category)
         assertEquals(DiagnosticSeverity.ERROR, failureEvent.severity)
+        // REC-006: a row the database will never accept is not retried forever, and its loss is
+        // summarized when the recording ends instead of being left as one lone error.
+        assertEquals(1, events.count { it.eventType == RawPointWriter.EVENT_DATA_LOSS })
     }
 
     @Test

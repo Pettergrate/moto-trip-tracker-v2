@@ -1,6 +1,7 @@
 package com.mototriptracker.app.feature.active
 
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
+import com.mototriptracker.app.tracking.persistence.PersistenceState
 
 /** F0.9 §6: TRP-01. [Loading] is the brief initial state before the first DB read lands - distinct from [NoActiveTrip] so the screen doesn't auto-navigate back before it has ever actually observed a trip. */
 sealed interface ActiveTripUiState {
@@ -11,7 +12,8 @@ sealed interface ActiveTripUiState {
         val distanceMeters: Double,
         val elapsedMs: Long,
         val pauseElapsedMs: Long?,
-        val signal: ActiveTripSignal = ActiveTripSignal.OK
+        val signal: ActiveTripSignal = ActiveTripSignal.OK,
+        val persistence: PersistenceState = PersistenceState.HEALTHY
     ) : ActiveTripUiState
 }
 

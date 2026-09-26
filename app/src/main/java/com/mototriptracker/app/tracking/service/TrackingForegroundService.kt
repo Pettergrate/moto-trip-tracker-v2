@@ -16,6 +16,8 @@ import com.mototriptracker.app.core.notification.TrackingNotificationController
 import com.mototriptracker.app.core.notification.TrackingNotificationController.Companion.NOTIFICATION_ID
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
+import com.mototriptracker.app.tracking.persistence.PersistenceHealthBus
+import com.mototriptracker.app.tracking.persistence.PersistenceState
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -51,6 +53,7 @@ class TrackingForegroundService : Service() {
     @Inject lateinit var notificationController: TrackingNotificationController
     @Inject lateinit var dispatchers: DispatcherProvider
     @Inject lateinit var activityTransitionBus: ActivityTransitionBus
+    @Inject lateinit var persistenceHealthBus: PersistenceHealthBus
 
     private lateinit var serviceScope: CoroutineScope
 
@@ -61,6 +64,10 @@ class TrackingForegroundService : Service() {
      */
     @Volatile
     private var locationSignal = TrackingSessionCoordinator.LocationSignalReport.RESTORED
+
+    /** REC-006: the recording last reported persistence state, for the notification; the screen reads the same from [persistenceHealthBus]. */
+    @Volatile
+    private var persistence = PersistenceState.HEALTHY
 
     /**
      * The [Job] for the command handled by the most recent [onStartCommand].
@@ -288,7 +295,8 @@ class TrackingForegroundService : Service() {
                 onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() },
                 onForgottenFinishWarning = { notificationController.postForgottenFinishReminder() },
                 locationServicesEnabled = ::isLocationServicesEnabled,
-                onLocationSignalChanged = { report -> onLocationSignalChanged(captureId, report) }
+                onLocationSignalChanged = { report -> onLocationSignalChanged(captureId, report) },
+                onPersistenceStateChanged = { state -> onPersistenceStateChanged(captureId, state) }
             )
         }
     }
@@ -307,6 +315,13 @@ class TrackingForegroundService : Service() {
 
     private fun isLocationServicesEnabled(): Boolean =
         getSystemService(LocationManager::class.java)?.let { LocationManagerCompat.isLocationEnabled(it) } ?: false
+
+    /** REC-006: shown at once, and never depends on the database being readable (see [refreshNotification]). */
+    private suspend fun onPersistenceStateChanged(captureId: String, state: PersistenceState) {
+        persistence = state
+        persistenceHealthBus.publish(state)
+        refreshNotification(captureId)
+    }
 
     /** REC-005: word the notification honestly the moment the signal changes instead of waiting for the next periodic refresh. */
     private suspend fun onLocationSignalChanged(captureId: String, report: TrackingSessionCoordinator.LocationSignalReport) {
@@ -327,11 +342,20 @@ class TrackingForegroundService : Service() {
 
     /** Re-calling `startForeground` with the same ID updates the existing notification in place - the same mechanism `runAutoDetectionAndStop`'s own `onCaptureStarted` swap already relies on. */
     private suspend fun refreshNotification(captureId: String) {
-        val snapshot = coordinator.currentTrackingSnapshot(captureId) ?: return
-        val notification = if (snapshot.isPaused) {
-            notificationController.buildPausedTrackingNotification(snapshot.elapsedMs)
-        } else {
-            notificationController.buildTrackingNotification(snapshot.distanceMeters, snapshot.elapsedMs, locationSignal)
+        // REC-006: when the database is what is failing, reading the figures may fail too. The
+        // warning must still reach the rider, so fall back to a notification without figures.
+        val snapshot = try {
+            coordinator.currentTrackingSnapshot(captureId) ?: return
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "notification figures unavailable (${error::class.simpleName}); showing state only")
+            null
+        }
+        val notification = when {
+            snapshot == null -> notificationController.buildTrackingNotification(signal = locationSignal, persistence = persistence.level)
+            snapshot.isPaused -> notificationController.buildPausedTrackingNotification(snapshot.elapsedMs)
+            else -> notificationController.buildTrackingNotification(snapshot.distanceMeters, snapshot.elapsedMs, locationSignal, persistence.level)
         }
         startForeground(NOTIFICATION_ID, notification)
     }
@@ -360,7 +384,8 @@ class TrackingForegroundService : Service() {
             },
             onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() },
             locationServicesEnabled = ::isLocationServicesEnabled,
-            onLocationSignalChanged = { report -> coordinator.findActiveCapture()?.let { onLocationSignalChanged(it.id, report) } }
+            onLocationSignalChanged = { report -> coordinator.findActiveCapture()?.let { onLocationSignalChanged(it.id, report) } },
+            onPersistenceStateChanged = { state -> coordinator.findActiveCapture()?.let { onPersistenceStateChanged(it.id, state) } }
         )
         lastAutoDetectionOutcome = outcome
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -369,6 +394,7 @@ class TrackingForegroundService : Service() {
 
     override fun onDestroy() {
         serviceScope.cancel()
+        persistenceHealthBus.reset()
         super.onDestroy()
     }
 

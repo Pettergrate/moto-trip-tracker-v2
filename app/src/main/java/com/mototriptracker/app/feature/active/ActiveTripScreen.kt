@@ -36,6 +36,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationClock
 import com.mototriptracker.app.feature.common.formatDurationCompact
+import com.mototriptracker.app.tracking.persistence.PersistenceLevel
+import com.mototriptracker.app.tracking.persistence.PersistenceState
 
 /**
  * F0.9 §6: TRP-01. Back only leaves this screen (UX-05) - it's wired to a
@@ -113,6 +115,12 @@ private fun ActiveTripContent(
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
+                    persistenceNotice(uiState.persistence)?.let { notice ->
+                        // REC-006: shown first - not saving is worse than not having a signal.
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Text(notice, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(12.dp))
+                        }
+                    }
                     signalNotice(uiState.signal)?.let { notice ->
                         // REC-005: honest, not alarming - the trip is still recording; a gap is marked, never filled in.
                         Card(modifier = Modifier.fillMaxWidth()) {
@@ -173,4 +181,15 @@ internal fun signalNotice(signal: ActiveTripSignal): String? = when (signal) {
         "No GPS signal. The trip keeps recording; the stretch without signal is marked as a gap, not filled in."
     ActiveTripSignal.LOST_LOCATION_SERVICES_OFF ->
         "Location is turned off, so no route is being recorded. Turn it on to keep tracking; the stretch without location is marked as a gap."
+}
+
+/** REC-006 / F0.10 §14: what the rider is told while the recording cannot save its points; `null` when saving is fine. */
+internal fun persistenceNotice(state: PersistenceState): String? = when {
+    state.level == PersistenceLevel.HEALTHY -> null
+    state.level == PersistenceLevel.DEGRADED ->
+        "Trouble saving this trip. Recent points are held in memory and will be saved when it recovers."
+    state.storageFull ->
+        "The phone storage is full, so points are being lost. Free up space now; the trip keeps recording what it can."
+    else ->
+        "Some points could not be saved and are lost. The trip keeps recording; the missing stretch will show as a gap."
 }
