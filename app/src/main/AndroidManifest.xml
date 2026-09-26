@@ -39,6 +39,21 @@
             </intent-filter>
         </activity>
 
+        <!--
+          DIA-003/F0.13 §11.4: lets the system share sheet read a diagnostic package the person just asked for - and only
+          that (`diagnostic_file_paths.xml` exposes just the cache/diagnostics folder). Not exported: access is granted
+          per-URI, per-share, by the app itself. The package is never uploaded by the app.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.diagnostics"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/diagnostic_file_paths" />
+        </provider>
+
         <service
             android:name=".tracking.service.TrackingForegroundService"
             android:exported="false"

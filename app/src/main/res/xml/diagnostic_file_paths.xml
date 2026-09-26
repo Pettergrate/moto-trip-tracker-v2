@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DIA-003: exposes ONLY the diagnostics folder of the app's cache to FileProvider, so the system share sheet
+     can read a package the person just made and nothing else in the app's storage. -->
+<paths>
+    <cache-path name="diagnostics" path="diagnostics/" />
+</paths>

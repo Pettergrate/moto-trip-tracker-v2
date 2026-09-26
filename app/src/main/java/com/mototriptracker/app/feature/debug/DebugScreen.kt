@@ -11,7 +11,11 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -22,9 +26,14 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -43,8 +52,23 @@ import com.mototriptracker.app.feature.common.formatDateTime
 @Composable
 fun DebugScreen(onBack: () -> Unit, viewModel: DebugViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val exportState by viewModel.exportState.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    // DIA-003: the package is ready - hand it to the system share sheet, once, and go back to idle.
+    LaunchedEffect(exportState) {
+        when (val current = exportState) {
+            is ExportState.Ready -> {
+                runCatching { context.startActivity(DiagnosticSharing.shareIntent(context, current.export)) }
+                viewModel.onExportHandled()
+            }
+            ExportState.Failed -> viewModel.onExportHandled()
+            else -> Unit
+        }
+    }
     DebugContent(
         state = state,
+        exporting = exportState is ExportState.Working,
+        onExport = viewModel::onExport,
         onBack = onBack,
         onCategorySelected = viewModel::onCategorySelected,
         onMinSeveritySelected = viewModel::onMinSeveritySelected,
@@ -56,6 +80,8 @@ fun DebugScreen(onBack: () -> Unit, viewModel: DebugViewModel = hiltViewModel())
 @Composable
 private fun DebugContent(
     state: DebugUiState,
+    exporting: Boolean,
+    onExport: (Boolean) -> Unit,
     onBack: () -> Unit,
     onCategorySelected: (DiagnosticCategory?) -> Unit,
     onMinSeveritySelected: (DiagnosticSeverity?) -> Unit,
@@ -84,6 +110,7 @@ private fun DebugContent(
             } else {
                 item { SnapshotSections(snapshot) }
             }
+            item { ExportSection(exporting = exporting, onExport = onExport) }
             item { Text("Events", style = MaterialTheme.typography.titleMedium) }
             item { EventFilters(state.filter, onCategorySelected, onMinSeveritySelected, onQueryChanged) }
             item {
@@ -244,4 +271,52 @@ private fun formatAge(ms: Long): String = when {
     ms < 60_000 -> "${ms / 1_000} s"
     ms < 3_600_000 -> "${ms / 60_000} min"
     else -> "${ms / 3_600_000} h"
+}
+
+/**
+ * DIA-003 / F0.13 §11: "Export diagnostic". The standard package is sanitized; route data is a separate, explicit
+ * choice that says what it will contain (§11.3). Nothing is uploaded - the system share sheet opens and the person
+ * chooses where it goes, or dismisses it.
+ */
+@Composable
+private fun ExportSection(exporting: Boolean, onExport: (Boolean) -> Unit) {
+    var dialogOpen by remember { mutableStateOf(false) }
+    var includeRoute by remember { mutableStateOf(false) }
+
+    OutlinedButton(onClick = { includeRoute = false; dialogOpen = true }, enabled = !exporting, modifier = Modifier.fillMaxWidth()) {
+        Text(if (exporting) "Preparing…" else "Export diagnostic")
+    }
+
+    if (dialogOpen) {
+        AlertDialog(
+            onDismissRequest = { dialogOpen = false },
+            title = { Text("Export diagnostic package") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        "Creates a file with the app's state and event history so a problem can be investigated. " +
+                            "It contains no locations, no trip names or notes, and is not uploaded: you choose where to share it.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = includeRoute, onCheckedChange = { includeRoute = it })
+                        Text("Include route data in this diagnostic", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    if (includeRoute) {
+                        Text(
+                            "The file will contain precise locations (the raw track of your latest recording). Only share it with someone you trust with where you were.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { dialogOpen = false; onExport(includeRoute) }) { Text("Export") }
+            },
+            dismissButton = {
+                TextButton(onClick = { dialogOpen = false }) { Text("Cancel") }
+            }
+        )
+    }
 }
