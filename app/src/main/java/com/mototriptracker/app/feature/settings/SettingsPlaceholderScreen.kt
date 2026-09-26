@@ -33,7 +33,7 @@ import androidx.compose.ui.unit.dp
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsPlaceholderScreen(onBack: () -> Unit, onOpenFieldTestHarness: () -> Unit, onOpenTrash: () -> Unit) {
+fun SettingsPlaceholderScreen(onBack: () -> Unit, onOpenFieldTestHarness: () -> Unit, onOpenTrash: () -> Unit, onOpenDebug: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -53,6 +53,9 @@ fun SettingsPlaceholderScreen(onBack: () -> Unit, onOpenFieldTestHarness: () -> 
             Text("Settings are coming soon", style = MaterialTheme.typography.bodyLarge)
             OutlinedButton(onClick = onOpenTrash, shape = MaterialTheme.shapes.small, modifier = Modifier.padding(top = 24.dp)) {
                 Text("Trash")
+            }
+            OutlinedButton(onClick = onOpenDebug, shape = MaterialTheme.shapes.small, modifier = Modifier.padding(top = 12.dp)) {
+                Text("Diagnostics (internal)")
             }
             OutlinedButton(onClick = onOpenFieldTestHarness, shape = MaterialTheme.shapes.small, modifier = Modifier.padding(top = 12.dp)) {
                 Text("Field test harness (internal)")

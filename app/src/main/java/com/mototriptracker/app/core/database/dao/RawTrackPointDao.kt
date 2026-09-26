@@ -44,6 +44,10 @@ interface RawTrackPointDao {
     )
     suspend fun findLastUsableByCapture(captureId: String): RawTrackPointEntity?
 
+    /** DIA-002: the last `n` points, newest first - enough to estimate the effective fix interval without loading a whole ride. */
+    @Query("SELECT * FROM raw_track_point WHERE captureId = :captureId ORDER BY sequenceNumber DESC LIMIT :n")
+    suspend fun findLastN(captureId: String, n: Int): List<RawTrackPointEntity>
+
     /** REC-004: the last recorded point without loading the capture's whole history - sealing now also runs at every process start, so it must stay cheap for a long trip. */
     @Query("SELECT * FROM raw_track_point WHERE captureId = :captureId ORDER BY sequenceNumber DESC LIMIT 1")
     suspend fun findLastByCapture(captureId: String): RawTrackPointEntity?

@@ -81,6 +81,12 @@ interface AppModule {
     fun bindDiagnosticPurgeScheduler(impl: com.mototriptracker.app.worker.WorkManagerDiagnosticPurgeScheduler): com.mototriptracker.app.worker.DiagnosticPurgeScheduler
 
     @Binds
+    fun bindSystemDiagnosticsInfo(impl: com.mototriptracker.app.diagnostics.AndroidSystemDiagnosticsInfo): com.mototriptracker.app.diagnostics.SystemDiagnosticsInfo
+
+    @Binds
+    fun bindProcessingWorkReader(impl: com.mototriptracker.app.diagnostics.WorkManagerProcessingWorkReader): com.mototriptracker.app.diagnostics.ProcessingWorkReader
+
+    @Binds
     fun bindProcessStateSummaryPublisher(impl: com.mototriptracker.app.tracking.recovery.AndroidProcessStateSummaryPublisher): com.mototriptracker.app.tracking.recovery.ProcessStateSummaryPublisher
 
     @Binds

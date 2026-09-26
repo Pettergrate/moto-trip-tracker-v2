@@ -32,6 +32,9 @@ sealed interface Destination {
     /** EXP-002: internal-only, reached from Settings - not a tab, no user-facing entry point elsewhere (EXP-001 acceptance). */
     data object FieldTestHarness : Destination
 
+    /** DIA-002: the internal debug screen, reached from Settings; not a tab and not user-facing Core UX. */
+    data object Debug : Destination
+
     /** TRS-001/F0.9 §14: reached from Settings' "Datos" section, not a tab - trashing is infrequent, unlike Favorites. */
     data object Trash : Destination
 }

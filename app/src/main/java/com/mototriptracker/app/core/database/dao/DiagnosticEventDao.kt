@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.mototriptracker.app.core.database.entity.DiagnosticEventEntity
+import com.mototriptracker.app.core.model.DiagnosticCategory
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -49,6 +50,34 @@ interface DiagnosticEventDao {
             "ORDER BY elapsedRealtimeNanos DESC LIMIT 1"
     )
     fun observeOpenGapReason(captureId: String, startedType: String, endedType: String): Flow<String?>
+
+    /** DIA-002: the timeline the debug screen shows, newest first and bounded (the table itself is bounded by the purge). */
+    @Query("SELECT * FROM diagnostic_event ORDER BY occurredAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<DiagnosticEventEntity>>
+
+    /** DIA-002/DIA-003: the newest events of one type, e.g. the last `PROCESS_EXIT`. */
+    @Query("SELECT * FROM diagnostic_event WHERE eventType = :eventType ORDER BY occurredAt DESC LIMIT :limit")
+    suspend fun findLatestByType(eventType: String, limit: Int): List<DiagnosticEventEntity>
+
+    /** DIA-002: the newest events of a category (the detector section is "the last things the detector said"). */
+    @Query("SELECT * FROM diagnostic_event WHERE category = :category ORDER BY occurredAt DESC LIMIT :limit")
+    suspend fun findLatestByCategory(category: DiagnosticCategory, limit: Int): List<DiagnosticEventEntity>
+
+    /** DIA-002: the last thing recovery *did* (not the process exits, which are their own row). */
+    @Query(
+        "SELECT * FROM diagnostic_event WHERE category = :category AND eventType != :excludedType " +
+            "ORDER BY occurredAt DESC LIMIT 1"
+    )
+    suspend fun findLatestInCategoryExcluding(category: DiagnosticCategory, excludedType: String): DiagnosticEventEntity?
+
+    /** The one-shot twin of [observeOpenGapReason]: the reason of the capture's open gap/state, or null. */
+    @Query(
+        "SELECT reasonCode FROM diagnostic_event WHERE captureId = :captureId AND eventType = :startedType " +
+            "AND (SELECT COUNT(*) FROM diagnostic_event WHERE captureId = :captureId AND eventType = :startedType) > " +
+            "(SELECT COUNT(*) FROM diagnostic_event WHERE captureId = :captureId AND eventType = :endedType) " +
+            "ORDER BY elapsedRealtimeNanos DESC LIMIT 1"
+    )
+    suspend fun findOpenGapReason(captureId: String, startedType: String, endedType: String): String?
 
     /**
      * DIA-004/F0.13 §12.2: retention. Deletes diagnostic rows only - never a Trip, a capture or raw points
