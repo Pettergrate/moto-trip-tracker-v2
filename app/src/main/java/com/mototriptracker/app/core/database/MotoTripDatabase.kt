@@ -46,6 +46,8 @@ import com.mototriptracker.app.core.database.entity.TripTagEntity
  * `DatabaseModule.provideDatabase`'s `.addMigrations(...)` call - the first
  * real migration this schema has needed, never `fallbackToDestructiveMigration()`
  * (real user history already exists by now).
+ * **v3 - REC-005 follow-up**: `raw_track_point` gains the nullable `isApproximateLocation` marker; see
+ * [MIGRATION_2_3].
  *
  * TripCaptureDao, DiagnosticEventDao, RawTrackPointDao (TRK-002),
  * CaptureEventDao/TripDao/TripPartDao (TRK-004) and
@@ -76,7 +78,7 @@ import com.mototriptracker.app.core.database.entity.TripTagEntity
         MotorcycleEntity::class,
         DiagnosticEventEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 @TypeConverters(DiagnosticMetadataConverters::class)

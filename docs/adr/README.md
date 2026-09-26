@@ -58,6 +58,7 @@ An ADR exists so a future implementation agent can answer five questions without
 | ADR-019 | Mapas son presentación; proveedor aislado y diferido | Accepted | `ADR-019-map-rendering-isolated-provider-deferred.md` |
 | ADR-020 | Solo una TripCapture ACTIVE a la vez | Accepted | `ADR-020-single-active-capture-invariant.md` |
 | ADR-021 | Proveedor de mapa: MapLibre Native + OpenFreeMap | Accepted | `ADR-021-map-provider-maplibre-openfreemap.md` |
+| ADR-022 | Fixes tomados solo con ubicación aproximada: se conservan, no se usan como ruta | Accepted | `ADR-022-approximate-location-fixes-kept-not-used-as-route.md` |
 
 ---
 

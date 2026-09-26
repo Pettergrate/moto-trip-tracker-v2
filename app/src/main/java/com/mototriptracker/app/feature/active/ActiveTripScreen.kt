@@ -181,6 +181,8 @@ internal fun signalNotice(signal: ActiveTripSignal): String? = when (signal) {
         "No GPS signal. The trip keeps recording; the stretch without signal is marked as a gap, not filled in."
     ActiveTripSignal.LOST_LOCATION_SERVICES_OFF ->
         "Location is turned off, so no route is being recorded. Turn it on to keep tracking; the stretch without location is marked as a gap."
+    ActiveTripSignal.APPROXIMATE_ONLY ->
+        "Only approximate location is allowed, so no route is being recorded. Allow precise location for this app in the phone settings; the stretch without it is marked as a gap."
 }
 
 /** REC-006 / F0.10 §14: what the rider is told while the recording cannot save its points; `null` when saving is fine. */

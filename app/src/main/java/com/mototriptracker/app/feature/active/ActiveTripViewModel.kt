@@ -60,14 +60,27 @@ class ActiveTripViewModel @Inject constructor(
                         TrackingSessionCoordinator.EVENT_LOCATION_GAP_ENDED
                     ),
                     ticker,
-                    persistenceHealthBus.state
-                ) { points, openPause, openGapReason, _, persistence ->
+                    // combine has typed overloads only up to five flows: the two recording-health flows travel together.
+                    combine(
+                        persistenceHealthBus.state,
+                        diagnosticEventDao.observeOpenGapReason(
+                            capture.id,
+                            TrackingSessionCoordinator.EVENT_LOCATION_ACCURACY_DEGRADED,
+                            TrackingSessionCoordinator.EVENT_LOCATION_ACCURACY_RESTORED
+                        )
+                    ) { persistence, accuracyReason -> persistence to accuracyReason }
+                ) { points, openPause, openGapReason, _, (persistence, accuracyReason) ->
                     ActiveTripUiState.Active(
                         isPaused = openPause != null,
                         distanceMeters = liveDistanceMeters(points),
                         elapsedMs = (clock.elapsedRealtimeNanos() - capture.startElapsedRealtimeNanos) / 1_000_000,
                         pauseElapsedMs = openPause?.let { (clock.elapsedRealtimeNanos() - it.startElapsedRealtimeNanos) / 1_000_000 },
-                        signal = activeTripSignal(isPaused = openPause != null, pointCount = points.size, openGapReason = openGapReason),
+                        signal = activeTripSignal(
+                            isPaused = openPause != null,
+                            pointCount = points.size,
+                            openGapReason = openGapReason,
+                            approximateOnly = accuracyReason != null
+                        ),
                         persistence = persistence
                     )
                 }

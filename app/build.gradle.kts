@@ -53,6 +53,13 @@ android {
         getByName("androidTest") {
             assets.srcDirs("$projectDir/schemas")
         }
+        // JVM (Robolectric) migration tests read their assets from the merged *debug* assets - AGP does not
+        // merge the `test` source set into them - so the exported schemas are also debug assets. That lets a
+        // migration be proven against the real schema JSON without a device that holds real trips; release
+        // builds do not carry them.
+        getByName("debug") {
+            assets.srcDirs("$projectDir/schemas")
+        }
     }
 }
 

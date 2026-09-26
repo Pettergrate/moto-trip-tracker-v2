@@ -3,6 +3,7 @@ package com.mototriptracker.app.core.di
 import android.content.Context
 import androidx.room.Room
 import com.mototriptracker.app.core.database.MIGRATION_1_2
+import com.mototriptracker.app.core.database.MIGRATION_2_3
 import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.database.dao.CaptureEventDao
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
@@ -44,7 +45,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): MotoTripDatabase =
         Room.databaseBuilder(context, MotoTripDatabase::class.java, DATABASE_NAME)
-            .addMigrations(MIGRATION_1_2)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .build()
 
     @Provides

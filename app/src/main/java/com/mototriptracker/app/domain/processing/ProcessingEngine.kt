@@ -72,10 +72,14 @@ class ProcessingEngine @Inject constructor(
                 // exactly at a capture change; each capture's own points are
                 // still guaranteed ordered by the DAO.
                 val crossesCaptureBoundary = lastAccepted != null && lastAccepted.captureId != point.captureId
-                val (decision, reasonCode) = if (crossesCaptureBoundary) {
-                    TrackPointDecision.ACCEPTED to REASON_ACCEPTED
-                } else {
-                    assess(point, lastAccepted)
+                val (decision, reasonCode) = when {
+                    // REC-005 follow-up: a fix taken while only approximate location was allowed is a ~2 km
+                    // block, not a position. Not a threshold on accuracy (F0.5 §7.1 wants field data for
+                    // those) but a known cause recorded with the point at receipt. The raw point stays
+                    // (ADR-006); it just is not evidence of where the rider went.
+                    point.isApproximateLocation == true -> TrackPointDecision.REJECTED to REASON_APPROXIMATE_LOCATION
+                    crossesCaptureBoundary -> TrackPointDecision.ACCEPTED to REASON_ACCEPTED
+                    else -> assess(point, lastAccepted)
                 }
                 assessments += PointAssessmentEntity(
                     captureId = point.captureId,
@@ -187,6 +191,7 @@ class ProcessingEngine @Inject constructor(
         const val REASON_ACCEPTED = "ACCEPTED"
         const val REASON_OUT_OF_ORDER = "REJECTED_OUT_OF_ORDER"
         const val REASON_DUPLICATE = "REJECTED_DUPLICATE"
+        const val REASON_APPROXIMATE_LOCATION = "REJECTED_APPROXIMATE_LOCATION"
         const val REASON_GAP_NO_FIX = "GAP_NO_FIX"
         const val REASON_CAPTURE_BOUNDARY = "CAPTURE_BOUNDARY"
         const val POINT_ROLE_GAP_BOUNDARY = "GAP_BOUNDARY"

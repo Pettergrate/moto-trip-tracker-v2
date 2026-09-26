@@ -337,6 +337,7 @@ isMock?
 requestProfileId
 callbackBatchId?
 detectorStateSnapshot
+isApproximateLocation?   (schema v3, ADR-022: true = solo había permiso aproximado; NULL = desconocido)
 ```
 
 Reglas:

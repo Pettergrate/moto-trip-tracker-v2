@@ -31,15 +31,28 @@ enum class ActiveTripSignal {
     LOST_NO_FIX,
 
     /** Fixes stopped arriving and Location Services are switched off. */
-    LOST_LOCATION_SERVICES_OFF
+    LOST_LOCATION_SERVICES_OFF,
+
+    /**
+     * REC-005 follow-up: only approximate location is allowed. The platform hands the app a ~2 km block, so the
+     * recording keeps the fixes but cannot use them as a route. The cause is known and it is the permission,
+     * which is why this wins over "no GPS signal".
+     */
+    APPROXIMATE_ONLY
 }
 
 /**
  * A paused trip is asked for no route evidence, so it never reads as a loss; otherwise an open
  * location gap wins over the initial wait, and "no points yet" is only ever "searching".
  */
-internal fun activeTripSignal(isPaused: Boolean, pointCount: Int, openGapReason: String?): ActiveTripSignal = when {
+internal fun activeTripSignal(
+    isPaused: Boolean,
+    pointCount: Int,
+    openGapReason: String?,
+    approximateOnly: Boolean = false
+): ActiveTripSignal = when {
     isPaused -> ActiveTripSignal.OK
+    approximateOnly -> ActiveTripSignal.APPROXIMATE_ONLY
     openGapReason == TrackingSessionCoordinator.REASON_LOCATION_SERVICES_OFF -> ActiveTripSignal.LOST_LOCATION_SERVICES_OFF
     openGapReason != null -> ActiveTripSignal.LOST_NO_FIX
     pointCount == 0 -> ActiveTripSignal.SEARCHING

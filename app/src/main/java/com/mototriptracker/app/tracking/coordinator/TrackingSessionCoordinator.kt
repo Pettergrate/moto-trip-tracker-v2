@@ -780,6 +780,7 @@ class TrackingSessionCoordinator @Inject constructor(
         onCaptureStarted: suspend (captureId: String) -> Unit = {},
         onForgottenPauseWarning: suspend () -> Unit = {},
         locationServicesEnabled: () -> Boolean = { true },
+        preciseLocationGranted: () -> Boolean = { true },
         onLocationSignalChanged: suspend (LocationSignalReport) -> Unit = {},
         onPersistenceStateChanged: suspend (PersistenceState) -> Unit = {}
     ): AutoDetectionOutcome {
@@ -813,7 +814,7 @@ class TrackingSessionCoordinator @Inject constructor(
                                     activeCaptureId = started.captureId
                                     nextSequenceNumber = (rawTrackPointDao.maxSequenceNumber(started.captureId) ?: -1) + 1
                                     stopEngine = CandidateStopEngine()
-                                    signal = LocationSignalTracker(started.captureId, null, locationServicesEnabled, onLocationSignalChanged)
+                                    signal = LocationSignalTracker(started.captureId, null, locationServicesEnabled, preciseLocationGranted, onLocationSignalChanged)
                                     writer = RawPointWriter(
                                         rawTrackPointDao, diagnosticEventDao, clock, idGenerator, started.captureId,
                                         onStateChanged = onPersistenceStateChanged
@@ -831,7 +832,7 @@ class TrackingSessionCoordinator @Inject constructor(
                 } else {
                     val openPause = manualPauseIntervalDao.findOpenByCapture(captureId)
                     when (event) {
-                        is DetectionEvent.Location -> signal?.onSample(event.sample, paused = openPause != null)
+                        is DetectionEvent.Location -> signal?.onSample(event.sample, paused = openPause != null, usable = preciseLocationGranted())
                         is DetectionEvent.TimeTick -> {
                             signal?.onTick(paused = openPause != null)
                             writer?.retryPending()
@@ -841,7 +842,7 @@ class TrackingSessionCoordinator @Inject constructor(
                     if (openPause == null) {
                         forgottenPauseWatch.onResumed()
                         if (event is DetectionEvent.Location) {
-                            checkNotNull(writer).write(event.sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
+                            checkNotNull(writer).write(event.sample.toRawTrackPointEntity(captureId, nextSequenceNumber, approximate = !preciseLocationGranted()))
                             nextSequenceNumber++
                         }
                         when (val decision = checkNotNull(stopEngine).accept(event)) {
@@ -978,6 +979,7 @@ class TrackingSessionCoordinator @Inject constructor(
         onForgottenPauseWarning: suspend () -> Unit = {},
         onForgottenFinishWarning: suspend () -> Unit = {},
         locationServicesEnabled: () -> Boolean = { true },
+        preciseLocationGranted: () -> Boolean = { true },
         onLocationSignalChanged: suspend (LocationSignalReport) -> Unit = {},
         onPersistenceStateChanged: suspend (PersistenceState) -> Unit = {},
         /** Only tests pass this: the silence check must be exercisable without waiting [TICKER_INTERVAL_MS] of real time. */
@@ -991,11 +993,12 @@ class TrackingSessionCoordinator @Inject constructor(
         // which is the actual gap this closes.
         val forgottenFinishWatch = ForgottenFinishWatch()
         // REC-005: seeded with the last stored fix so a sticky restart reports the
-        // silence it slept through as a gap instead of pretending it was continuous.
+        // silence it slept through as a gap instead of pretending it was continuous. Usable fixes only (see the DAO): an approximate one is not signal.
         val signal = LocationSignalTracker(
             captureId = captureId,
-            seedElapsedRealtimeNanos = rawTrackPointDao.findLastByCapture(captureId)?.elapsedRealtimeNanos,
+            seedElapsedRealtimeNanos = rawTrackPointDao.findLastUsableByCapture(captureId)?.elapsedRealtimeNanos,
             locationServicesEnabled = locationServicesEnabled,
+            preciseLocationGranted = preciseLocationGranted,
             onReport = onLocationSignalChanged
         )
         // REC-006: every raw point goes through the writer - bounded buffer plus retry on failure.
@@ -1015,22 +1018,29 @@ class TrackingSessionCoordinator @Inject constructor(
             try {
                 locationGateway.locationUpdates().collect { sample ->
                     val openPause = manualPauseIntervalDao.findOpenByCapture(captureId)
+                    // REC-005 follow-up: known at receipt, and the reason this fix cannot be used as route.
+                    val approximate = !preciseLocationGranted()
                     // Every received fix counts as signal, persisted or not (a paused recording still
-                    // hears the GPS; resuming must not look like a gap).
-                    signal.onSample(sample, paused = openPause != null)
+                    // hears the GPS; resuming must not look like a gap) - except an approximate one.
+                    signal.onSample(sample, paused = openPause != null, usable = !approximate)
                     if (openPause == null) {
                         forgottenPauseWatch.onResumed()
-                        writer.write(sample.toRawTrackPointEntity(captureId, nextSequenceNumber))
+                        writer.write(sample.toRawTrackPointEntity(captureId, nextSequenceNumber, approximate))
                         nextSequenceNumber++
-                        forgottenFinishWatch.onSample(sample) { decision ->
-                            logForgottenFinishWarning(captureId, decision)
-                            onForgottenFinishWarning()
+                        // Movement heuristics must not be fed a fix that can jump a kilometre by itself.
+                        if (!approximate) {
+                            forgottenFinishWatch.onSample(sample) { decision ->
+                                logForgottenFinishWarning(captureId, decision)
+                                onForgottenFinishWarning()
+                            }
                         }
                     } else {
                         forgottenFinishWatch.onPaused()
-                        forgottenPauseWatch.onPausedSample(openPause.id, sample) { decision ->
-                            logForgottenPauseWarning(captureId, openPause.id, decision)
-                            onForgottenPauseWarning()
+                        if (!approximate) {
+                            forgottenPauseWatch.onPausedSample(openPause.id, sample) { decision ->
+                                logForgottenPauseWarning(captureId, openPause.id, decision)
+                                onForgottenPauseWarning()
+                            }
                         }
                     }
                 }
@@ -1060,7 +1070,16 @@ class TrackingSessionCoordinator @Inject constructor(
         LOST_NO_FIX,
 
         /** Silence past the gap threshold and Location Services are switched off. */
-        LOST_LOCATION_SERVICES_OFF
+        LOST_LOCATION_SERVICES_OFF,
+
+        /**
+         * Only approximate location is allowed (REC-005 follow-up): the platform hands the app a ~2 km block,
+         * useless as a route. Reported once when it starts, independent of any gap.
+         */
+        APPROXIMATE_ONLY,
+
+        /** Precise location is allowed again after [APPROXIMATE_ONLY]. */
+        PRECISE_RESTORED
     }
 
     /**
@@ -1075,28 +1094,63 @@ class TrackingSessionCoordinator @Inject constructor(
         private val captureId: String,
         seedElapsedRealtimeNanos: Long?,
         private val locationServicesEnabled: () -> Boolean,
+        private val preciseLocationGranted: () -> Boolean,
         private val onReport: suspend (LocationSignalReport) -> Unit
     ) {
         private val watch = LocationSignalWatch(initialSignalAtElapsedRealtimeNanos = seedElapsedRealtimeNanos)
+
+        /** `null` until the first look; then whether precise location was allowed the last time we looked. */
+        private var lastPrecise: Boolean? = null
 
         // The ticker and the collector are sibling coroutines that may run on different threads;
         // the watch is a plain state machine, so both entry points take turns.
         private val turn = Mutex()
 
-        /** [paused]: the rider asked for no route evidence, so this fix is heard but the silence before it is not judged. */
-        suspend fun onSample(sample: LocationSample, paused: Boolean) = turn.withLock {
-            val transitions = if (paused) {
-                listOfNotNull(watch.onSuspended(sample.elapsedRealtimeNanos))
-            } else {
-                watch.onSignal(sample.elapsedRealtimeNanos)
+        /**
+         * [paused]: the rider asked for no route evidence, so this fix is heard but the silence before it is not judged.
+         * [usable]: false for a fix taken with only approximate location - heard, but not evidence of a position, so it
+         * is not signal and does not close a gap.
+         */
+        suspend fun onSample(sample: LocationSample, paused: Boolean, usable: Boolean = true) = turn.withLock {
+            evaluateAccuracy()
+            val transitions = when {
+                paused -> listOfNotNull(watch.onSuspended(sample.elapsedRealtimeNanos))
+                !usable -> emptyList()
+                else -> watch.onSignal(sample.elapsedRealtimeNanos)
             }
             apply(transitions, gapStartedRetroactively = true)
         }
 
         suspend fun onTick(paused: Boolean) = turn.withLock {
+            evaluateAccuracy()
             val now = clock.elapsedRealtimeNanos()
             val transition = if (paused) watch.onSuspended(now) else watch.onTick(now)
             transition?.let { apply(listOf(it), gapStartedRetroactively = false) }
+        }
+
+        /**
+         * Looks at the precise-location permission and records a change of state (REC-005 follow-up). A
+         * revoked permission kills the process and the sticky restart comes back here with the new state, a
+         * granted one does not restart anything - hence a look at every fix and every tick, not only at start.
+         */
+        private suspend fun evaluateAccuracy() {
+            val precise = preciseLocationGranted()
+            val previous = lastPrecise
+            lastPrecise = precise
+            when {
+                previous == precise -> Unit
+                !precise -> {
+                    bestEffort { logAccuracyEvent(captureId, EVENT_LOCATION_ACCURACY_DEGRADED, DiagnosticSeverity.WARN, REASON_PRECISE_LOCATION_MISSING) }
+                    Log.i(TAG, "approximate location only capture=$captureId; fixes are kept but not used as route")
+                    bestEffort { onReport(LocationSignalReport.APPROXIMATE_ONLY) }
+                }
+                previous == false -> {
+                    bestEffort { logAccuracyEvent(captureId, EVENT_LOCATION_ACCURACY_RESTORED, DiagnosticSeverity.INFO, REASON_PRECISE_LOCATION_RESTORED) }
+                    Log.i(TAG, "precise location restored capture=$captureId")
+                    bestEffort { onReport(LocationSignalReport.PRECISE_RESTORED) }
+                }
+                else -> Unit
+            }
         }
 
         /**
@@ -1109,6 +1163,10 @@ class TrackingSessionCoordinator @Inject constructor(
                 bestEffort { logLocationGapEnded(captureId, it, REASON_RECORDING_STOPPED) }
                 Log.i(TAG, "location gap ended capture=$captureId durationMs=${it.durationMs} closedByStop=true")
             }
+            if (lastPrecise == false) {
+                bestEffort { logAccuracyEvent(captureId, EVENT_LOCATION_ACCURACY_RESTORED, DiagnosticSeverity.INFO, REASON_RECORDING_STOPPED) }
+                lastPrecise = null
+            }
         }
 
         private suspend fun apply(transitions: List<LocationSignalWatch.Transition>, gapStartedRetroactively: Boolean) {
@@ -1118,7 +1176,11 @@ class TrackingSessionCoordinator @Inject constructor(
                         // Off *now* is knowable; what the state was during a gap only noticed
                         // afterwards (a fix already arrived) is not, so that is marked as such.
                         val servicesOff = !gapStartedRetroactively && !locationServicesEnabled()
-                        val reason = if (servicesOff) REASON_LOCATION_SERVICES_OFF else REASON_NO_FIX
+                        val reason = when {
+                            servicesOff -> REASON_LOCATION_SERVICES_OFF
+                            !gapStartedRetroactively && !preciseLocationGranted() -> REASON_APPROXIMATE_LOCATION_ONLY
+                            else -> REASON_NO_FIX
+                        }
                         bestEffort { logLocationGapStarted(captureId, transition, reason, gapStartedRetroactively) }
                         Log.i(TAG, "location gap started capture=$captureId reason=$reason silenceMs=${transition.silenceMs} retroactive=$gapStartedRetroactively")
                         bestEffort { onReport(if (servicesOff) LocationSignalReport.LOST_LOCATION_SERVICES_OFF else LocationSignalReport.LOST_NO_FIX) }
@@ -1142,6 +1204,20 @@ class TrackingSessionCoordinator @Inject constructor(
                 Log.w(TAG, "location gap bookkeeping failed (${error::class.simpleName}); recording continues")
             }
         }
+    }
+
+    private suspend fun logAccuracyEvent(captureId: String, eventType: String, severity: DiagnosticSeverity, reasonCode: String) {
+        diagnosticEventDao.insert(
+            locationDiagnostic(
+                captureId = captureId,
+                eventType = eventType,
+                severity = severity,
+                occurredAt = clock.wallClockMillis(),
+                elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                reasonCode = reasonCode,
+                metadata = emptyMap()
+            )
+        )
     }
 
     private suspend fun logLocationGapStarted(
@@ -1215,7 +1291,7 @@ class TrackingSessionCoordinator @Inject constructor(
         processingVersion = ProcessingVersion(0)
     )
 
-    private fun LocationSample.toRawTrackPointEntity(captureId: String, sequenceNumber: Long) =
+    private fun LocationSample.toRawTrackPointEntity(captureId: String, sequenceNumber: Long, approximate: Boolean) =
         RawTrackPointEntity(
             captureId = captureId,
             sequenceNumber = sequenceNumber,
@@ -1236,7 +1312,8 @@ class TrackingSessionCoordinator @Inject constructor(
             isMock = isMock,
             requestProfileId = requestProfileId,
             callbackBatchId = null,
-            detectorStateSnapshot = DetectorState.TRACKING.name
+            detectorStateSnapshot = DetectorState.TRACKING.name,
+            isApproximateLocation = approximate
         )
 
     /**
@@ -1454,5 +1531,12 @@ class TrackingSessionCoordinator @Inject constructor(
         const val REASON_SIGNAL_RESTORED = "SIGNAL_RESTORED"
         const val REASON_MANUAL_PAUSE = "MANUAL_PAUSE"
         const val REASON_RECORDING_STOPPED = "RECORDING_STOPPED"
+
+        /** REC-005 follow-up: F0.13 lists accuracy degraded/restored and the precise/approximate capability change under LOCATION. */
+        const val EVENT_LOCATION_ACCURACY_DEGRADED = "LOCATION_ACCURACY_DEGRADED"
+        const val EVENT_LOCATION_ACCURACY_RESTORED = "LOCATION_ACCURACY_RESTORED"
+        const val REASON_PRECISE_LOCATION_MISSING = "PRECISE_LOCATION_MISSING"
+        const val REASON_PRECISE_LOCATION_RESTORED = "PRECISE_LOCATION_RESTORED"
+        const val REASON_APPROXIMATE_LOCATION_ONLY = "APPROXIMATE_LOCATION_ONLY"
     }
 }

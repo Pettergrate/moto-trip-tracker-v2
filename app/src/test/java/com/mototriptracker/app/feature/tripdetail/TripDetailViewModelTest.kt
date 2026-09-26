@@ -24,7 +24,9 @@ import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.persistence.RawPointWriter
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
 import com.mototriptracker.app.worker.TripMerger
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -80,6 +82,9 @@ class TripDetailViewModelTest {
 
     @After
     fun tearDown() {
+        // A load() launched by the test can still be running on Dispatchers.Main when it ends; resetting Main
+        // underneath it raised "Dispatchers.Main is used concurrently with setting it" once in a full-suite run.
+        viewModel.viewModelScope.coroutineContext[Job]?.cancel()
         db.close()
         Dispatchers.resetMain()
     }

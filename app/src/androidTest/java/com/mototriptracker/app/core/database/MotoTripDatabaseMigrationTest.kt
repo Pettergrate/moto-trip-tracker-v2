@@ -53,4 +53,32 @@ class MotoTripDatabaseMigrationTest {
             assertTrue(cursor.isNull(3))
         }
     }
+
+    /** REC-005 follow-up. Needs a device/emulator; the JVM twin (`MotoTripDatabaseMigrationJvmTest`) covers the same ground without one. */
+    @Test
+    fun migrate2To3AddsANullableApproximateMarkerWithoutTouchingExistingPoints() {
+        val dbName = "migration-test-2-3"
+
+        helper.createDatabase(dbName, 2).apply {
+            execSQL(
+                "INSERT INTO trip_capture (id, status, startedAt, endedAt, startElapsedRealtimeNanos, endElapsedRealtimeNanos, " +
+                    "localTimeZoneId, startSource, endSource, detectorVersion, locationProfileVersion, createdAt, updatedAt) " +
+                    "VALUES ('cap-1', 'COMPLETED', 1000, 9000, 1000000000, 9000000000, 'UTC', 'MANUAL', 'MANUAL', 0, 0, 1000, 9000)"
+            )
+            execSQL(
+                "INSERT INTO raw_track_point (captureId, sequenceNumber, capturedAt, elapsedRealtimeNanos, latitude, longitude, " +
+                    "horizontalAccuracyM, provider, isMock, requestProfileId, detectorStateSnapshot) " +
+                    "VALUES ('cap-1', 0, 1000, 1000000000, 10.5, -20.25, 5.0, 'fused', 0, 'profile-1', 'TRACKING')"
+            )
+            close()
+        }
+
+        val migrated = helper.runMigrationsAndValidate(dbName, 3, true, MIGRATION_2_3)
+
+        migrated.query("SELECT horizontalAccuracyM, isApproximateLocation FROM raw_track_point WHERE sequenceNumber = 0").use { cursor ->
+            assertTrue("the pre-existing point must survive", cursor.moveToFirst())
+            assertEquals(5.0, cursor.getDouble(0), 0.0001)
+            assertTrue("unknown stays NULL, never a guessed false", cursor.isNull(1))
+        }
+    }
 }

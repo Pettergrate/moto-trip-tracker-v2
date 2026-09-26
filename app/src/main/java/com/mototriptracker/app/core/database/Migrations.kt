@@ -17,3 +17,15 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
         db.execSQL("ALTER TABLE trip_statistics ADD COLUMN endElevationM REAL")
     }
 }
+
+/**
+ * REC-005 follow-up: `raw_track_point` gains `isApproximateLocation` (see the entity). Additive and
+ * nullable like [MIGRATION_1_2]: no backfill is attempted, because nothing recorded before this
+ * version can say whether precise location was granted - existing rows stay `NULL` (unknown), never
+ * a guessed `0`/`false` (ADR-016). The raw points themselves are untouched (ADR-006).
+ */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE raw_track_point ADD COLUMN isApproximateLocation INTEGER")
+    }
+}

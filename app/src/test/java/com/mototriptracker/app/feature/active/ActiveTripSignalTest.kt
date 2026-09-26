@@ -40,4 +40,15 @@ class ActiveTripSignalTest {
         assertNull(signalNotice(ActiveTripSignal.OK))
         ActiveTripSignal.entries.filter { it != ActiveTripSignal.OK }.forEach { assertEquals(it.name, true, signalNotice(it) != null) }
     }
+
+    @Test
+    fun onlyApproximateLocationWinsOverNoGpsSignalBecauseTheCauseIsKnown() {
+        assertEquals(ActiveTripSignal.APPROXIMATE_ONLY, activeTripSignal(isPaused = false, pointCount = 5, openGapReason = "NO_FIX", approximateOnly = true))
+        assertEquals(ActiveTripSignal.APPROXIMATE_ONLY, activeTripSignal(isPaused = false, pointCount = 0, openGapReason = null, approximateOnly = true))
+    }
+
+    @Test
+    fun aPausedTripStillNeverReadsAsALoss() {
+        assertEquals(ActiveTripSignal.OK, activeTripSignal(isPaused = true, pointCount = 5, openGapReason = null, approximateOnly = true))
+    }
 }

@@ -15,6 +15,7 @@ import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationCompact
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.tracking.persistence.PersistenceLevel
+import com.mototriptracker.app.tracking.persistence.PersistenceState
 import com.mototriptracker.app.tracking.service.TrackingForegroundService
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -41,7 +42,8 @@ class TrackingNotificationController @Inject constructor(
         distanceMeters: Double? = null,
         elapsedMs: Long? = null,
         signal: TrackingSessionCoordinator.LocationSignalReport = TrackingSessionCoordinator.LocationSignalReport.RESTORED,
-        persistence: PersistenceLevel = PersistenceLevel.HEALTHY
+        persistence: PersistenceState = PersistenceState.HEALTHY,
+        approximateOnly: Boolean = false
     ): Notification {
         ensureChannel()
         val figures = if (distanceMeters != null && elapsedMs != null) {
@@ -52,18 +54,25 @@ class TrackingNotificationController @Inject constructor(
         // REC-005/F0.10 §21: while there is no signal the notification must not read as a healthy
         // recording, but it also must not suggest the trip stopped - it is still recording.
         val signalNote = when (signal) {
-            TrackingSessionCoordinator.LocationSignalReport.RESTORED -> null
-            TrackingSessionCoordinator.LocationSignalReport.LOST_NO_FIX -> context.getString(R.string.tracking_notification_signal_lost)
+            TrackingSessionCoordinator.LocationSignalReport.RESTORED,
+            TrackingSessionCoordinator.LocationSignalReport.APPROXIMATE_ONLY,
+            TrackingSessionCoordinator.LocationSignalReport.PRECISE_RESTORED -> null
+            // REC-005 follow-up: when only approximate location is allowed the cause is known and named below;
+            // "No GPS signal" would send the rider looking in the wrong place.
+            TrackingSessionCoordinator.LocationSignalReport.LOST_NO_FIX ->
+                if (approximateOnly) null else context.getString(R.string.tracking_notification_signal_lost)
             TrackingSessionCoordinator.LocationSignalReport.LOST_LOCATION_SERVICES_OFF -> context.getString(R.string.tracking_notification_location_off)
         }
         // REC-006/F0.10 §14: a recording that cannot save must never read as healthy - and the most
         // serious thing goes first, where a one-line notification still shows it.
-        val persistenceNote = when (persistence) {
-            PersistenceLevel.HEALTHY -> null
-            PersistenceLevel.DEGRADED -> context.getString(R.string.tracking_notification_saving_problem)
-            PersistenceLevel.CRITICAL -> context.getString(R.string.tracking_notification_data_loss)
+        val persistenceNote = when {
+            persistence.level == PersistenceLevel.HEALTHY -> null
+            persistence.level == PersistenceLevel.DEGRADED -> context.getString(R.string.tracking_notification_saving_problem)
+            persistence.storageFull -> context.getString(R.string.tracking_notification_storage_full)
+            else -> context.getString(R.string.tracking_notification_data_loss)
         }
-        val text = listOfNotNull(persistenceNote, signalNote, figures).joinToString(" · ").ifEmpty { context.getString(R.string.tracking_notification_text) }
+        val approximateNote = if (approximateOnly) context.getString(R.string.tracking_notification_approximate_only) else null
+        val text = listOfNotNull(persistenceNote, approximateNote, signalNote, figures).joinToString(" · ").ifEmpty { context.getString(R.string.tracking_notification_text) }
         return NotificationCompat.Builder(context, CHANNEL_ID)
             .setContentTitle(context.getString(R.string.tracking_notification_title))
             .setContentText(text)

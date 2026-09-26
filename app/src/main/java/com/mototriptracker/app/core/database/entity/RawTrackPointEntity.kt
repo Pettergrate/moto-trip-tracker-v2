@@ -57,5 +57,14 @@ data class RawTrackPointEntity(
     val isMock: Boolean?,
     val requestProfileId: String,
     val callbackBatchId: String?,
-    val detectorStateSnapshot: String
+    val detectorStateSnapshot: String,
+    /**
+     * REC-005 follow-up (ADR-016): whether only *approximate* location was allowed when this fix was
+     * received. `null` = unknown (every point recorded before schema v3 - never guessed as `false`),
+     * `false` = precise location was granted, `true` = only approximate. Android hands an
+     * approximate-only app fixes rounded to a ~2 km block (`horizontalAccuracyM` 2000), so the fix is
+     * real raw data (ADR-006: kept) but useless as a route: processing rejects it and the live
+     * distance skips it, instead of counting a jump of a kilometre while the phone sits still.
+     */
+    val isApproximateLocation: Boolean? = null
 )

@@ -25,16 +25,18 @@ class ProcessingEngineTest {
         captureId: String = "capture-1",
         sequenceNumber: Long,
         elapsedNanos: Long,
-        capturedAt: Long = elapsedNanos / 1_000_000
+        capturedAt: Long = elapsedNanos / 1_000_000,
+        latitude: Double = 10.0,
+        isApproximateLocation: Boolean? = null
     ) = RawTrackPointEntity(
         captureId = captureId,
         sequenceNumber = sequenceNumber,
         capturedAt = capturedAt,
         elapsedRealtimeNanos = elapsedNanos,
         receivedAtElapsedRealtimeNanos = elapsedNanos,
-        latitude = 10.0,
+        latitude = latitude,
         longitude = -20.0,
-        horizontalAccuracyM = 5.0f,
+        horizontalAccuracyM = if (isApproximateLocation == true) 2000.0f else 5.0f,
         altitudeEllipsoidM = null,
         altitudeMslM = null,
         verticalAccuracyM = null,
@@ -46,7 +48,8 @@ class ProcessingEngineTest {
         isMock = false,
         requestProfileId = "test-profile",
         callbackBatchId = null,
-        detectorStateSnapshot = "TRACKING"
+        detectorStateSnapshot = "TRACKING",
+        isApproximateLocation = isApproximateLocation
     )
 
     private fun part(
@@ -64,6 +67,51 @@ class ProcessingEngineTest {
         startSequenceNumber = startSequenceNumber,
         endSequenceNumber = endSequenceNumber
     )
+
+    /** REC-005 follow-up: found on the phone - one 2000 m fix taken with only approximate location allowed sat ~920 m from the real position. */
+    @Test
+    fun aFixTakenWithOnlyApproximateLocationIsRejectedAndNeverEntersTheRoute() {
+        val points = listOf(
+            point(sequenceNumber = 0, elapsedNanos = 1_000_000_000L),
+            point(sequenceNumber = 1, elapsedNanos = 3_000_000_000L, latitude = 10.008, isApproximateLocation = true),
+            point(sequenceNumber = 2, elapsedNanos = 5_000_000_000L)
+        )
+
+        val result = engine.process("trip-1", version, listOf(part()), mapOf("capture-1" to points))
+
+        val approximate = result.assessments.single { it.sequenceNumber == 1L }
+        assertEquals(TrackPointDecision.REJECTED, approximate.decision)
+        assertEquals(ProcessingEngine.REASON_APPROXIMATE_LOCATION, approximate.reasonCodes)
+        assertEquals("the kilometre-away block is not part of the route", listOf(0L, 2L), result.processedPoints.map { it.sourceSequenceNumber })
+    }
+
+    /** An approximate fix is not evidence of a live signal: it must not paper over a real gap. */
+    @Test
+    fun anApproximateFixInTheMiddleOfASilenceDoesNotHideTheGap() {
+        val points = listOf(
+            point(sequenceNumber = 0, elapsedNanos = 1_000_000_000L),
+            point(sequenceNumber = 1, elapsedNanos = 21_000_000_000L, isApproximateLocation = true),
+            point(sequenceNumber = 2, elapsedNanos = 41_000_000_000L)
+        )
+
+        val result = engine.process("trip-1", version, listOf(part()), mapOf("capture-1" to points))
+
+        assertEquals("one 40 s gap between the two usable fixes, not two 20 s stretches", 1, result.gaps.size)
+        assertEquals(40_000L, result.gaps.single().durationMs)
+    }
+
+    /** Every point recorded before schema v3 has an unknown marker (null) and must behave exactly as before. */
+    @Test
+    fun aPointWithAnUnknownMarkerIsTreatedLikeAnyOtherPoint() {
+        val points = listOf(
+            point(sequenceNumber = 0, elapsedNanos = 1_000_000_000L, isApproximateLocation = null),
+            point(sequenceNumber = 1, elapsedNanos = 3_000_000_000L, isApproximateLocation = false)
+        )
+
+        val result = engine.process("trip-1", version, listOf(part()), mapOf("capture-1" to points))
+
+        assertEquals(listOf(TrackPointDecision.ACCEPTED, TrackPointDecision.ACCEPTED), result.assessments.map { it.decision })
+    }
 
     @Test
     fun firstPointIsAlwaysAcceptedWithNoPreviousEvidenceToCompareAgainst() {

@@ -33,6 +33,17 @@ interface RawTrackPointDao {
     @Query("SELECT * FROM raw_track_point WHERE captureId = :captureId ORDER BY sequenceNumber ASC")
     fun observeAllByCapture(captureId: String): Flow<List<RawTrackPointEntity>>
 
+    /**
+     * REC-005 follow-up: the last point that is real evidence of a position - not one taken with only approximate
+     * location allowed. A restarted recording seeds its signal watch from this, so an approximate fix cannot pass
+     * for a live signal. Points from before schema v3 have an unknown marker (`NULL`) and count as usable, as they always did.
+     */
+    @Query(
+        "SELECT * FROM raw_track_point WHERE captureId = :captureId AND (isApproximateLocation IS NULL OR isApproximateLocation = 0) " +
+            "ORDER BY sequenceNumber DESC LIMIT 1"
+    )
+    suspend fun findLastUsableByCapture(captureId: String): RawTrackPointEntity?
+
     /** REC-004: the last recorded point without loading the capture's whole history - sealing now also runs at every process start, so it must stay cheap for a long trip. */
     @Query("SELECT * FROM raw_track_point WHERE captureId = :captureId ORDER BY sequenceNumber DESC LIMIT 1")
     suspend fun findLastByCapture(captureId: String): RawTrackPointEntity?

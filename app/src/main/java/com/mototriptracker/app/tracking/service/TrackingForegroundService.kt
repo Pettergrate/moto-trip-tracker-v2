@@ -65,6 +65,10 @@ class TrackingForegroundService : Service() {
     @Volatile
     private var locationSignal = TrackingSessionCoordinator.LocationSignalReport.RESTORED
 
+    /** REC-005 follow-up: only approximate location is allowed, so fixes are kept but not used as route. Wording only; the events are the record. */
+    @Volatile
+    private var approximateOnly = false
+
     /** REC-006: the recording last reported persistence state, for the notification; the screen reads the same from [persistenceHealthBus]. */
     @Volatile
     private var persistence = PersistenceState.HEALTHY
@@ -219,6 +223,10 @@ class TrackingForegroundService : Service() {
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
 
+    /** REC-005 follow-up: precise (fine) location, as opposed to the approximate one that [hasLocationPermission] also accepts. */
+    private fun hasPreciseLocationPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
     /** `false` if the platform refused the foreground (see [onStartCommand]); never throws. */
     private fun tryStartForeground(notification: Notification): Boolean = try {
         startForeground(NOTIFICATION_ID, notification)
@@ -295,6 +303,7 @@ class TrackingForegroundService : Service() {
                 onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() },
                 onForgottenFinishWarning = { notificationController.postForgottenFinishReminder() },
                 locationServicesEnabled = ::isLocationServicesEnabled,
+                preciseLocationGranted = ::hasPreciseLocationPermission,
                 onLocationSignalChanged = { report -> onLocationSignalChanged(captureId, report) },
                 onPersistenceStateChanged = { state -> onPersistenceStateChanged(captureId, state) }
             )
@@ -325,7 +334,11 @@ class TrackingForegroundService : Service() {
 
     /** REC-005: word the notification honestly the moment the signal changes instead of waiting for the next periodic refresh. */
     private suspend fun onLocationSignalChanged(captureId: String, report: TrackingSessionCoordinator.LocationSignalReport) {
-        locationSignal = report
+        when (report) {
+            TrackingSessionCoordinator.LocationSignalReport.APPROXIMATE_ONLY -> approximateOnly = true
+            TrackingSessionCoordinator.LocationSignalReport.PRECISE_RESTORED -> approximateOnly = false
+            else -> locationSignal = report
+        }
         refreshNotification(captureId)
     }
 
@@ -353,9 +366,9 @@ class TrackingForegroundService : Service() {
             null
         }
         val notification = when {
-            snapshot == null -> notificationController.buildTrackingNotification(signal = locationSignal, persistence = persistence.level)
+            snapshot == null -> notificationController.buildTrackingNotification(signal = locationSignal, persistence = persistence, approximateOnly = approximateOnly)
             snapshot.isPaused -> notificationController.buildPausedTrackingNotification(snapshot.elapsedMs)
-            else -> notificationController.buildTrackingNotification(snapshot.distanceMeters, snapshot.elapsedMs, locationSignal, persistence.level)
+            else -> notificationController.buildTrackingNotification(snapshot.distanceMeters, snapshot.elapsedMs, locationSignal, persistence, approximateOnly)
         }
         startForeground(NOTIFICATION_ID, notification)
     }
@@ -384,6 +397,7 @@ class TrackingForegroundService : Service() {
             },
             onForgottenPauseWarning = { notificationController.postForgottenPauseReminder() },
             locationServicesEnabled = ::isLocationServicesEnabled,
+            preciseLocationGranted = ::hasPreciseLocationPermission,
             onLocationSignalChanged = { report -> coordinator.findActiveCapture()?.let { onLocationSignalChanged(it.id, report) } },
             onPersistenceStateChanged = { state -> coordinator.findActiveCapture()?.let { onPersistenceStateChanged(it.id, state) } }
         )
