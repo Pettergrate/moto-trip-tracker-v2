@@ -77,6 +77,9 @@ class RawPointWriter(
         var rejected = 0
         var storageFull = false
         var overflowLogged = false
+
+        /** The most points held at once *during this outage* (the buffer's own mark spans the whole recording). */
+        var highWater = 0
         var firstLostElapsedNanos: Long? = null
         var lastLostElapsedNanos: Long? = null
 
@@ -144,8 +147,10 @@ class RawPointWriter(
     val state: PersistenceState get() = publishedState
 
     private fun hold(point: RawTrackPointEntity) {
-        val displaced = buffer.offer(point) ?: return
+        val displaced = buffer.offer(point)
         val current = episode ?: return
+        if (buffer.size > current.highWater) current.highWater = buffer.size
+        if (displaced == null) return
         current.dropped++
         current.noteLoss(displaced)
     }
@@ -230,7 +235,7 @@ class RawPointWriter(
                     "flushedPoints" to current.flushed.toString(),
                     "droppedPoints" to current.dropped.toString(),
                     "rejectedPoints" to current.rejected.toString(),
-                    "highWaterMark" to buffer.highWaterMark.toString(),
+                    "highWaterMark" to current.highWater.toString(),
                     "attempts" to current.attempts.toString(),
                     "episodeMs" to (nowMs() - current.startedAtElapsedMs).toString(),
                     "storageFull" to current.storageFull.toString()
@@ -279,7 +284,8 @@ class RawPointWriter(
         val current = episode
         val next = when {
             current == null -> PersistenceState.HEALTHY
-            current.storageFull || current.dropped > 0 || current.rejected > 0 -> PersistenceState(PersistenceLevel.CRITICAL, current.storageFull)
+            current.storageFull || current.dropped > 0 || current.rejected > 0 ->
+                PersistenceState(PersistenceLevel.CRITICAL, current.storageFull, pointsLost = current.dropped > 0 || current.rejected > 0)
             else -> PersistenceState(PersistenceLevel.DEGRADED)
         }
         if (next == publishedState) return
@@ -374,11 +380,13 @@ enum class PersistenceLevel { HEALTHY, DEGRADED, CRITICAL }
  * REC-006: deliberately no counters - they would change on every fix and either flood the
  * notification or go stale on screen; the numbers live in the `PERSISTENCE_RECOVERED` and
  * `DATA_LOSS_DETECTED` events. [storageFull] says the phone itself is out of space, the one cause the
- * rider can act on.
+ * rider can act on; [pointsLost] says whether anything is already gone (as opposed to held in memory and
+ * still savable) - it changes at most once per outage, so it does not defeat the "no counters" rule.
  */
 data class PersistenceState(
     val level: PersistenceLevel,
-    val storageFull: Boolean = false
+    val storageFull: Boolean = false,
+    val pointsLost: Boolean = false
 ) {
     companion object {
         val HEALTHY = PersistenceState(PersistenceLevel.HEALTHY)

@@ -28,6 +28,13 @@ Stack: Hilt + KSP, Room (esquemas exportados en `app/schemas`), WorkManager, Dat
 ## Room
 Cambiar el esquema implica subir `version` en `MotoTripDatabase`, agregar la `Migration` en `Migrations.kt` y extender el test de migración. Los JSON de `app/schemas/` los genera KSP al compilar: no se editan a mano (un hook lo bloquea). Skill: `/new-room-migration`.
 
+## Fallos de escritura en el teléfono (solo debug)
+El teléfono de pruebas guarda viajes reales: no llenar el almacenamiento, no tocar el WAL, no correr `connectedAndroidTest`. Para probar la ruta de fallo de persistencia (REC-006) hay un inyector que solo existe en builds `debug` (`src/debug`, activado por archivos bandera en `files/` de la app; no toca datos ni ajustes del sistema). Entrecomillar toda la orden para que la redirección la haga `run-as` y no el shell externo:
+- `adb shell "run-as com.mototriptracker.app sh -c 'echo transient > files/fail_raw_writes'"` (o `full` para `SQLiteFullException`)
+- `adb shell "run-as com.mototriptracker.app rm files/fail_raw_writes"` para volver a la normalidad
+- `adb shell "run-as com.mototriptracker.app sh -c 'echo 10 > files/raw_buffer_capacity'"` reduce el buffer (se lee al iniciar el viaje); borrar el archivo al terminar.
+`sqlite3.exe` está en `platform-tools`: copiar `databases/moto-trip-tracker.db` (+ `-wal`/`-shm`) con `adb exec-out run-as ... cat` y consultar la copia. Borrar siempre las copias, contienen coordenadas reales.
+
 ## Commits
 Formato `TASK-ID: descripción corta en inglés` (ej. `EDT-001: merge trips into one logical trip`). Un commit por tarea. Skill: `/close-task`.
 

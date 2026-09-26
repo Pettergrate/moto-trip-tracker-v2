@@ -190,8 +190,10 @@ internal fun persistenceNotice(state: PersistenceState): String? = when {
     state.level == PersistenceLevel.HEALTHY -> null
     state.level == PersistenceLevel.DEGRADED ->
         "Trouble saving this trip. Recent points are held in memory and will be saved when it recovers."
-    state.storageFull ->
-        "The phone storage is full, so points are being lost. Free up space now; the trip keeps recording what it can."
-    else ->
+    state.pointsLost && state.storageFull ->
+        "The phone storage is full and some points are lost. Free up space now; the trip keeps recording what it can."
+    state.pointsLost ->
         "Some points could not be saved and are lost. The trip keeps recording; the missing stretch will show as a gap."
+    else ->
+        "The phone storage is full. Recent points are held in memory and will be lost if you do not free up space now. The trip keeps recording."
 }

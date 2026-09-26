@@ -68,6 +68,8 @@ class TrackingNotificationController @Inject constructor(
         val persistenceNote = when {
             persistence.level == PersistenceLevel.HEALTHY -> null
             persistence.level == PersistenceLevel.DEGRADED -> context.getString(R.string.tracking_notification_saving_problem)
+            // Full storage with everything still held in memory is a warning, not yet a loss.
+            persistence.pointsLost -> context.getString(R.string.tracking_notification_data_loss)
             persistence.storageFull -> context.getString(R.string.tracking_notification_storage_full)
             else -> context.getString(R.string.tracking_notification_data_loss)
         }

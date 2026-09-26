@@ -155,7 +155,7 @@ class RawPointWriterTest {
 
         (0L..11L).forEach { writer.write(point(it)); tick() }
 
-        assertEquals(PersistenceState(PersistenceLevel.CRITICAL), writer.state)
+        assertEquals(PersistenceState(PersistenceLevel.CRITICAL, pointsLost = true), writer.state)
         assertEquals("one overflow event for the outage, not one per dropped point", 1, events(RawPointWriter.EVENT_BUFFER_OVERFLOW).size)
 
         flakyPoints.failure = null
@@ -170,6 +170,39 @@ class RawPointWriterTest {
         assertEquals(PersistenceState.HEALTHY, writer.state)
     }
 
+    /** Found on the phone: the card said points were being lost while everything was still held in memory. */
+    @Test
+    fun fullStorageWithEverythingStillHeldIsNotReportedAsALossUntilAPointIsActuallyDropped() = runTest {
+        val writer = writer(capacity = 3)
+        flakyPoints.failure = SQLiteFullException("database or disk is full")
+
+        (0L..2L).forEach { writer.write(point(it)); tick() }
+        assertEquals(PersistenceState(PersistenceLevel.CRITICAL, storageFull = true, pointsLost = false), writer.state)
+
+        writer.write(point(3)) // the buffer is full: the oldest is dropped
+        assertEquals(PersistenceState(PersistenceLevel.CRITICAL, storageFull = true, pointsLost = true), writer.state)
+    }
+
+    /** Found on the phone: the second outage reported the first one's maximum. */
+    @Test
+    fun theHighWaterMarkIsPerOutageNotForTheWholeRecording() = runTest {
+        val writer = writer()
+        flakyPoints.failure = IllegalStateException("disk hiccup")
+        (0L..4L).forEach { writer.write(point(it)); tick() }
+        flakyPoints.failure = null
+        tick(60_000L)
+        writer.retryPending()
+
+        flakyPoints.failure = IllegalStateException("disk hiccup")
+        (5L..6L).forEach { writer.write(point(it)); tick() }
+        flakyPoints.failure = null
+        tick(60_000L)
+        writer.retryPending()
+
+        val marks = events(RawPointWriter.EVENT_RECOVERED).sortedBy { it.occurredAt }.map { it.metadata["highWaterMark"] }
+        assertEquals(listOf("5", "2"), marks)
+    }
+
     @Test
     fun aFullDiskIsCriticalAndSaysTheStorageIsFullFromTheFirstFailure() = runTest {
         val writer = writer()
@@ -177,7 +210,7 @@ class RawPointWriterTest {
 
         writer.write(point(0))
 
-        assertEquals(PersistenceState(PersistenceLevel.CRITICAL, storageFull = true), writer.state)
+        assertEquals(PersistenceState(PersistenceLevel.CRITICAL, storageFull = true, pointsLost = false), writer.state)
         assertEquals("true", events(RawPointWriter.EVENT_INSERT_FAILED).single().metadata["storageFull"])
     }
 

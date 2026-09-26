@@ -20,6 +20,7 @@ import com.mototriptracker.app.core.database.entity.RawTrackPointEntity
 import com.mototriptracker.app.core.database.entity.TripCaptureEntity
 import com.mototriptracker.app.core.database.entity.TripEntity
 import com.mototriptracker.app.core.database.entity.TripPartEntity
+import com.mototriptracker.app.core.di.RAW_BUFFER_CAPACITY
 import com.mototriptracker.app.core.model.ActivityTransitionSample
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.DetectorState
@@ -62,6 +63,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
 import java.util.TimeZone
 import javax.inject.Inject
+import javax.inject.Named
 
 /**
  * The only thing that may create/reuse the active [TripCaptureEntity]
@@ -96,7 +98,9 @@ class TrackingSessionCoordinator @Inject constructor(
     private val locationGateway: LocationGateway,
     private val processingScheduler: ProcessingScheduler,
     private val clock: Clock,
-    private val idGenerator: IdGenerator
+    private val idGenerator: IdGenerator,
+    /** REC-006: the raw-point buffer size; a debug build may shrink it (see `FaultInjectionModule`), nothing else does. */
+    @Named(RAW_BUFFER_CAPACITY) private val rawBufferCapacity: Int = RawPointWriter.DEFAULT_CAPACITY
 ) {
     sealed interface StartResult {
         val captureId: String
@@ -817,6 +821,7 @@ class TrackingSessionCoordinator @Inject constructor(
                                     signal = LocationSignalTracker(started.captureId, null, locationServicesEnabled, preciseLocationGranted, onLocationSignalChanged)
                                     writer = RawPointWriter(
                                         rawTrackPointDao, diagnosticEventDao, clock, idGenerator, started.captureId,
+                                        capacity = rawBufferCapacity,
                                         onStateChanged = onPersistenceStateChanged
                                     )
                                     onCaptureStarted(started.captureId)
@@ -1004,6 +1009,7 @@ class TrackingSessionCoordinator @Inject constructor(
         // REC-006: every raw point goes through the writer - bounded buffer plus retry on failure.
         val writer = RawPointWriter(
             rawTrackPointDao, diagnosticEventDao, clock, idGenerator, captureId,
+            capacity = rawBufferCapacity,
             onStateChanged = onPersistenceStateChanged
         )
         coroutineScope {

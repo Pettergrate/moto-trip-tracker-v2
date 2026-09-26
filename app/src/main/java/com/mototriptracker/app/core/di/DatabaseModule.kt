@@ -23,6 +23,9 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import com.mototriptracker.app.tracking.persistence.FaultInjectingRawTrackPointDao
+import com.mototriptracker.app.tracking.persistence.RawWriteFaultInjector
+import java.util.Optional
 import javax.inject.Singleton
 
 /**
@@ -54,8 +57,15 @@ object DatabaseModule {
     @Provides
     fun provideDiagnosticEventDao(database: MotoTripDatabase): DiagnosticEventDao = database.diagnosticEventDao()
 
+    /**
+     * REC-006: wrapped only when a debug build binds a [RawWriteFaultInjector]; otherwise the plain DAO, so
+     * a release build is unchanged.
+     */
     @Provides
-    fun provideRawTrackPointDao(database: MotoTripDatabase): RawTrackPointDao = database.rawTrackPointDao()
+    fun provideRawTrackPointDao(database: MotoTripDatabase, faults: Optional<RawWriteFaultInjector>): RawTrackPointDao {
+        val dao = database.rawTrackPointDao()
+        return if (faults.isPresent) FaultInjectingRawTrackPointDao(dao, faults.get()) else dao
+    }
 
     @Provides
     fun provideCaptureEventDao(database: MotoTripDatabase): CaptureEventDao = database.captureEventDao()
