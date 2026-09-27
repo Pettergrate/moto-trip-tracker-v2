@@ -33,6 +33,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mototriptracker.app.domain.capability.CapabilityIssue
+import com.mototriptracker.app.feature.common.CapabilityIssueCopy
+import com.mototriptracker.app.feature.common.rememberCapabilityFixer
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationClock
 import com.mototriptracker.app.feature.common.formatDurationCompact
@@ -51,6 +54,7 @@ fun ActiveTripScreen(
     viewModel: ActiveTripViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val fixIssue = rememberCapabilityFixer(onAfterAttempt = {})
 
     // The only ways here are "an active trip exists" (Home's CTA) or a
     // still-active one from a previous composition - once it's genuinely
@@ -65,6 +69,7 @@ fun ActiveTripScreen(
         onBack = onBack,
         onPauseClick = viewModel::onPauseClick,
         onResumeClick = viewModel::onResumeClick,
+        onFixIssue = fixIssue,
         onFinishConfirmed = viewModel::onFinishConfirmed
     )
 }
@@ -73,6 +78,7 @@ fun ActiveTripScreen(
 @Composable
 private fun ActiveTripContent(
     uiState: ActiveTripUiState,
+    onFixIssue: (CapabilityIssue) -> Unit,
     onBack: () -> Unit,
     onPauseClick: () -> Unit,
     onResumeClick: () -> Unit,
@@ -115,6 +121,17 @@ private fun ActiveTripContent(
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
+                    if (uiState.notificationsHidden) {
+                        // PERM-003: the trip records either way, but the rider should know Pause/Finish are not in the notification.
+                        val copy = CapabilityIssueCopy.of(CapabilityIssue.NOTIFICATIONS_DENIED)
+                        Card(modifier = Modifier.fillMaxWidth()) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(copy.title, style = MaterialTheme.typography.titleSmall)
+                                Text(copy.message, style = MaterialTheme.typography.bodyMedium)
+                                OutlinedButton(onClick = { onFixIssue(CapabilityIssue.NOTIFICATIONS_DENIED) }) { Text(copy.actionLabel) }
+                            }
+                        }
+                    }
                     persistenceNotice(uiState.persistence)?.let { notice ->
                         // REC-006: shown first - not saving is worse than not having a signal.
                         Card(modifier = Modifier.fillMaxWidth()) {
@@ -124,7 +141,13 @@ private fun ActiveTripContent(
                     signalNotice(uiState.signal)?.let { notice ->
                         // REC-005: honest, not alarming - the trip is still recording; a gap is marked, never filled in.
                         Card(modifier = Modifier.fillMaxWidth()) {
-                            Text(notice, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(12.dp))
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(notice, style = MaterialTheme.typography.bodyMedium)
+                                // PERM-003: when the cause is a setting the rider can change, put that one action right here.
+                                fixFor(uiState.signal)?.let { issue ->
+                                    OutlinedButton(onClick = { onFixIssue(issue) }) { Text(CapabilityIssueCopy.of(issue).actionLabel) }
+                                }
+                            }
                         }
                     }
 
@@ -177,6 +200,8 @@ private fun ActiveTripContent(
 internal fun signalNotice(signal: ActiveTripSignal): String? = when (signal) {
     ActiveTripSignal.OK -> null
     ActiveTripSignal.SEARCHING -> "Waiting for the first GPS fix…"
+    ActiveTripSignal.SEARCHING_LOCATION_OFF ->
+        "Location is turned off, so no route is being recorded. Turn it on and the trip will start recording its route."
     ActiveTripSignal.LOST_NO_FIX ->
         "No GPS signal. The trip keeps recording; the stretch without signal is marked as a gap, not filled in."
     ActiveTripSignal.LOST_LOCATION_SERVICES_OFF ->

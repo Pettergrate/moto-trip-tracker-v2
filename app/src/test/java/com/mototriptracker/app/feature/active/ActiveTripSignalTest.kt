@@ -1,5 +1,6 @@
 package com.mototriptracker.app.feature.active
 
+import com.mototriptracker.app.domain.capability.CapabilityIssue
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -50,5 +51,42 @@ class ActiveTripSignalTest {
     @Test
     fun aPausedTripStillNeverReadsAsALoss() {
         assertEquals(ActiveTripSignal.OK, activeTripSignal(isPaused = true, pointCount = 5, openGapReason = null, approximateOnly = true))
+    }
+
+    /** Found on the phone: a trip started with Location off said "Waiting for the first GPS fix" for 11 minutes. */
+    @Test
+    fun noPointsYetWithLocationOffSaysSoInsteadOfWaitingForAFixThatCannotCome() {
+        assertEquals(
+            ActiveTripSignal.SEARCHING_LOCATION_OFF,
+            activeTripSignal(isPaused = false, pointCount = 0, openGapReason = null, locationServicesOff = true)
+        )
+    }
+
+    @Test
+    fun locationOffOnlyChangesTheWaitBeforeTheFirstFixNotARecordingThatAlreadyHasPoints() {
+        // Once points exist, an outage is reported by the gap the watch opens (with its own reason), never guessed here.
+        assertEquals(ActiveTripSignal.OK, activeTripSignal(isPaused = false, pointCount = 42, openGapReason = null, locationServicesOff = true))
+    }
+
+    @Test
+    fun aPausedTripWithLocationOffIsStillNotALoss() {
+        assertEquals(ActiveTripSignal.OK, activeTripSignal(isPaused = true, pointCount = 0, openGapReason = null, locationServicesOff = true))
+    }
+
+    @Test
+    fun theWaitBeforeTheFirstFixDoesNotPromiseAGapBecauseNoneIsMarkedYet() {
+        val notice = signalNotice(ActiveTripSignal.SEARCHING_LOCATION_OFF).orEmpty()
+        assertEquals(notice, false, notice.contains("gap", ignoreCase = true))
+        assertEquals(notice, true, notice.contains("Location is turned off"))
+    }
+
+    @Test
+    fun theFixIsOfferedOnlyWhereTheRiderCanDoSomethingAboutTheCause() {
+        assertEquals(CapabilityIssue.LOCATION_SERVICES_OFF, fixFor(ActiveTripSignal.SEARCHING_LOCATION_OFF))
+        assertEquals(CapabilityIssue.LOCATION_SERVICES_OFF, fixFor(ActiveTripSignal.LOST_LOCATION_SERVICES_OFF))
+        assertEquals(CapabilityIssue.PRECISE_LOCATION_MISSING, fixFor(ActiveTripSignal.APPROXIMATE_ONLY))
+        assertNull("nothing to change for a tunnel", fixFor(ActiveTripSignal.LOST_NO_FIX))
+        assertNull(fixFor(ActiveTripSignal.SEARCHING))
+        assertNull(fixFor(ActiveTripSignal.OK))
     }
 }

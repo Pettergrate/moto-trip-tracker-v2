@@ -10,6 +10,7 @@ import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.domain.liveDistanceMeters
+import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.tracking.persistence.PersistenceHealthBus
 import com.mototriptracker.app.tracking.service.TrackingForegroundService
@@ -36,6 +37,7 @@ class ActiveTripViewModel @Inject constructor(
     private val manualPauseIntervalDao: ManualPauseIntervalDao,
     private val diagnosticEventDao: DiagnosticEventDao,
     private val persistenceHealthBus: PersistenceHealthBus,
+    private val capabilityInputsProvider: CapabilityInputsProvider,
     private val clock: Clock
 ) : ViewModel() {
 
@@ -43,6 +45,26 @@ class ActiveTripViewModel @Inject constructor(
         while (true) {
             emit(Unit)
             delay(1_000L)
+        }
+    }
+
+    /** What the phone's settings say right now that the trip screen has to reflect (PERM-003). */
+    private data class SettingsReading(val notificationsHidden: Boolean, val locationServicesOff: Boolean)
+
+    /**
+     * PERM-003: whether the trip notification (with Pause and Finish) can be shown, and whether Location Services are
+     * off. Re-read every few seconds, not every second: both change only when the person edits the phone's settings.
+     * A failed read shows nothing rather than a false alarm.
+     */
+    private val settingsReading: Flow<SettingsReading> = flow {
+        while (true) {
+            emit(
+                runCatching {
+                    val inputs = capabilityInputsProvider.current()
+                    SettingsReading(notificationsHidden = !inputs.notificationsEnabled, locationServicesOff = !inputs.locationServicesEnabled)
+                }.getOrDefault(SettingsReading(notificationsHidden = false, locationServicesOff = false))
+            )
+            delay(NOTIFICATION_CHECK_MS)
         }
     }
 
@@ -60,16 +82,17 @@ class ActiveTripViewModel @Inject constructor(
                         TrackingSessionCoordinator.EVENT_LOCATION_GAP_ENDED
                     ),
                     ticker,
-                    // combine has typed overloads only up to five flows: the two recording-health flows travel together.
+                    // combine has typed overloads only up to five flows: the recording-health flows travel together.
                     combine(
                         persistenceHealthBus.state,
+                        settingsReading,
                         diagnosticEventDao.observeOpenGapReason(
                             capture.id,
                             TrackingSessionCoordinator.EVENT_LOCATION_ACCURACY_DEGRADED,
                             TrackingSessionCoordinator.EVENT_LOCATION_ACCURACY_RESTORED
                         )
-                    ) { persistence, accuracyReason -> persistence to accuracyReason }
-                ) { points, openPause, openGapReason, _, (persistence, accuracyReason) ->
+                    ) { persistence, settings, accuracyReason -> Triple(persistence, settings, accuracyReason) }
+                ) { points, openPause, openGapReason, _, (persistence, settings, accuracyReason) ->
                     ActiveTripUiState.Active(
                         isPaused = openPause != null,
                         distanceMeters = liveDistanceMeters(points),
@@ -79,9 +102,11 @@ class ActiveTripViewModel @Inject constructor(
                             isPaused = openPause != null,
                             pointCount = points.size,
                             openGapReason = openGapReason,
-                            approximateOnly = accuracyReason != null
+                            approximateOnly = accuracyReason != null,
+                            locationServicesOff = settings.locationServicesOff
                         ),
-                        persistence = persistence
+                        persistence = persistence,
+                        notificationsHidden = settings.notificationsHidden
                     )
                 }
             }
@@ -103,5 +128,6 @@ class ActiveTripViewModel @Inject constructor(
 
     private companion object {
         const val STOP_TIMEOUT_MS = 5_000L
+        const val NOTIFICATION_CHECK_MS = 3_000L
     }
 }

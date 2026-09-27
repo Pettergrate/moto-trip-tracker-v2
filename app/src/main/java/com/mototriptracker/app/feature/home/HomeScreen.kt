@@ -10,14 +10,21 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -26,11 +33,17 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mototriptracker.app.core.model.CapabilityMode
+import com.mototriptracker.app.domain.capability.CapabilityIssue
+import com.mototriptracker.app.feature.common.CapabilityIssueCopy
+import com.mototriptracker.app.feature.common.rememberCapabilityFixer
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationClock
 import com.mototriptracker.app.feature.common.formatDurationCompact
 import com.mototriptracker.app.feature.common.LocationPermissionDeniedDialog
 import com.mototriptracker.app.feature.common.rememberStartWithLocationPermission
+
+/** How often Home re-reads permissions and services while it is visible. */
+private const val CAPABILITY_RECHECK_MS = 3_000L
 
 /** F0.9 §5: HOME-01. */
 @Composable
@@ -41,20 +54,44 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var showPermissionDeniedDialog by remember { mutableStateOf(false) }
+    var startAnywayIssue by remember { mutableStateOf<CapabilityIssue?>(null) }
 
-    // F0.9 §17: re-check readiness whenever Home is (re)composed, so a
-    // permission granted/revoked in system Settings is reflected without
-    // needing a continuous poll.
-    LaunchedEffect(Unit) { viewModel.refreshCapabilityMode() }
+    // F0.9 §17: re-check readiness every time Home comes back to the foreground - not only the first time it is
+    // composed - so a permission or Location toggle changed in the phone's Settings (which is exactly where the
+    // actions below send the person) is reflected on return, without a continuous poll.
+    LifecycleResumeEffect(Unit) {
+        viewModel.refreshCapabilityMode()
+        onPauseOrDispose { }
+    }
+    // ...and while it stays in front: turning Location off from the quick-settings panel does not pause the activity, so
+    // "on resume" alone would leave the card stale. A light re-read every few seconds, only while Home is visible.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                delay(CAPABILITY_RECHECK_MS)
+                viewModel.refreshCapabilityMode()
+            }
+        }
+    }
+
+    val fixIssue = rememberCapabilityFixer(onAfterAttempt = viewModel::refreshCapabilityMode)
 
     val startTripWithPermission = rememberStartWithLocationPermission(
         onGranted = viewModel::onStartTripClick,
         onDenied = { showPermissionDeniedDialog = true }
     )
 
+    // PERM-003: a problem that would leave the trip with no route is said once, before starting - never silently, and
+    // judged from a fresh read at the tap, not from what the card last showed.
+    val onStartTripClick = {
+        viewModel.checkBeforeStart(onWarn = { startAnywayIssue = it }, onProceed = { startTripWithPermission() })
+    }
+
     HomeContent(
         uiState = uiState,
-        onStartTripClick = startTripWithPermission,
+        onFixIssue = fixIssue,
+        onStartTripClick = onStartTripClick,
         onPauseClick = viewModel::onPauseClick,
         onResumeClick = viewModel::onResumeClick,
         onViewActiveTrip = onViewActiveTrip,
@@ -64,11 +101,23 @@ fun HomeScreen(
     if (showPermissionDeniedDialog) {
         LocationPermissionDeniedDialog(onDismiss = { showPermissionDeniedDialog = false })
     }
+
+    startAnywayIssue?.let { issue ->
+        val copy = CapabilityIssueCopy.of(issue)
+        AlertDialog(
+            onDismissRequest = { startAnywayIssue = null },
+            title = { Text(copy.title) },
+            text = { Text(copy.startAnywayMessage.orEmpty()) },
+            confirmButton = { TextButton(onClick = { startAnywayIssue = null; fixIssue(issue) }) { Text(copy.actionLabel) } },
+            dismissButton = { TextButton(onClick = { startAnywayIssue = null; startTripWithPermission() }) { Text("Start anyway") } }
+        )
+    }
 }
 
 @Composable
 private fun HomeContent(
     uiState: HomeUiState,
+    onFixIssue: (CapabilityIssue) -> Unit,
     onStartTripClick: () -> Unit,
     onPauseClick: () -> Unit,
     onResumeClick: () -> Unit,
@@ -91,7 +140,12 @@ private fun HomeContent(
                     onResumeClick = onResumeClick
                 )
             } else {
-                ReadinessCard(capabilityMode = uiState.capabilityMode, onStartTripClick = onStartTripClick)
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (uiState.capabilityIssues.isNotEmpty()) {
+                        CapabilityIssueCard(issues = uiState.capabilityIssues, onFix = onFixIssue)
+                    }
+                    ReadinessCard(capabilityMode = uiState.capabilityMode, onStartTripClick = onStartTripClick)
+                }
             }
         }
 
@@ -166,6 +220,29 @@ private fun RecentTripRow(trip: RecentTripUi, onClick: () -> Unit) {
             val distanceText = trip.distanceMeters?.let { formatDistanceKm(it) } ?: "—"
             val durationText = trip.durationMs?.let { formatDurationCompact(it) } ?: "—"
             Text("$distanceText · $durationText", style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+/**
+ * PERM-003 / §19.4: the most important problem with one clear action; anything else is only mentioned, and comes up
+ * once this one is fixed. Not a dialog, so it never interrupts and never repeats.
+ */
+@Composable
+private fun CapabilityIssueCard(issues: List<CapabilityIssue>, onFix: (CapabilityIssue) -> Unit) {
+    val top = issues.first()
+    val copy = CapabilityIssueCopy.of(top)
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(copy.title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+            Text(copy.message, style = MaterialTheme.typography.bodyMedium)
+            OutlinedButton(onClick = { onFix(top) }) { Text(copy.actionLabel) }
+            if (issues.size > 1) {
+                Text(
+                    "Also: " + issues.drop(1).joinToString(", ") { CapabilityIssueCopy.of(it).title.lowercase() },
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
 }

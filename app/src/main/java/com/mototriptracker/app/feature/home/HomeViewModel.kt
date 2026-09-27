@@ -11,6 +11,8 @@ import com.mototriptracker.app.core.database.dao.TripDao
 import com.mototriptracker.app.core.database.dao.TripStatisticsDao
 import com.mototriptracker.app.core.model.CapabilityMode
 import com.mototriptracker.app.core.model.CaptureStatus
+import com.mototriptracker.app.domain.capability.CapabilityDiagnosis
+import com.mototriptracker.app.domain.capability.CapabilityIssue
 import com.mototriptracker.app.domain.capability.CapabilityResolver
 import com.mototriptracker.app.domain.liveDistanceMeters
 import com.mototriptracker.app.feature.common.fallbackTripName
@@ -115,12 +117,16 @@ class HomeViewModel @Inject constructor(
      */
     private val capabilityModeFlow = MutableStateFlow<CapabilityMode?>(null)
 
+    /** PERM-003: refreshed together with the mode, from the same inputs, so the two can never disagree. */
+    private val capabilityIssuesFlow = MutableStateFlow<List<CapabilityIssue>>(emptyList())
+
     val uiState: StateFlow<HomeUiState> = combine(
         capabilityModeFlow,
+        capabilityIssuesFlow,
         activeTripFlow,
         recentTripsFlow
-    ) { capabilityMode, activeTrip, recentTrips ->
-        HomeUiState(capabilityMode = capabilityMode, activeTrip = activeTrip, recentTrips = recentTrips)
+    ) { capabilityMode, capabilityIssues, activeTrip, recentTrips ->
+        HomeUiState(capabilityMode = capabilityMode, capabilityIssues = capabilityIssues, activeTrip = activeTrip, recentTrips = recentTrips)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), HomeUiState())
 
     init {
@@ -129,7 +135,25 @@ class HomeViewModel @Inject constructor(
 
     fun refreshCapabilityMode() {
         viewModelScope.launch {
-            capabilityModeFlow.value = CapabilityResolver.resolve(capabilityInputsProvider.current())
+            val inputs = capabilityInputsProvider.current()
+            capabilityModeFlow.value = CapabilityResolver.resolve(inputs)
+            capabilityIssuesFlow.value = CapabilityDiagnosis.issuesFor(inputs)
+        }
+    }
+
+    /**
+     * PERM-003: the answer to "is it OK to start?" is read *now*, at the moment of the tap - never taken from the last
+     * refresh. Found on the phone: Location was switched off from the quick-settings panel, which does not pause the
+     * activity, so the on-screen state was stale and START TRIP began a trip with no route and no warning.
+     */
+    fun checkBeforeStart(onWarn: (CapabilityIssue) -> Unit, onProceed: () -> Unit) {
+        viewModelScope.launch {
+            val inputs = capabilityInputsProvider.current()
+            capabilityModeFlow.value = CapabilityResolver.resolve(inputs)
+            val issues = CapabilityDiagnosis.issuesFor(inputs)
+            capabilityIssuesFlow.value = issues
+            val warning = issues.firstOrNull { it.warnBeforeStart }
+            if (warning != null) onWarn(warning) else onProceed()
         }
     }
 

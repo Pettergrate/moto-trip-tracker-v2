@@ -1,5 +1,6 @@
 package com.mototriptracker.app.feature.active
 
+import com.mototriptracker.app.domain.capability.CapabilityIssue
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.tracking.persistence.PersistenceState
 
@@ -13,7 +14,9 @@ sealed interface ActiveTripUiState {
         val elapsedMs: Long,
         val pauseElapsedMs: Long?,
         val signal: ActiveTripSignal = ActiveTripSignal.OK,
-        val persistence: PersistenceState = PersistenceState.HEALTHY
+        val persistence: PersistenceState = PersistenceState.HEALTHY,
+        /** PERM-003: notifications are off, so the trip notification - with Pause and Finish - is not shown. */
+        val notificationsHidden: Boolean = false
     ) : ActiveTripUiState
 }
 
@@ -26,6 +29,13 @@ enum class ActiveTripSignal {
 
     /** No fix has arrived yet: nothing has been lost, the recording is just waiting for its first one. */
     SEARCHING,
+
+    /**
+     * PERM-003: no fix has arrived yet *and* Location Services are off, so waiting is pointless - none will come until
+     * they are turned on. Distinct from [LOST_LOCATION_SERVICES_OFF]: before the first fix there is no gap to mark
+     * (REC-005 opens one only after a signal was lost), so this must not promise one.
+     */
+    SEARCHING_LOCATION_OFF,
 
     /** Fixes stopped arriving past the gap threshold with Location Services on (tunnel, garage, OEM battery policy...). */
     LOST_NO_FIX,
@@ -49,12 +59,21 @@ internal fun activeTripSignal(
     isPaused: Boolean,
     pointCount: Int,
     openGapReason: String?,
-    approximateOnly: Boolean = false
+    approximateOnly: Boolean = false,
+    locationServicesOff: Boolean = false
 ): ActiveTripSignal = when {
     isPaused -> ActiveTripSignal.OK
     approximateOnly -> ActiveTripSignal.APPROXIMATE_ONLY
     openGapReason == TrackingSessionCoordinator.REASON_LOCATION_SERVICES_OFF -> ActiveTripSignal.LOST_LOCATION_SERVICES_OFF
     openGapReason != null -> ActiveTripSignal.LOST_NO_FIX
+    pointCount == 0 && locationServicesOff -> ActiveTripSignal.SEARCHING_LOCATION_OFF
     pointCount == 0 -> ActiveTripSignal.SEARCHING
     else -> ActiveTripSignal.OK
+}
+
+/** The one thing that fixes what [signal] reports, or `null` when there is nothing the rider can do about it. */
+internal fun fixFor(signal: ActiveTripSignal): CapabilityIssue? = when (signal) {
+    ActiveTripSignal.SEARCHING_LOCATION_OFF, ActiveTripSignal.LOST_LOCATION_SERVICES_OFF -> CapabilityIssue.LOCATION_SERVICES_OFF
+    ActiveTripSignal.APPROXIMATE_ONLY -> CapabilityIssue.PRECISE_LOCATION_MISSING
+    ActiveTripSignal.OK, ActiveTripSignal.SEARCHING, ActiveTripSignal.LOST_NO_FIX -> null
 }
