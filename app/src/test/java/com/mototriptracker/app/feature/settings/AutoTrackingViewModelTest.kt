@@ -8,6 +8,7 @@ import com.mototriptracker.app.core.datastore.AutoTrackingPreferences
 import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.domain.capability.AutoTrackingRequirement
 import com.mototriptracker.app.domain.capability.AutoTrackingState
+import com.mototriptracker.app.domain.capability.SetupStep
 import com.mototriptracker.app.testing.FailingDataStore
 import com.mototriptracker.app.testing.FakeCapabilityInputsProvider
 import java.io.File
@@ -152,6 +153,49 @@ class AutoTrackingViewModelTest {
 
         delay(300)
         assertFalse(vm.state().enabled)
+    }
+
+    /** PERM-002: the guided setup reads the phone at the moment it is asked, not the last poll. */
+    private fun AutoTrackingViewModel.nextStep(attempted: Set<SetupStep> = emptySet(), sdk: Int = 36): SetupStep? = runBlocking {
+        var answered = false
+        var answer: SetupStep? = null
+        nextSetupStep(attempted, sdk) { answer = it; answered = true }
+        withTimeout(5_000) { while (!answered) delay(10) }
+        answer
+    }
+
+    @Test
+    fun theGuidedSetupStartsWithTheActivityPermissionWhenItIsMissing() {
+        assertEquals(SetupStep.ACTIVITY_RECOGNITION, create().nextStep())
+    }
+
+    @Test
+    fun theGuidedSetupSeesAPermissionGrantedAMomentAgoWithoutWaitingForThePoll() {
+        val vm = create()
+        assertEquals(SetupStep.ACTIVITY_RECOGNITION, vm.nextStep())
+
+        provider.set(nothingGrantedYet.copy(activityRecognitionGranted = true)) // answered in the system dialog just now
+
+        assertEquals(SetupStep.BACKGROUND_LOCATION, vm.nextStep())
+    }
+
+    @Test
+    fun theGuidedSetupDoesNotAskTwiceAndEndsAfterANo() {
+        assertNull(create().nextStep(attempted = setOf(SetupStep.ACTIVITY_RECOGNITION)))
+    }
+
+    @Test
+    fun theGuidedSetupHasNothingToAskWhenEverythingIsGranted() {
+        provider.set(nothingGrantedYet.copy(activityRecognitionGranted = true, backgroundLocationGranted = true))
+
+        assertNull(create().nextStep())
+    }
+
+    @Test
+    fun aFailedReadEndsTheGuidedSetupInsteadOfBreakingTheScreen() {
+        provider.throwOnRead = true
+
+        assertNull(create().nextStep())
     }
 
     @Test

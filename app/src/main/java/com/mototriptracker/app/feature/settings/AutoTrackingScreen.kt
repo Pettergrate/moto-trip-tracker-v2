@@ -1,6 +1,10 @@
 package com.mototriptracker.app.feature.settings
 
 import androidx.annotation.StringRes
+import android.Manifest
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -26,18 +30,27 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mototriptracker.app.R
 import com.mototriptracker.app.domain.capability.AutoTrackingRequirement
+import com.mototriptracker.app.domain.capability.AutoTrackingSetup
 import com.mototriptracker.app.domain.capability.AutoTrackingState
 import com.mototriptracker.app.domain.capability.CapabilityIssue
 import com.mototriptracker.app.domain.capability.RequirementStatus
+import com.mototriptracker.app.domain.capability.SetupStep
+import com.mototriptracker.app.feature.common.LocationExplanationDialog
+import com.mototriptracker.app.feature.common.openAppSettings
 import com.mototriptracker.app.feature.common.rememberCapabilityFixer
 
 @StringRes
@@ -97,6 +110,10 @@ internal fun AutoTrackingRequirement.fix(): CapabilityIssue? = when (this) {
     AutoTrackingRequirement.ACTIVITY_RECOGNITION, AutoTrackingRequirement.BACKGROUND_LOCATION -> null
 }
 
+/** PERM-002: the two that are asked for by the guided setup (with their own explanation first) rather than by a plain fix. */
+internal fun AutoTrackingRequirement.usesGuidedSetup(): Boolean =
+    this == AutoTrackingRequirement.ACTIVITY_RECOGNITION || this == AutoTrackingRequirement.BACKGROUND_LOCATION
+
 /** The short button label that fits at the end of a row (the full ones of `PERM-003` are for cards and dialogs). */
 @StringRes
 private fun CapabilityIssue.shortActionRes(): Int =
@@ -111,6 +128,62 @@ private fun CapabilityIssue.shortActionRes(): Int =
 fun AutoTrackingScreen(onBack: () -> Unit, viewModel: AutoTrackingViewModel = hiltViewModel()) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val fixIssue = rememberCapabilityFixer(onAfterAttempt = {})
+    val context = LocalContext.current
+
+    // PERM-002 / privacy-permissions.md 19.3: the guided setup. `step` is the one being shown; `attempted` is what the
+    // person was already asked in this run (never asked twice, and a "no" ends what depends on it) - a plain set, not
+    // state, because the system dialogs answer through callbacks that must see the latest value.
+    var step by remember { mutableStateOf<SetupStep?>(null) }
+    val attempted = remember { mutableSetOf<SetupStep>() }
+    fun advance() = viewModel.nextSetupStep(attempted) { step = it }
+    fun startSetup() {
+        attempted.clear()
+        advance()
+    }
+    val activityLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { advance() }
+    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { advance() }
+    val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { advance() }
+    // Android 10 still has a system dialog for background location; from 11 the person is taken to Settings.
+    val backgroundLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { advance() }
+    // Turning it on starts the guided setup; turning it off asks nothing.
+    fun onSwitch(on: Boolean) {
+        viewModel.onToggle(on)
+        if (on) startSetup()
+    }
+    val backgroundNeedsSettings = Build.VERSION.SDK_INT >= AutoTrackingSetup.FIRST_SDK_WITH_BACKGROUND_PERMISSION + 1
+
+    // The notification prompt has no explanation of its own (the same decision as at the first Start, PERM-001): it asks the system at once.
+    LaunchedEffect(step) {
+        if (step == SetupStep.NOTIFICATIONS) {
+            attempted += SetupStep.NOTIFICATIONS
+            step = null
+            notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+    when (step) {
+        SetupStep.ACTIVITY_RECOGNITION -> ActivityRecognitionExplanationDialog(
+            onContinue = { attempted += SetupStep.ACTIVITY_RECOGNITION; step = null; activityLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION) },
+            onNotNow = { attempted += SetupStep.ACTIVITY_RECOGNITION; step = null; advance() }
+        )
+        SetupStep.PRECISE_LOCATION -> LocationExplanationDialog(
+            onContinue = {
+                attempted += SetupStep.PRECISE_LOCATION
+                step = null
+                locationLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+            },
+            onNotNow = { attempted += SetupStep.PRECISE_LOCATION; step = null; advance() }
+        )
+        SetupStep.BACKGROUND_LOCATION -> BackgroundLocationDisclosureDialog(
+            showSettingsHint = backgroundNeedsSettings,
+            onContinue = {
+                attempted += SetupStep.BACKGROUND_LOCATION
+                step = null
+                if (backgroundNeedsSettings) context.openAppSettings() else backgroundLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            },
+            onNotNow = { attempted += SetupStep.BACKGROUND_LOCATION; step = null; advance() }
+        )
+        SetupStep.NOTIFICATIONS, null -> Unit
+    }
 
     Scaffold(
         topBar = {
@@ -137,25 +210,33 @@ fun AutoTrackingScreen(onBack: () -> Unit, viewModel: AutoTrackingViewModel = hi
                         icon = Icons.Filled.TwoWheeler,
                         title = stringResource(R.string.autotracking_title),
                         subtitle = stringResource(if (state.enabled) R.string.autotracking_switch_on else R.string.autotracking_switch_off),
-                        onClick = { viewModel.onToggle(!state.enabled) },
+                        onClick = { onSwitch(!state.enabled) },
                         showDivider = false,
-                        trailing = { Switch(checked = state.enabled, onCheckedChange = viewModel::onToggle) }
+                        trailing = { Switch(checked = state.enabled, onCheckedChange = ::onSwitch) }
                     )
                 }
             }
-            item { StateCard(state.state) }
+            item {
+                StateCard(
+                    state = state.state,
+                    // Waiting on a permission: the person can pick the guided setup up again from here, or from a row below.
+                    onContinueSetup = if (state.enabled && (state.state == AutoTrackingState.NEEDS_SETUP || state.state == AutoTrackingState.LIMITED)) ::startSetup else null
+                )
+            }
             item {
                 RequirementsSection(
                     title = stringResource(R.string.autotracking_section_detection),
                     requirements = state.requirements.filter { !it.neededForHandsFree },
-                    onFix = fixIssue
+                    onFix = fixIssue,
+                    onSetUp = ::startSetup
                 )
             }
             item {
                 RequirementsSection(
                     title = stringResource(R.string.autotracking_section_hands_free),
                     requirements = state.requirements.filter { it.neededForHandsFree },
-                    onFix = fixIssue
+                    onFix = fixIssue,
+                    onSetUp = ::startSetup
                 )
             }
             item {
@@ -171,7 +252,7 @@ fun AutoTrackingScreen(onBack: () -> Unit, viewModel: AutoTrackingViewModel = hi
 }
 
 @Composable
-private fun StateCard(state: AutoTrackingState) {
+private fun StateCard(state: AutoTrackingState, onContinueSetup: (() -> Unit)?) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.padding(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Top) {
             Icon(
@@ -190,13 +271,21 @@ private fun StateCard(state: AutoTrackingState) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(stringResource(state.titleRes()), style = MaterialTheme.typography.titleMedium)
                 Text(stringResource(state.textRes()), style = MaterialTheme.typography.bodyMedium)
+                if (onContinueSetup != null) {
+                    TextButton(onClick = onContinueSetup) { Text(stringResource(R.string.autotracking_continue_setup)) }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun RequirementsSection(title: String, requirements: List<RequirementStatus>, onFix: (CapabilityIssue) -> Unit) {
+private fun RequirementsSection(
+    title: String,
+    requirements: List<RequirementStatus>,
+    onFix: (CapabilityIssue) -> Unit,
+    onSetUp: () -> Unit
+) {
     SettingsSection(title) {
         requirements.forEachIndexed { index, status ->
             val fix = status.requirement.fix()
@@ -209,6 +298,8 @@ private fun RequirementsSection(title: String, requirements: List<RequirementSta
                     { Text(stringResource(R.string.autotracking_status_allowed), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary) }
                 } else if (fix != null) {
                     { TextButton(onClick = { onFix(fix) }) { Text(stringResource(fix.shortActionRes())) } }
+                } else if (status.requirement.usesGuidedSetup()) {
+                    { TextButton(onClick = onSetUp) { Text(stringResource(R.string.autotracking_action_set_up)) } }
                 } else {
                     { Text(stringResource(R.string.autotracking_status_needed), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 }

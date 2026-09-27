@@ -114,5 +114,18 @@
     <string name="autotracking_status_needed">Needed</string>
     <string name="autotracking_action_allow">Allow</string>
     <string name="autotracking_action_turn_on">Turn on</string>
+    <string name="autotracking_action_set_up">Set up</string>
+    <string name="autotracking_continue_setup">Continue setup</string>
+
+    <!-- PERM-002 / privacy-permissions.md 8.3 and 7.3: said before the system asks; each has a way out. The background text is the
+         baseline for the final review before release (7.3): it must say "location" and "even when the app is closed or not in use"
+         (the ** marks are shown bold), and it must not look like the system dialog. -->
+    <string name="setup_continue">Continue</string>
+    <string name="setup_not_now">Not now</string>
+    <string name="setup_activity_title">Recognize when you\'re on the move</string>
+    <string name="setup_activity_text">Moto Trip Tracker uses activity recognition to detect a possible trip without keeping precise GPS on all the time. If you don\'t allow it, you can still start trips manually.</string>
+    <string name="setup_background_title">Background location for Auto Tracking</string>
+    <string name="setup_background_text">Moto Trip Tracker collects **location** data to detect, start and record your trips automatically, **even when the app is closed or not in use**. Your trip data is stored locally on your device and is not used for advertising. You can keep recording trips manually without allowing background location.</string>
+    <string name="setup_background_settings_hint">On the next screen, open Permissions, then Location, and choose “Allow all the time”.</string>
     <string name="autotracking_footnote">You can turn Auto Tracking off at any time; that stops every automatic start. Your trips stay on this phone.</string>
 </resources>

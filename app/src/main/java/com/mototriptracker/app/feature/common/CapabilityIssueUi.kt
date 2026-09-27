@@ -127,7 +127,7 @@ private fun Context.startActivitySafely(intent: Intent) {
     runCatching { startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }
 
-private fun Context.openAppSettings() =
+internal fun Context.openAppSettings() =
     startActivitySafely(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
 
 private fun Context.openNotificationSettings() =

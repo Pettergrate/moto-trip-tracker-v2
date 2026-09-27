@@ -81,12 +81,14 @@ class AutoTrackingCopyTest {
         assertTrue(line.contains("problem above"))
     }
 
-    /**
-     * Activity recognition and background location are asked for by `PERM-002`'s guided flow; until it exists the screen
-     * must not show a button that goes nowhere, so they have no fix here.
-     */
+    /** Activity recognition and background location are asked for by the guided setup (with their own explanation first), not by a plain fix. */
     @Test
-    fun onlyTheRequirementsTheAppCanAlreadyFixGetAButton() {
+    fun theTwoSensitiveOnesGoThroughTheGuidedSetupAndTheRestThroughAPlainFix() {
+        assertTrue(AutoTrackingRequirement.ACTIVITY_RECOGNITION.usesGuidedSetup())
+        assertTrue(AutoTrackingRequirement.BACKGROUND_LOCATION.usesGuidedSetup())
+        assertFalse(AutoTrackingRequirement.PRECISE_LOCATION.usesGuidedSetup())
+        assertFalse(AutoTrackingRequirement.NOTIFICATIONS.usesGuidedSetup())
+        assertFalse(AutoTrackingRequirement.LOCATION_SERVICES.usesGuidedSetup())
         assertNotNull(AutoTrackingRequirement.PRECISE_LOCATION.fix())
         assertEquals(CapabilityIssue.LOCATION_SERVICES_OFF, AutoTrackingRequirement.LOCATION_SERVICES.fix())
         assertEquals(CapabilityIssue.NOTIFICATIONS_DENIED, AutoTrackingRequirement.NOTIFICATIONS.fix())

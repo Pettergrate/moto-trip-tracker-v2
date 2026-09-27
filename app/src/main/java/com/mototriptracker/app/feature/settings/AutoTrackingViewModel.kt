@@ -1,11 +1,14 @@
 package com.mototriptracker.app.feature.settings
 
+import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mototriptracker.app.core.datastore.AutoTrackingPreferences
 import com.mototriptracker.app.domain.capability.AutoTrackingReadiness
+import com.mototriptracker.app.domain.capability.AutoTrackingSetup
 import com.mototriptracker.app.domain.capability.AutoTrackingState
 import com.mototriptracker.app.domain.capability.RequirementStatus
+import com.mototriptracker.app.domain.capability.SetupStep
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -63,6 +66,25 @@ class AutoTrackingViewModel @Inject constructor(
             requirements = AutoTrackingReadiness.requirementsFor(effective)
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), null)
+
+    /**
+     * PERM-002: which permission the guided setup asks for next. Reads the phone *now* rather than trusting the last
+     * poll - the person has just answered a system dialog and the poll may be up to 3 s behind - and never blocks
+     * or breaks the screen: a read that fails means "nothing more to ask".
+     */
+    fun nextSetupStep(attempted: Set<SetupStep>, sdkInt: Int = Build.VERSION.SDK_INT, onStep: (SetupStep?) -> Unit) {
+        val alreadyAsked = attempted.toSet()
+        viewModelScope.launch {
+            val step = try {
+                AutoTrackingSetup.nextStep(AutoTrackingReadiness.requirementsFor(capabilityInputsProvider.current()), sdkInt, alreadyAsked)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                null
+            }
+            onStep(step)
+        }
+    }
 
     fun onToggle(enabled: Boolean) {
         viewModelScope.launch {
