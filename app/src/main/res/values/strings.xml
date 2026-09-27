@@ -53,4 +53,28 @@
     <string name="settings_section_advanced">Advanced</string>
     <string name="settings_field_test_title">Field test harness</string>
     <string name="settings_field_test_subtitle">Internal tool for recording test rides</string>
+
+    <!-- SET-002: Appearance - a base (dark or light) and an accent colour from a basic palette. -->
+    <string name="settings_section_appearance">Appearance</string>
+    <string name="settings_theme_title">Theme and accent color</string>
+    <string name="settings_theme_value">%1$s · %2$s</string>
+    <string name="appearance_title">Appearance</string>
+    <string name="appearance_section_preview">Preview</string>
+    <string name="appearance_section_theme">Theme</string>
+    <string name="appearance_section_accent">Accent color</string>
+    <string name="appearance_reset">Reset to default</string>
+    <string name="appearance_preview_title">Sample trip</string>
+    <string name="appearance_preview_text">This is how your trips will look.</string>
+    <string name="appearance_preview_primary">Primary action</string>
+    <string name="appearance_preview_secondary">Secondary</string>
+    <string name="base_dark">Dark</string>
+    <string name="base_light">Light</string>
+    <string name="accent_orange">Orange</string>
+    <string name="accent_red">Red</string>
+    <string name="accent_yellow">Yellow</string>
+    <string name="accent_green">Green</string>
+    <string name="accent_teal">Teal</string>
+    <string name="accent_blue">Blue</string>
+    <string name="accent_violet">Violet</string>
+    <string name="accent_pink">Pink</string>
 </resources>

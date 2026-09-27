@@ -51,13 +51,11 @@ val AggressiveShapes = Shapes(
 )
 
 /**
- * App-wide theme entry point (`MainActivity`'s `setContent`). Not yet
- * user-selectable - SET-01 (Settings, not built yet) is where a real
- * "Appearance" toggle between [BlackOrangeColorScheme] and
- * [LegacyMaterialColorScheme] belongs. Until then this is the single
- * hardcoded scheme.
+ * App-wide theme entry point (`MainActivity`'s `setContent`). SET-002: user-selectable - a base and an accent
+ * ([Appearance]), with the default (dark, orange) being exactly [BlackOrangeColorScheme]. [LegacyMaterialColorScheme]
+ * is still kept in code but is not offered: the light base with the violet accent is its nearest equivalent.
  */
 @Composable
-fun MotoTripTrackerTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = BlackOrangeColorScheme, shapes = AggressiveShapes, content = content)
+fun MotoTripTrackerTheme(appearance: Appearance = Appearance.Default, content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = appearanceColorScheme(appearance), shapes = AggressiveShapes, content = content)
 }

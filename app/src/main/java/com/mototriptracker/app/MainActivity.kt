@@ -6,14 +6,20 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mototriptracker.app.core.theme.MotoTripTrackerTheme
+import com.mototriptracker.app.core.theme.ThemeBase
+import com.mototriptracker.app.feature.settings.AppearanceViewModel
+import androidx.compose.ui.graphics.Color as ComposeColor
 import com.mototriptracker.app.feature.onboarding.OnboardingGate
 import com.mototriptracker.app.feature.onboarding.OnboardingViewModel
 import com.mototriptracker.app.feature.onboarding.WelcomeScreen
@@ -47,7 +53,29 @@ class MainActivity : ComponentActivity() {
             Destination.Home
         }
         setContent {
-            MotoTripTrackerTheme {
+            val appearanceViewModel: AppearanceViewModel = hiltViewModel()
+            val savedAppearance by appearanceViewModel.appearance.collectAsStateWithLifecycle()
+            val appearance = savedAppearance
+            // SET-002: a light base needs dark system-bar icons and a dark base light ones - the call in onCreate above
+            // is only the dark default, so it is made again whenever the base changes.
+            if (appearance != null) {
+                DisposableEffect(appearance.base) {
+                    val barStyle = if (appearance.base == ThemeBase.DARK) {
+                        SystemBarStyle.dark(Color.TRANSPARENT)
+                    } else {
+                        SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT)
+                    }
+                    enableEdgeToEdge(statusBarStyle = barStyle, navigationBarStyle = barStyle)
+                    onDispose { }
+                }
+            }
+            // The theme is read in a few milliseconds; until then just black (the default base), never Home in a colour
+            // that is about to change.
+            if (appearance == null) {
+                Box(modifier = Modifier.fillMaxSize().background(ComposeColor.Black))
+                return@setContent
+            }
+            MotoTripTrackerTheme(appearance) {
                 val onboarding: OnboardingViewModel = hiltViewModel()
                 val gate by onboarding.gate.collectAsStateWithLifecycle()
                 when {

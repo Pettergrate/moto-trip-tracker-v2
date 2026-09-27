@@ -108,8 +108,10 @@ fun TripRouteMap(points: List<GeoPoint>, modifier: Modifier = Modifier, markerPo
     // real device showed outlives a single Trip Detail visit (a second
     // Trip's screen reused the first Trip's already-drawn route until this
     // fix, even though the header/metrics above it updated correctly).
-    LaunchedEffect(points, map) {
-        map?.let { configureRoute(it, points, markerPoints) }
+    // SET-002: the selection marker wears the accent the person chose (it used to be the one fixed orange).
+    val selectedColor = MaterialTheme.colorScheme.primary.toMapHex()
+    LaunchedEffect(points, map, selectedColor) {
+        map?.let { configureRoute(it, points, markerPoints, selectedColor) }
     }
 
     // Screen-pixel distance, not ground distance: a real-world meter
@@ -219,7 +221,7 @@ private fun SelectedPointCard(point: GeoPoint, onDismiss: () -> Unit, modifier: 
     }
 }
 
-private fun configureRoute(map: MapLibreMap, points: List<GeoPoint>, initialMarkers: List<GeoPoint>) {
+private fun configureRoute(map: MapLibreMap, points: List<GeoPoint>, initialMarkers: List<GeoPoint>, selectedColor: String) {
     val lineString = LineString.fromLngLats(points.map { Point.fromLngLat(it.longitude, it.latitude) })
     val routeSource = GeoJsonSource(SOURCE_ROUTE, Feature.fromGeometry(lineString))
     val startSource = GeoJsonSource(SOURCE_START, Feature.fromGeometry(Point.fromLngLat(points.first().longitude, points.first().latitude)))
@@ -263,7 +265,7 @@ private fun configureRoute(map: MapLibreMap, points: List<GeoPoint>, initialMark
             .withLayer(
                 CircleLayer(LAYER_SELECTED, SOURCE_SELECTED).withProperties(
                     PropertyFactory.circleRadius(11f),
-                    PropertyFactory.circleColor(SELECTED_COLOR),
+                    PropertyFactory.circleColor(selectedColor),
                     PropertyFactory.circleStrokeColor(Color.WHITE),
                     PropertyFactory.circleStrokeWidth(3f)
                 )
@@ -314,8 +316,6 @@ private const val LAYER_SELECTED = "trip-selected-layer"
 private const val ROUTE_COLOR = "#6750A4"
 private const val START_COLOR = "#4CAF50"
 private const val END_COLOR = "#F44336"
-/** The app's own primary accent (`BlackOrangePrimary`) - ties the selection marker to the app's identity rather than an arbitrary new color. */
-private const val SELECTED_COLOR = "#F2540C"
 /**
  * Screen-space, not ground-distance - a flat meter tolerance falls apart
  * across zoom levels (a whole-route overview and a zoomed-in segment cover

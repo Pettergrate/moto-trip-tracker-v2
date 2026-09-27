@@ -10,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MonitorHeart
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -18,20 +19,32 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mototriptracker.app.BuildConfig
 import com.mototriptracker.app.R
+import com.mototriptracker.app.core.theme.Appearance
 
 /**
  * SET-001 / `ux-navigation.md` §14 (SET-01). Sections in the order the document gives them, showing only what works
- * today: no toggle that does nothing. Tracking (Auto Tracking) and Units/Notifications join when they exist; Appearance
+ * today: no toggle that does nothing. Tracking (Auto Tracking) and Units/Notifications join when they exist; Appearance (SET-002)
  * comes with `SET-002`. The two internal tools sit under "Advanced" (`EXP-001`'s acceptance: internal, not Core UX).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onOpenFieldTestHarness: () -> Unit, onOpenTrash: () -> Unit, onOpenDebug: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onOpenFieldTestHarness: () -> Unit,
+    onOpenTrash: () -> Unit,
+    onOpenDebug: () -> Unit,
+    onOpenAppearance: () -> Unit,
+    appearanceViewModel: AppearanceViewModel = hiltViewModel()
+) {
+    val appearance by appearanceViewModel.appearance.collectAsStateWithLifecycle()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -49,6 +62,22 @@ fun SettingsScreen(onBack: () -> Unit, onOpenFieldTestHarness: () -> Unit, onOpe
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
+            item {
+                SettingsSection(stringResource(R.string.settings_section_appearance)) {
+                    val current = appearance ?: Appearance.Default
+                    SettingsRow(
+                        icon = Icons.Filled.Palette,
+                        title = stringResource(R.string.settings_theme_title),
+                        subtitle = stringResource(
+                            R.string.settings_theme_value,
+                            stringResource(current.base.labelRes()),
+                            stringResource(current.accent.labelRes)
+                        ),
+                        onClick = onOpenAppearance,
+                        showDivider = false
+                    )
+                }
+            }
             item {
                 SettingsSection(stringResource(R.string.settings_section_data)) {
                     SettingsRow(

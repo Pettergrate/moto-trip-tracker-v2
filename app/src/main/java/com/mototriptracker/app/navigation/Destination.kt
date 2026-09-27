@@ -18,6 +18,9 @@ sealed interface Destination {
     data object History : Destination
     data object Favorites : Destination
     data object Settings : Destination
+
+    /** SET-002: reached from Settings' Appearance section, not a tab. */
+    data object Appearance : Destination
     data object ActiveTrip : Destination
 
     /** HIS-001/F0.9 §9: HIS-02, pushed from History with a specific Trip's ID - the first non-singleton, parameterized destination in this graph. */
