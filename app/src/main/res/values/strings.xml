@@ -38,4 +38,19 @@
     <string name="location_explanation_text">Moto Trip Tracker uses precise location during a trip to draw your route and calculate distance, speed and elevation. With approximate location, the route and metrics can be inaccurate.</string>
     <string name="location_explanation_continue">Continue</string>
     <string name="location_explanation_not_now">Not now</string>
+
+    <!-- SET-001 / ux-navigation.md 14 (SET-01): only what works today. -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_back">Back</string>
+    <string name="settings_section_data">Data</string>
+    <string name="settings_trash_title">Trash</string>
+    <string name="settings_trash_subtitle">Trips you delete stay here for 30 days</string>
+    <string name="settings_section_about">About</string>
+    <string name="settings_version_title">Version</string>
+    <string name="settings_version_value">%1$s (build %2$d)</string>
+    <string name="settings_diagnostics_title">Diagnostics</string>
+    <string name="settings_diagnostics_subtitle">App health, event history and export</string>
+    <string name="settings_section_advanced">Advanced</string>
+    <string name="settings_field_test_title">Field test harness</string>
+    <string name="settings_field_test_subtitle">Internal tool for recording test rides</string>
 </resources>

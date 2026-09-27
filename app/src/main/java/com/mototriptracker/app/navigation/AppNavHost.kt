@@ -27,7 +27,7 @@ import com.mototriptracker.app.feature.debug.DebugScreen
 import com.mototriptracker.app.feature.fieldtest.FieldTestHarnessScreen
 import com.mototriptracker.app.feature.history.HistoryScreen
 import com.mototriptracker.app.feature.home.HomeScreen
-import com.mototriptracker.app.feature.settings.SettingsPlaceholderScreen
+import com.mototriptracker.app.feature.settings.SettingsScreen
 import com.mototriptracker.app.feature.trash.TrashScreen
 import com.mototriptracker.app.feature.split.SplitScreen
 import com.mototriptracker.app.feature.tripdetail.TripDetailScreen
@@ -125,11 +125,10 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
                 }
 
                 Destination.Settings -> NavEntry(destination) {
-                    SettingsPlaceholderScreen(
+                    SettingsScreen(
                         onBack = { backStack.removeLastOrNull() },
                         onOpenFieldTestHarness = ::navigateToFieldTestHarness,
-                        onOpenTrash = ::navigateToTrash
-,
+                        onOpenTrash = ::navigateToTrash,
                         onOpenDebug = ::navigateToDebug
                     )
                 }
