@@ -36,7 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.mototriptracker.app.core.model.CapabilityMode
+import com.mototriptracker.app.domain.capability.AutoTrackingState
 import com.mototriptracker.app.domain.capability.CapabilityIssue
 import com.mototriptracker.app.feature.common.CapabilityIssueCopy
 import com.mototriptracker.app.feature.common.rememberCapabilityFixer
@@ -56,6 +56,7 @@ private const val CAPABILITY_RECHECK_MS = 3_000L
 fun HomeScreen(
     onViewActiveTrip: () -> Unit,
     onOpenTripDetail: (String) -> Unit,
+    onOpenAutoTracking: () -> Unit,
     viewModel: HomeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -118,7 +119,8 @@ fun HomeScreen(
         onPauseClick = viewModel::onPauseClick,
         onResumeClick = viewModel::onResumeClick,
         onViewActiveTrip = onViewActiveTrip,
-        onOpenTripDetail = onOpenTripDetail
+        onOpenTripDetail = onOpenTripDetail,
+        onOpenAutoTracking = onOpenAutoTracking
     )
 
     if (showPermissionDeniedDialog) {
@@ -152,7 +154,8 @@ private fun HomeContent(
     onPauseClick: () -> Unit,
     onResumeClick: () -> Unit,
     onViewActiveTrip: () -> Unit,
-    onOpenTripDetail: (String) -> Unit
+    onOpenTripDetail: (String) -> Unit,
+    onOpenAutoTracking: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -174,7 +177,7 @@ private fun HomeContent(
                     if (uiState.capabilityIssues.isNotEmpty()) {
                         CapabilityIssueCard(issues = uiState.capabilityIssues, onFix = onFixIssue)
                     }
-                    ReadinessCard(capabilityMode = uiState.capabilityMode, onStartTripClick = onStartTripClick)
+                    ReadinessCard(autoTrackingState = uiState.autoTrackingState, onOpen = onOpenAutoTracking, onStartTripClick = onStartTripClick)
                 }
             }
         }
@@ -194,14 +197,17 @@ private fun HomeContent(
 }
 
 @Composable
-private fun ReadinessCard(capabilityMode: CapabilityMode?, onStartTripClick: () -> Unit) {
+private fun ReadinessCard(autoTrackingState: AutoTrackingState?, onOpen: () -> Unit, onStartTripClick: () -> Unit) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Auto Tracking", style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = capabilityMode?.toReadinessText() ?: "Checking readiness…",
-                style = MaterialTheme.typography.bodyMedium
-            )
+            // SET-02: the title and the line open the Auto Tracking screen; START TRIP below stays its own button.
+            Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Auto Tracking", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = autoTrackingState?.toReadinessText() ?: "Checking readiness…",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
             Button(onClick = onStartTripClick, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth()) {
                 Text("START TRIP")
             }

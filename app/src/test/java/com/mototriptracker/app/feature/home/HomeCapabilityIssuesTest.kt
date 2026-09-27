@@ -7,6 +7,7 @@ import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.datastore.OnboardingPreferences
 import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.core.model.CapabilityMode
+import com.mototriptracker.app.domain.capability.AutoTrackingState
 import com.mototriptracker.app.domain.capability.CapabilityIssue
 import com.mototriptracker.app.testing.FakeCapabilityInputsProvider
 import com.mototriptracker.app.testing.TestDatabaseFactory
@@ -108,7 +109,7 @@ class HomeCapabilityIssuesTest {
     /** Found on the phone: with only approximate location allowed, Home still said "Location services are off". */
     @Test
     fun theDegradedModeLineNeverBlamesLocationServicesBecauseItHasTwoCauses() {
-        val line = CapabilityMode.LOCATION_DEGRADED.toReadinessText()
+        val line = AutoTrackingState.LOCATION_PROBLEM.toReadinessText()
 
         assertFalse(line, line.contains("services", ignoreCase = true))
         assertFalse(line, line.contains("turn them on", ignoreCase = true))
@@ -184,5 +185,29 @@ class HomeCapabilityIssuesTest {
 
         withTimeout(5_000) { while (warned == null) kotlinx.coroutines.delay(10) }
         assertEquals(CapabilityIssue.PRECISE_LOCATION_MISSING, warned)
+    }
+
+    /** SET-02: Home says what the screen behind its card says - "off" is only for someone who chose it, not for a missing permission. */
+    @Test
+    fun homesAutoTrackingStateDistinguishesOffFromSwitchedOnButNotSetUp() = runBlocking {
+        provider.set(allGood.copy(autoTrackingEnabledByUser = false))
+        viewModel.refreshCapabilityMode()
+        assertEquals(AutoTrackingState.OFF, withTimeout(5_000) { viewModel.uiState.first { it.autoTrackingState == AutoTrackingState.OFF } }.autoTrackingState)
+
+        provider.set(allGood.copy(autoTrackingEnabledByUser = true)) // allGood has no Activity Recognition
+        viewModel.refreshCapabilityMode()
+
+        assertEquals(AutoTrackingState.NEEDS_SETUP, withTimeout(5_000) { viewModel.uiState.first { it.autoTrackingState == AutoTrackingState.NEEDS_SETUP } }.autoTrackingState)
+    }
+
+    @Test
+    fun theAutoTrackingStateComesFromTheSameReadAsTheModeSoTheCardCannotContradictTheNotice() = runBlocking {
+        provider.set(allGood.copy(autoTrackingEnabledByUser = true, locationServicesEnabled = false))
+        viewModel.refreshCapabilityMode()
+
+        val state = withTimeout(5_000) { viewModel.uiState.first { it.autoTrackingState == AutoTrackingState.LOCATION_PROBLEM } }
+
+        assertEquals(CapabilityMode.LOCATION_DEGRADED, state.capabilityMode)
+        assertEquals(listOf(CapabilityIssue.LOCATION_SERVICES_OFF), state.capabilityIssues)
     }
 }

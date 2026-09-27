@@ -52,14 +52,16 @@ fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) 
     }
 }
 
-/** A row that opens something ([onClick] set, with a chevron) or just states a fact (no [onClick]). */
+/** A row that opens something ([onClick] set, with a chevron), carries its own control ([trailing]), or just states a fact. */
 @Composable
 fun SettingsRow(
     icon: ImageVector,
     title: String,
     subtitle: String? = null,
     onClick: (() -> Unit)? = null,
-    showDivider: Boolean = true
+    showDivider: Boolean = true,
+    /** Replaces the chevron: a switch, a button or a status - whatever the row needs at its end. */
+    trailing: (@Composable () -> Unit)? = null
 ) {
     Column {
         Row(
@@ -78,7 +80,9 @@ fun SettingsRow(
                     Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            if (onClick != null) {
+            if (trailing != null) {
+                trailing()
+            } else if (onClick != null) {
                 Icon(
                     Icons.AutoMirrored.Filled.KeyboardArrowRight,
                     contentDescription = null,

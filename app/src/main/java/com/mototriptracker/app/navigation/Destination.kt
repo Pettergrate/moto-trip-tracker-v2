@@ -21,6 +21,9 @@ sealed interface Destination {
 
     /** SET-002: reached from Settings' Appearance section, not a tab. */
     data object Appearance : Destination
+
+    /** SET-02: the Auto Tracking switch, its state and what it needs - reached from Settings and from Home's readiness card. */
+    data object AutoTracking : Destination
     data object ActiveTrip : Destination
 
     /** HIS-001/F0.9 §9: HIS-02, pushed from History with a specific Trip's ID - the first non-singleton, parameterized destination in this graph. */

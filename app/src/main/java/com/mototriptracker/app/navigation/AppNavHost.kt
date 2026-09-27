@@ -28,6 +28,7 @@ import com.mototriptracker.app.feature.fieldtest.FieldTestHarnessScreen
 import com.mototriptracker.app.feature.history.HistoryScreen
 import com.mototriptracker.app.feature.home.HomeScreen
 import com.mototriptracker.app.feature.settings.AppearanceScreen
+import com.mototriptracker.app.feature.settings.AutoTrackingScreen
 import com.mototriptracker.app.feature.settings.SettingsScreen
 import com.mototriptracker.app.feature.trash.TrashScreen
 import com.mototriptracker.app.feature.split.SplitScreen
@@ -96,6 +97,12 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
         }
     }
 
+    fun navigateToAutoTracking() {
+        if (backStack.lastOrNull() != Destination.AutoTracking) {
+            backStack.add(Destination.AutoTracking)
+        }
+    }
+
     fun navigateToAppearance() {
         if (backStack.lastOrNull() != Destination.Appearance) {
             backStack.add(Destination.Appearance)
@@ -115,7 +122,11 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
             when (destination) {
                 Destination.Home -> NavEntry(destination) {
                     MainTabScaffold(current = destination, onTabSelected = ::navigateToTab, onSettingsClick = ::navigateToSettings) {
-                        HomeScreen(onViewActiveTrip = ::navigateToActiveTrip, onOpenTripDetail = ::navigateToTripDetail)
+                        HomeScreen(
+                            onViewActiveTrip = ::navigateToActiveTrip,
+                            onOpenTripDetail = ::navigateToTripDetail,
+                            onOpenAutoTracking = ::navigateToAutoTracking
+                        )
                     }
                 }
 
@@ -137,8 +148,13 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
                         onOpenFieldTestHarness = ::navigateToFieldTestHarness,
                         onOpenTrash = ::navigateToTrash,
                         onOpenAppearance = ::navigateToAppearance,
+                        onOpenAutoTracking = ::navigateToAutoTracking,
                         onOpenDebug = ::navigateToDebug
                     )
+                }
+
+                Destination.AutoTracking -> NavEntry(destination) {
+                    AutoTrackingScreen(onBack = { backStack.removeLastOrNull() })
                 }
 
                 Destination.Appearance -> NavEntry(destination) {
@@ -243,7 +259,7 @@ private fun Destination.tabLabel(): String = when (this) {
     Destination.Home -> "Home"
     Destination.History -> "History"
     Destination.Favorites -> "Favorites"
-    Destination.Settings, Destination.Appearance, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, Destination.Debug, is Destination.TripDetail, is Destination.Split, is Destination.Trim ->
+    Destination.Settings, Destination.Appearance, Destination.AutoTracking, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, Destination.Debug, is Destination.TripDetail, is Destination.Split, is Destination.Trim ->
         error("$this is not a bottom-nav tab")
 }
 
@@ -251,6 +267,6 @@ private fun Destination.tabIcon() = when (this) {
     Destination.Home -> Icons.Default.Home
     Destination.History -> Icons.AutoMirrored.Filled.List
     Destination.Favorites -> Icons.Default.Star
-    Destination.Settings, Destination.Appearance, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, Destination.Debug, is Destination.TripDetail, is Destination.Split, is Destination.Trim ->
+    Destination.Settings, Destination.Appearance, Destination.AutoTracking, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, Destination.Debug, is Destination.TripDetail, is Destination.Split, is Destination.Trim ->
         error("$this is not a bottom-nav tab")
 }

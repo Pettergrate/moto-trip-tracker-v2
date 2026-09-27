@@ -11,9 +11,12 @@ import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.database.dao.TripDao
 import com.mototriptracker.app.core.database.dao.TripStatisticsDao
+import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.core.model.CapabilityMode
 import com.mototriptracker.app.core.model.CaptureStatus
+import com.mototriptracker.app.domain.capability.AutoTrackingReadiness
 import com.mototriptracker.app.domain.capability.CapabilityDiagnosis
+import com.mototriptracker.app.domain.capability.AutoTrackingState
 import com.mototriptracker.app.domain.capability.CapabilityIssue
 import com.mototriptracker.app.domain.capability.CapabilityResolver
 import com.mototriptracker.app.domain.capability.NotificationPrompt
@@ -125,24 +128,37 @@ class HomeViewModel @Inject constructor(
     /** PERM-003: refreshed together with the mode, from the same inputs, so the two can never disagree. */
     private val capabilityIssuesFlow = MutableStateFlow<List<CapabilityIssue>>(emptyList())
 
+    /** SET-02: what Auto Tracking should say, from the same read as the mode and the issues. */
+    private val autoTrackingStateFlow = MutableStateFlow<AutoTrackingState?>(null)
+
     val uiState: StateFlow<HomeUiState> = combine(
         capabilityModeFlow,
         capabilityIssuesFlow,
+        autoTrackingStateFlow,
         activeTripFlow,
         recentTripsFlow
-    ) { capabilityMode, capabilityIssues, activeTrip, recentTrips ->
-        HomeUiState(capabilityMode = capabilityMode, capabilityIssues = capabilityIssues, activeTrip = activeTrip, recentTrips = recentTrips)
+    ) { capabilityMode, capabilityIssues, autoTrackingState, activeTrip, recentTrips ->
+        HomeUiState(
+            capabilityMode = capabilityMode, capabilityIssues = capabilityIssues, autoTrackingState = autoTrackingState,
+            activeTrip = activeTrip, recentTrips = recentTrips
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), HomeUiState())
 
     init {
         refreshCapabilityMode()
     }
 
+    /** One read, three answers: the mode, what is wrong and what Auto Tracking should say - so they cannot disagree. */
+    private fun publishCapability(inputs: CapabilityInputs) {
+        capabilityModeFlow.value = CapabilityResolver.resolve(inputs)
+        capabilityIssuesFlow.value = CapabilityDiagnosis.issuesFor(inputs)
+        autoTrackingStateFlow.value = AutoTrackingReadiness.stateFor(inputs)
+    }
+
     fun refreshCapabilityMode() {
         viewModelScope.launch {
             val inputs = capabilityInputsProvider.current()
-            capabilityModeFlow.value = CapabilityResolver.resolve(inputs)
-            capabilityIssuesFlow.value = CapabilityDiagnosis.issuesFor(inputs)
+            publishCapability(inputs)
         }
     }
 
@@ -154,9 +170,8 @@ class HomeViewModel @Inject constructor(
     fun checkBeforeStart(onWarn: (CapabilityIssue) -> Unit, onProceed: () -> Unit) {
         viewModelScope.launch {
             val inputs = capabilityInputsProvider.current()
-            capabilityModeFlow.value = CapabilityResolver.resolve(inputs)
+            publishCapability(inputs)
             val issues = CapabilityDiagnosis.issuesFor(inputs)
-            capabilityIssuesFlow.value = issues
             val warning = issues.firstOrNull { it.warnBeforeStart }
             if (warning != null) onWarn(warning) else onProceed()
         }

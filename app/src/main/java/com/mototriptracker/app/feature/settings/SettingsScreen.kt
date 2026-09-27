@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MonitorHeart
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Science
+import androidx.compose.material.icons.filled.TwoWheeler
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,9 +43,12 @@ fun SettingsScreen(
     onOpenTrash: () -> Unit,
     onOpenDebug: () -> Unit,
     onOpenAppearance: () -> Unit,
-    appearanceViewModel: AppearanceViewModel = hiltViewModel()
+    onOpenAutoTracking: () -> Unit,
+    appearanceViewModel: AppearanceViewModel = hiltViewModel(),
+    autoTrackingViewModel: AutoTrackingViewModel = hiltViewModel()
 ) {
     val appearance by appearanceViewModel.appearance.collectAsStateWithLifecycle()
+    val autoTracking by autoTrackingViewModel.uiState.collectAsStateWithLifecycle()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -62,6 +66,17 @@ fun SettingsScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
+            item {
+                SettingsSection(stringResource(R.string.settings_section_tracking)) {
+                    SettingsRow(
+                        icon = Icons.Filled.TwoWheeler,
+                        title = stringResource(R.string.autotracking_title),
+                        subtitle = autoTracking?.let { stringResource(it.state.shortLabelRes()) },
+                        onClick = onOpenAutoTracking,
+                        showDivider = false
+                    )
+                }
+            }
             item {
                 SettingsSection(stringResource(R.string.settings_section_appearance)) {
                     val current = appearance ?: Appearance.Default

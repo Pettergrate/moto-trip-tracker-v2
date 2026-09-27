@@ -77,4 +77,42 @@
     <string name="accent_blue">Blue</string>
     <string name="accent_violet">Violet</string>
     <string name="accent_pink">Pink</string>
+
+    <!-- SET-02 / ux-navigation.md 15: Auto Tracking - the switch, what state it is in and what it needs. -->
+    <string name="settings_section_tracking">Tracking</string>
+    <string name="autotracking_title">Auto Tracking</string>
+    <string name="autotracking_switch_on">On</string>
+    <string name="autotracking_switch_off">Off</string>
+    <string name="autotracking_short_off">Off</string>
+    <string name="autotracking_short_ready">Ready</string>
+    <string name="autotracking_short_limited">Limited</string>
+    <string name="autotracking_short_needs_setup">Needs setup</string>
+    <string name="autotracking_short_location_problem">Location needs attention</string>
+    <string name="autotracking_state_off_title">Auto Tracking is off</string>
+    <string name="autotracking_state_off_text">Trips are recorded only when you start them. Turn it on to have trips detected automatically.</string>
+    <string name="autotracking_state_ready_title">Auto Tracking is ready</string>
+    <string name="autotracking_state_ready_text">Moto Trip Tracker can detect when you start riding and record the trip automatically.</string>
+    <string name="autotracking_state_limited_title">Auto Tracking is limited</string>
+    <string name="autotracking_state_limited_text">Detection can work, but something is still missing for hands-free trips. You can always start a trip manually.</string>
+    <string name="autotracking_state_needs_setup_title">Auto Tracking needs setup</string>
+    <string name="autotracking_state_needs_setup_text">You can record trips manually. Allow what is listed below if you want automatic detection.</string>
+    <string name="autotracking_state_location_problem_title">Location needs attention</string>
+    <string name="autotracking_state_location_problem_text">Precise location is not available, so the route of a trip may be incomplete. Fix it below.</string>
+    <string name="autotracking_section_detection">Needed for automatic detection</string>
+    <string name="autotracking_section_hands_free">Needed for hands-free trips</string>
+    <string name="autotracking_req_precise_title">Precise location</string>
+    <string name="autotracking_req_precise_text">Draws your route and tells when you are moving.</string>
+    <string name="autotracking_req_services_title">Location switched on</string>
+    <string name="autotracking_req_services_text">The Location setting of your phone must be on.</string>
+    <string name="autotracking_req_activity_title">Activity recognition</string>
+    <string name="autotracking_req_activity_text">Notices when you start riding, so a trip can be detected.</string>
+    <string name="autotracking_req_notifications_title">Notifications</string>
+    <string name="autotracking_req_notifications_text">Shows the trip notification, with Pause and Finish.</string>
+    <string name="autotracking_req_background_title">Background location</string>
+    <string name="autotracking_req_background_text">Lets a trip start and record while the app is closed.</string>
+    <string name="autotracking_status_allowed">Allowed</string>
+    <string name="autotracking_status_needed">Needed</string>
+    <string name="autotracking_action_allow">Allow</string>
+    <string name="autotracking_action_turn_on">Turn on</string>
+    <string name="autotracking_footnote">You can turn Auto Tracking off at any time; that stops every automatic start. Your trips stay on this phone.</string>
 </resources>
