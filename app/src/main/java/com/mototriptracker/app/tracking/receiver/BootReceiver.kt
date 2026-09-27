@@ -4,7 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.util.Log
-import com.mototriptracker.app.tracking.activityrecognition.ActivityRecognitionRegistrar
+import com.mototriptracker.app.tracking.activityrecognition.AutoTrackingDetection
 import com.mototriptracker.app.tracking.recovery.RebootReconciler
 import dagger.Lazy
 import dagger.hilt.android.AndroidEntryPoint
@@ -34,7 +34,8 @@ import kotlinx.coroutines.launch
 @AndroidEntryPoint
 class BootReceiver : BroadcastReceiver() {
 
-    @Inject lateinit var registrar: ActivityRecognitionRegistrar
+    /** PERM-002: registers Activity Recognition only while Auto Tracking is on and the permission is granted - and unregisters otherwise. */
+    @Inject lateinit var detection: AutoTrackingDetection
 
     /** `Lazy`: it (via the coordinator) needs WorkManager, initialised in `Application.onCreate` after injection. */
     @Inject lateinit var rebootReconciler: Lazy<RebootReconciler>
@@ -42,11 +43,11 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED -> {
-                Log.i(TAG, "Re-registering Activity Recognition after ${intent.action}")
-                registrar.register()
+                Log.i(TAG, "Re-syncing Activity Recognition after ${intent.action}")
                 val pending = goAsync()
                 CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                     try {
+                        runCatching { detection.sync() }
                         val outcome = rebootReconciler.get().reconcile()
                         Log.i(TAG, "Boot reconciliation: $outcome")
                     } catch (failure: Exception) {
@@ -58,8 +59,17 @@ class BootReceiver : BroadcastReceiver() {
                 }
             }
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
-                Log.i(TAG, "Re-registering Activity Recognition after ${intent.action}")
-                registrar.register()
+                Log.i(TAG, "Re-syncing Activity Recognition after ${intent.action}")
+                val pending = goAsync()
+                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                    try {
+                        detection.sync()
+                    } catch (failure: Exception) {
+                        Log.w(TAG, "Activity Recognition sync failed", failure)
+                    } finally {
+                        pending.finish()
+                    }
+                }
             }
         }
     }

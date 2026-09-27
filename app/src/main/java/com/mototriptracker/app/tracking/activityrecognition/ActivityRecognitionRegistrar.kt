@@ -37,12 +37,21 @@ import javax.inject.Inject
 class ActivityRecognitionRegistrar @Inject constructor(
     @ApplicationContext private val context: Context,
     private val activityRecognitionClient: ActivityRecognitionClient
-) {
+) : ActivityTransitionRegistration {
     @SuppressLint("MissingPermission")
-    fun register() {
+    override fun register() {
         val request = ActivityTransitionRequest(buildTransitions())
         activityRecognitionClient.requestActivityTransitionUpdates(request, pendingIntent())
+            .addOnSuccessListener { Log.i(TAG, "Activity Recognition registered") }
             .addOnFailureListener { error -> Log.w(TAG, "Activity Recognition registration failed", error) }
+    }
+
+    /** PERM-002: stops the delivery - what "Auto Tracking is off" has to mean. Logged either way, since a silent failure here would leave the app listening. */
+    @SuppressLint("MissingPermission")
+    override fun unregister() {
+        activityRecognitionClient.removeActivityTransitionUpdates(pendingIntent())
+            .addOnSuccessListener { Log.i(TAG, "Activity Recognition unregistered") }
+            .addOnFailureListener { error -> Log.w(TAG, "Activity Recognition unregistration failed", error) }
     }
 
     private fun pendingIntent(): PendingIntent {

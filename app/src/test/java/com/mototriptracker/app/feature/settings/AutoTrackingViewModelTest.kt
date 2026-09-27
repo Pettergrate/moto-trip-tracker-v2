@@ -9,7 +9,10 @@ import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.domain.capability.AutoTrackingRequirement
 import com.mototriptracker.app.domain.capability.AutoTrackingState
 import com.mototriptracker.app.domain.capability.SetupStep
+import com.mototriptracker.app.tracking.activityrecognition.AutoTrackingDetection
+import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.testing.FailingDataStore
+import com.mototriptracker.app.testing.FakeActivityTransitionRegistration
 import com.mototriptracker.app.testing.FakeCapabilityInputsProvider
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -64,8 +67,17 @@ class AutoTrackingViewModelTest {
         )
     )
 
-    private fun create(preferences: AutoTrackingPreferences = preferences()) =
-        AutoTrackingViewModel(preferences, provider).also { viewModel = it }
+    private val registration = FakeActivityTransitionRegistration()
+
+    /** In the app the inputs provider reads the switch from the same preference the screen writes; the fake has to follow it too. */
+    private fun create(preferences: AutoTrackingPreferences = preferences()): AutoTrackingViewModel {
+        val followsThePreference = object : CapabilityInputsProvider {
+            override suspend fun current() = provider.current().copy(autoTrackingEnabledByUser = preferences.autoTrackingEnabled.first())
+        }
+        return AutoTrackingViewModel(preferences, provider, AutoTrackingDetection(registration, followsThePreference))
+            .also { it.recheckMs = 100L } // the screen re-reads every 3 s; the tests must not wait that long
+            .also { viewModel = it }
+    }
 
     private suspend fun AutoTrackingViewModel.state(matching: (AutoTrackingUiState) -> Boolean = { true }): AutoTrackingUiState =
         withTimeout(8_000) { uiState.first { it != null && matching(it) } }!!
@@ -196,6 +208,81 @@ class AutoTrackingViewModelTest {
         provider.throwOnRead = true
 
         assertNull(create().nextStep())
+    }
+
+    /** PERM-002: "off" has to mean not listening, and "on" with the permission has to start listening, at once. */
+    private fun waitFor(condition: () -> Boolean) = runBlocking { withTimeout(5_000) { while (!condition()) delay(10) } }
+
+    @Test
+    fun switchingItOnWithThePermissionStartsListeningAtOnce() {
+        provider.set(nothingGrantedYet.copy(activityRecognitionGranted = true))
+        val vm = create()
+
+        vm.onToggle(true)
+
+        waitFor { registration.isRegistered == true }
+    }
+
+    /** The guided setup starts after the switch is saved and listening applied - it never races the write it depends on. */
+    @Test
+    fun theFollowUpRunsOnlyOnceTheChoiceIsSavedAndListeningIsApplied() {
+        provider.set(nothingGrantedYet.copy(activityRecognitionGranted = true))
+        val vm = create()
+        var registeredWhenCalled: Boolean? = null
+        var called = false
+
+        vm.onToggle(true) {
+            registeredWhenCalled = registration.isRegistered
+            called = true
+        }
+        waitFor { called }
+
+        assertEquals(true, registeredWhenCalled)
+    }
+
+    @Test
+    fun switchingItOffStopsListeningAtOnce() {
+        provider.set(nothingGrantedYet.copy(activityRecognitionGranted = true))
+        val vm = create()
+        vm.onToggle(true)
+        waitFor { registration.isRegistered == true }
+
+        vm.onToggle(false)
+
+        waitFor { registration.isRegistered == false }
+    }
+
+    @Test
+    fun switchingItOnWithoutThePermissionDoesNotRegisterAnything() {
+        val vm = create()
+
+        vm.onToggle(true)
+        waitFor { registration.calls.isNotEmpty() }
+
+        assertFalse(registration.calls.contains(FakeActivityTransitionRegistration.REGISTER))
+    }
+
+    @Test
+    fun aPermissionAnsweredInTheGuidedSetupStartsTheListening() {
+        val vm = create()
+        vm.onToggle(true) // on, but the activity permission is still missing: not listening
+        waitFor { registration.calls.isNotEmpty() }
+
+        provider.set(nothingGrantedYet.copy(activityRecognitionGranted = true)) // answered in the system dialog
+        vm.nextStep()
+
+        waitFor { registration.isRegistered == true }
+    }
+
+    @Test
+    fun comingBackToTheScreenAppliesTheStateAgain() {
+        val vm = create()
+        vm.onToggle(true)
+        provider.set(nothingGrantedYet.copy(activityRecognitionGranted = true)) // granted in the phone's Settings
+
+        vm.syncDetection()
+
+        waitFor { registration.isRegistered == true }
     }
 
     @Test

@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import androidx.work.WorkManager
-import com.mototriptracker.app.tracking.activityrecognition.ActivityRecognitionRegistrar
+import com.mototriptracker.app.tracking.activityrecognition.AutoTrackingDetection
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.tracking.recovery.ProcessExitRecorder
 import com.mototriptracker.app.tracking.recovery.RebootReconciler
@@ -41,7 +41,8 @@ import javax.inject.Inject
 class MotoTripApplication : Application() {
 
     @Inject lateinit var workerFactory: HiltWorkerFactory
-    @Inject lateinit var activityRecognitionRegistrar: ActivityRecognitionRegistrar
+    /** PERM-002: `Lazy` like the others, and used off the main thread below: it reads the capability inputs. */
+    @Inject lateinit var autoTrackingDetection: Lazy<AutoTrackingDetection>
 
     /**
      * `Lazy`, not a plain `@Inject lateinit var` like the two fields above -
@@ -79,10 +80,6 @@ class MotoTripApplication : Application() {
         if (!WorkManager.isInitialized()) {
             WorkManager.initialize(this, Configuration.Builder().setWorkerFactory(workerFactory).build())
         }
-        // DET-001/ADR-007: registration doesn't survive reboot/update either
-        // (BootReceiver handles those separately) - this is just the
-        // normal-start/first-run case, same idempotent call.
-        activityRecognitionRegistrar.register()
         // TRS-001: ExistingPeriodicWorkPolicy.KEEP makes this idempotent too.
         trashPurgeScheduler.get().schedulePeriodicPurge()
         // DIA-004/F0.13 §12.2: bound the diagnostic evidence (14 days / 20,000 events). Idempotent too.
@@ -94,6 +91,10 @@ class MotoTripApplication : Application() {
             // REC-003/F0.10 §25: a capture left ACTIVE by a previous boot is sealed on
             // the next process start too (definitive elapsedRealtime test only).
             // REC-004/F0.10 §9: a user Stop / Force stop must not be silently revived.
+            // DET-001/ADR-007, PERM-002: registration doesn't survive a reboot or an update (BootReceiver handles those), so it is
+            // made again on every start - but only while Auto Tracking is on and the activity permission is granted; otherwise
+            // it is removed, which is what "off" has to mean. Same idempotent call either way.
+            runCatching { autoTrackingDetection.get().sync() }
             runCatching { userStopReconciler.get().reconcile() }
             runCatching { processExitRecorder.get().record() }
             // REC-003: also on every process start, for OEMs that restrict boot receivers.

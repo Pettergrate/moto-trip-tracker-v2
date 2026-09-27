@@ -22,6 +22,9 @@ import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionRecorder
 import com.mototriptracker.app.tracking.service.TrackingForegroundService
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -217,6 +220,76 @@ class ActivityTransitionReceiverTest {
             ApplicationProvider.getApplicationContext(),
             listOf(sample(ActivityType.IN_VEHICLE, TransitionType.ENTER))
         )
+
+        assertEquals(TrackingForegroundService.ACTION_AUTO_DETECT, nextStartedServiceAction())
+    }
+
+    // PERM-002: "off" has to mean the app does not keep the movement data, whatever Google's side still delivers.
+
+    private val fullyOn get() = FakeCapabilityProvider.fullAuto()
+
+    private fun kotlinx.coroutines.test.TestScope.collectPublished(receiver: ActivityTransitionReceiver): List<ActivityTransitionSample> {
+        val seen = mutableListOf<ActivityTransitionSample>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { receiver.activityTransitionBus.events.toList(seen) }
+        return seen
+    }
+
+    @Test
+    fun whileListeningATransitionIsStoredAndPublished() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn))
+        val published = collectPublished(receiver)
+
+        receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(sample(ActivityType.WALKING, TransitionType.ENTER)))
+
+        assertEquals(1, db.diagnosticEventDao().count())
+        assertEquals(1, published.size)
+    }
+
+    @Test
+    fun withAutoTrackingOffATransitionIsNeitherStoredNorPublished() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn.copy(autoTrackingEnabledByUser = false)))
+        val published = collectPublished(receiver)
+
+        receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(sample(ActivityType.WALKING, TransitionType.ENTER)))
+
+        assertEquals(0, db.diagnosticEventDao().count())
+        assertEquals(0, published.size)
+    }
+
+    @Test
+    fun withAutoTrackingOffEvenAnInVehicleEnterStartsNothing() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn.copy(autoTrackingEnabledByUser = false)))
+
+        receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(sample(ActivityType.IN_VEHICLE, TransitionType.ENTER)))
+
+        assertNull(nextStartedServiceAction())
+    }
+
+    @Test
+    fun withoutTheActivityPermissionATransitionIsNotStored() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn.copy(activityRecognitionGranted = false)))
+
+        receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(sample(ActivityType.STILL, TransitionType.ENTER)))
+
+        assertEquals(0, db.diagnosticEventDao().count())
+    }
+
+    /** Not being sure is not a reason to keep collecting. */
+    @Test
+    fun whenTheCapabilityReadFailsATransitionIsDropped() = runTest {
+        val provider = FakeCapabilityInputsProvider(fullyOn).apply { throwOnRead = true }
+        val receiver = buildReceiver(provider)
+
+        receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(sample(ActivityType.WALKING, TransitionType.ENTER)))
+
+        assertEquals(0, db.diagnosticEventDao().count())
+    }
+
+    @Test
+    fun whileListeningAnInVehicleEnterStillStartsAutoDetectionAsBefore() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn))
+
+        receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(sample(ActivityType.IN_VEHICLE, TransitionType.ENTER)))
 
         assertEquals(TrackingForegroundService.ACTION_AUTO_DETECT, nextStartedServiceAction())
     }

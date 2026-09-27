@@ -16,6 +16,7 @@ import com.mototriptracker.app.core.model.CapabilityMode
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.domain.capability.CapabilityResolver
+import com.mototriptracker.app.domain.capability.DetectionListening
 import com.mototriptracker.app.domain.detection.PostFinishSuppression
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionRecorder
@@ -71,19 +72,42 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
                 // failed to write to. The bus emit is non-suspending and
                 // never throws (tryEmit), so it always runs regardless of
                 // whether the DB write above it succeeded.
-                for (sample in samples) {
-                    try {
-                        recorder.record(sample)
-                    } catch (error: Exception) {
-                        Log.w(TAG, "Failed to record activity transition $sample", error)
-                    }
-                    activityTransitionBus.emit(sample)
-                }
-                maybeStartAutoDetection(context, samples)
+                handleTransitions(context, samples)
             } finally {
                 pendingResult.finish()
             }
         }
+    }
+
+    /**
+     * PERM-002: what is done with transitions that arrive. The listening rule is checked *here*, not only when
+     * registering: if Google's side still delivers one after Auto Tracking was switched off (a removal that failed, a
+     * delivery already in flight), it is dropped - not stored, not published, and it cannot start anything. "Off" has to
+     * mean the app does not keep the movement data, whatever the platform does. When the read that decides this fails,
+     * the transition is dropped too: not being sure is not a reason to keep collecting.
+     */
+    @VisibleForTesting
+    internal suspend fun handleTransitions(context: Context, samples: List<ActivityTransitionSample>) {
+        val listening = try {
+            DetectionListening.shouldListen(capabilityInputsProvider.current())
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            false
+        }
+        if (!listening) {
+            Log.i(TAG, "Not listening (Auto Tracking off or no permission): dropped ${samples.size} activity transition(s)")
+            return
+        }
+        for (sample in samples) {
+            try {
+                recorder.record(sample)
+            } catch (error: Exception) {
+                Log.w(TAG, "Failed to record activity transition $sample", error)
+            }
+            activityTransitionBus.emit(sample)
+        }
+        maybeStartAutoDetection(context, samples)
     }
 
     /**

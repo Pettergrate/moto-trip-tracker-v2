@@ -31,6 +31,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -140,6 +141,11 @@ fun AutoTrackingScreen(onBack: () -> Unit, viewModel: AutoTrackingViewModel = hi
         attempted.clear()
         advance()
     }
+    // Back from the phone's Settings (or anywhere): apply the listening state again.
+    LifecycleResumeEffect(Unit) {
+        viewModel.syncDetection()
+        onPauseOrDispose { }
+    }
     val activityLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { advance() }
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { advance() }
     val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { advance() }
@@ -147,8 +153,7 @@ fun AutoTrackingScreen(onBack: () -> Unit, viewModel: AutoTrackingViewModel = hi
     val backgroundLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { advance() }
     // Turning it on starts the guided setup; turning it off asks nothing.
     fun onSwitch(on: Boolean) {
-        viewModel.onToggle(on)
-        if (on) startSetup()
+        viewModel.onToggle(on) { if (on) startSetup() }
     }
     val backgroundNeedsSettings = Build.VERSION.SDK_INT >= AutoTrackingSetup.FIRST_SDK_WITH_BACKGROUND_PERMISSION + 1
 

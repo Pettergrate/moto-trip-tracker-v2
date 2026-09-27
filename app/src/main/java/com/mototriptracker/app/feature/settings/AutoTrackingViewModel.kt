@@ -9,6 +9,7 @@ import com.mototriptracker.app.domain.capability.AutoTrackingSetup
 import com.mototriptracker.app.domain.capability.AutoTrackingState
 import com.mototriptracker.app.domain.capability.RequirementStatus
 import com.mototriptracker.app.domain.capability.SetupStep
+import com.mototriptracker.app.tracking.activityrecognition.AutoTrackingDetection
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -40,8 +41,13 @@ data class AutoTrackingUiState(
 @HiltViewModel
 class AutoTrackingViewModel @Inject constructor(
     private val autoTrackingPreferences: AutoTrackingPreferences,
-    private val capabilityInputsProvider: CapabilityInputsProvider
+    private val capabilityInputsProvider: CapabilityInputsProvider,
+    private val detection: AutoTrackingDetection
 ) : ViewModel() {
+
+    /** How often the permissions are re-read while the screen is visible; only tests change it. */
+    @androidx.annotation.VisibleForTesting
+    internal var recheckMs: Long = RECHECK_MS
 
     private val inputs = flow {
         while (true) {
@@ -52,7 +58,7 @@ class AutoTrackingViewModel @Inject constructor(
             } catch (error: Exception) {
                 // A failed platform read shows the previous state rather than an invented one.
             }
-            delay(RECHECK_MS)
+            delay(recheckMs)
         }
     }
 
@@ -76,7 +82,10 @@ class AutoTrackingViewModel @Inject constructor(
         val alreadyAsked = attempted.toSet()
         viewModelScope.launch {
             val step = try {
-                AutoTrackingSetup.nextStep(AutoTrackingReadiness.requirementsFor(capabilityInputsProvider.current()), sdkInt, alreadyAsked)
+                val requirements = AutoTrackingReadiness.requirementsFor(capabilityInputsProvider.current())
+                // A permission has just been answered: listening may have to start (or, if it was refused, stay off).
+                detection.sync()
+                AutoTrackingSetup.nextStep(requirements, sdkInt, alreadyAsked)
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
@@ -86,10 +95,30 @@ class AutoTrackingViewModel @Inject constructor(
         }
     }
 
-    fun onToggle(enabled: Boolean) {
+    /** Applies the desired listening state again - called when the screen comes back to the front (a permission may have changed in Settings). */
+    fun syncDetection() {
+        viewModelScope.launch {
+            try {
+                detection.sync()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                // Logged by the registration itself; the next change or app start applies it again.
+            }
+        }
+    }
+
+    /**
+     * [afterSaved] runs once the choice is saved and the listening state applied: the guided setup starts from there, so it
+     * never races the write it depends on (it used to read the phone while the switch was still being saved).
+     */
+    fun onToggle(enabled: Boolean, afterSaved: () -> Unit = {}) {
         viewModelScope.launch {
             try {
                 autoTrackingPreferences.setAutoTrackingEnabled(enabled)
+                // "Off" has to mean not listening, and "on" (with the permission) has to start listening - at once, not at the next app start.
+                detection.sync()
+                afterSaved()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {

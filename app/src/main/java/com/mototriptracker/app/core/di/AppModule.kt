@@ -19,6 +19,8 @@ import com.mototriptracker.app.experiment.FieldTestDeviceInfoProvider
 import com.mototriptracker.app.experiment.FieldTestHarnessStateStore
 import com.mototriptracker.app.tracking.capability.AndroidCapabilityInputsProvider
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
+import com.mototriptracker.app.tracking.activityrecognition.ActivityRecognitionRegistrar
+import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionRegistration
 import com.mototriptracker.app.tracking.location.FusedLocationGateway
 import com.mototriptracker.app.tracking.location.InMemoryLocationProfileSelector
 import com.mototriptracker.app.tracking.location.LocationGateway
@@ -70,6 +72,9 @@ interface AppModule {
 
     @Binds
     fun bindLocationGateway(impl: FusedLocationGateway): LocationGateway
+
+    @Binds
+    fun bindActivityTransitionRegistration(impl: ActivityRecognitionRegistrar): ActivityTransitionRegistration
 
     @Binds
     fun bindProcessingScheduler(impl: WorkManagerProcessingScheduler): ProcessingScheduler
