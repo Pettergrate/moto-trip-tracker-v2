@@ -6,7 +6,17 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.mototriptracker.app.core.theme.MotoTripTrackerTheme
+import com.mototriptracker.app.feature.onboarding.OnboardingGate
+import com.mototriptracker.app.feature.onboarding.OnboardingViewModel
+import com.mototriptracker.app.feature.onboarding.WelcomeScreen
 import com.mototriptracker.app.navigation.AppNavHost
 import com.mototriptracker.app.navigation.Destination
 import dagger.hilt.android.AndroidEntryPoint
@@ -38,7 +48,17 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             MotoTripTrackerTheme {
-                AppNavHost(initialDestination = initialDestination)
+                val onboarding: OnboardingViewModel = hiltViewModel()
+                val gate by onboarding.gate.collectAsStateWithLifecycle()
+                when {
+                    // The preference is read in a few milliseconds; until then, just the background - never a flash of Home.
+                    gate == OnboardingGate.LOADING -> Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {}
+                    // PERM-001 / ONB-01: once, on a normal launch. Arriving from the tracking notification means a trip is
+                    // already being recorded, so nothing is put in front of it.
+                    gate == OnboardingGate.WELCOME && initialDestination == Destination.Home ->
+                        WelcomeScreen(onContinue = onboarding::onWelcomeContinue)
+                    else -> AppNavHost(initialDestination = initialDestination)
+                }
             }
         }
     }

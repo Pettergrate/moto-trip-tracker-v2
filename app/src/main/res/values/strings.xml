@@ -22,4 +22,20 @@
     <string name="notification_action_pause">Pause</string>
     <string name="notification_action_resume">Resume</string>
     <string name="notification_action_finish">Finish</string>
+
+    <!-- PERM-001 / ONB-01: the one welcome screen, shown once. It asks for nothing (privacy-permissions.md 19.1). -->
+    <string name="welcome_title">Welcome to Moto Trip Tracker</string>
+    <string name="welcome_records_title">What it records</string>
+    <string name="welcome_records_text">Your route, distance, speed and time, from your phone\'s location while a trip is running.</string>
+    <string name="welcome_control_title">You are in control</string>
+    <string name="welcome_control_text">You start and finish each trip yourself. Automatic detection is optional and off by default.</string>
+    <string name="welcome_local_title">Your data stays here</string>
+    <string name="welcome_local_text">Trips are stored on this phone and recording works without internet. Only the map background is downloaded when you open a trip.</string>
+    <string name="welcome_continue">Continue</string>
+
+    <!-- PERM-001 / privacy-permissions.md 6.3: said before the system asks for location, with a way out. -->
+    <string name="location_explanation_title">Precise location to record your route</string>
+    <string name="location_explanation_text">Moto Trip Tracker uses precise location during a trip to draw your route and calculate distance, speed and elevation. With approximate location, the route and metrics can be inaccurate.</string>
+    <string name="location_explanation_continue">Continue</string>
+    <string name="location_explanation_not_now">Not now</string>
 </resources>

@@ -1,9 +1,11 @@
 package com.mototriptracker.app.feature.home
 
 import android.content.Context
+import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mototriptracker.app.core.common.Clock
+import com.mototriptracker.app.core.datastore.OnboardingPreferences
 import com.mototriptracker.app.core.database.dao.ManualPauseIntervalDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
@@ -14,6 +16,7 @@ import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.domain.capability.CapabilityDiagnosis
 import com.mototriptracker.app.domain.capability.CapabilityIssue
 import com.mototriptracker.app.domain.capability.CapabilityResolver
+import com.mototriptracker.app.domain.capability.NotificationPrompt
 import com.mototriptracker.app.domain.liveDistanceMeters
 import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
@@ -28,6 +31,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -51,6 +55,7 @@ class HomeViewModel @Inject constructor(
     private val tripDao: TripDao,
     private val tripStatisticsDao: TripStatisticsDao,
     private val capabilityInputsProvider: CapabilityInputsProvider,
+    private val onboardingPreferences: OnboardingPreferences,
     private val clock: Clock
 ) : ViewModel() {
 
@@ -154,6 +159,29 @@ class HomeViewModel @Inject constructor(
             capabilityIssuesFlow.value = issues
             val warning = issues.firstOrNull { it.warnBeforeStart }
             if (warning != null) onWarn(warning) else onProceed()
+        }
+    }
+
+    /**
+     * PERM-001 / `privacy-permissions.md` §19.2: after location, "notificación (si aplica)". Calls [onAsk] when the
+     * system prompt should be offered now - Android 13+, notifications off, and never offered before (which it records
+     * here, before asking, so it cannot repeat even if the person leaves mid-dialog) - and [onSkip] otherwise.
+     * Starting a trip never waits on this going right: any failure to read or write means "go on without asking".
+     */
+    fun prepareNotificationAsk(sdkInt: Int = Build.VERSION.SDK_INT, onAsk: () -> Unit, onSkip: () -> Unit) {
+        viewModelScope.launch {
+            val ask = try {
+                val notificationsEnabled = capabilityInputsProvider.current().notificationsEnabled
+                val alreadyAsked = onboardingPreferences.notificationPromptShown.first()
+                val shouldAsk = NotificationPrompt.shouldAsk(sdkInt, notificationsEnabled, alreadyAsked)
+                if (shouldAsk) onboardingPreferences.markNotificationPromptShown()
+                shouldAsk
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled // the screen is gone: do not start a trip nobody is waiting for
+            } catch (error: Exception) {
+                false
+            }
+            if (ask) onAsk() else onSkip()
         }
     }
 

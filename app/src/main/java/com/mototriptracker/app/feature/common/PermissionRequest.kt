@@ -10,7 +10,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
+import com.mototriptracker.app.R
 
 /**
  * `TrackingForegroundService.onStartCommand`'s `startForeground(..., FOREGROUND_SERVICE_TYPE_LOCATION)`
@@ -46,9 +48,26 @@ fun rememberStartWithLocationPermission(onGranted: () -> Unit, onDenied: () -> U
     }
 }
 
-private fun hasLocationPermission(context: Context): Boolean =
+/** Either location permission counts: with neither, nothing can be recorded and the system has to be asked (`PERM-001`'s explanation comes first). */
+internal fun hasLocationPermission(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+/**
+ * PERM-001 / `privacy-permissions.md` §6.3, §19.2: said *before* the system asks for location, in the moment the
+ * person taps Start, with a way out ("Ahora no" / [onNotNow]) that simply leaves them where they were - a "not now"
+ * is not an error and gets no second dialog.
+ */
+@Composable
+fun LocationExplanationDialog(onContinue: () -> Unit, onNotNow: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onNotNow,
+        title = { Text(stringResource(R.string.location_explanation_title)) },
+        text = { Text(stringResource(R.string.location_explanation_text)) },
+        confirmButton = { TextButton(onClick = onContinue) { Text(stringResource(R.string.location_explanation_continue)) } },
+        dismissButton = { TextButton(onClick = onNotNow) { Text(stringResource(R.string.location_explanation_not_now)) } }
+    )
+}
 
 /** Shared by every [rememberStartWithLocationPermission] caller so a denial explains itself instead of a silent no-op (F0.9 §16: "denegar no crea un dead end"). */
 @Composable

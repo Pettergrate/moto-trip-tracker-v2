@@ -4,11 +4,13 @@ import androidx.lifecycle.viewModelScope
 import androidx.test.core.app.ApplicationProvider
 import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.database.MotoTripDatabase
+import com.mototriptracker.app.core.datastore.OnboardingPreferences
 import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.core.model.CapabilityMode
 import com.mototriptracker.app.domain.capability.CapabilityIssue
 import com.mototriptracker.app.testing.FakeCapabilityInputsProvider
 import com.mototriptracker.app.testing.TestDatabaseFactory
+import com.mototriptracker.app.testing.TestOnboardingPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -38,6 +40,7 @@ class HomeCapabilityIssuesTest {
 
     private lateinit var db: MotoTripDatabase
     private lateinit var provider: FakeCapabilityInputsProvider
+    private lateinit var onboardingPreferences: OnboardingPreferences
     private lateinit var viewModel: HomeViewModel
 
     @Before
@@ -45,10 +48,12 @@ class HomeCapabilityIssuesTest {
         Dispatchers.setMain(Dispatchers.Unconfined)
         db = TestDatabaseFactory.createInMemory()
         provider = FakeCapabilityInputsProvider(allGood.copy(notificationsEnabled = false))
+        onboardingPreferences = TestOnboardingPreferences.create()
         viewModel = HomeViewModel(
             context = ApplicationProvider.getApplicationContext(), tripCaptureDao = db.tripCaptureDao(),
             rawTrackPointDao = db.rawTrackPointDao(), manualPauseIntervalDao = db.manualPauseIntervalDao(), tripDao = db.tripDao(),
             tripStatisticsDao = db.tripStatisticsDao(), capabilityInputsProvider = provider,
+            onboardingPreferences = onboardingPreferences,
             clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L)
         )
     }

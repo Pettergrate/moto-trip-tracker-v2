@@ -1,5 +1,8 @@
 package com.mototriptracker.app.feature.home
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -29,6 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -39,7 +43,9 @@ import com.mototriptracker.app.feature.common.rememberCapabilityFixer
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationClock
 import com.mototriptracker.app.feature.common.formatDurationCompact
+import com.mototriptracker.app.feature.common.LocationExplanationDialog
 import com.mototriptracker.app.feature.common.LocationPermissionDeniedDialog
+import com.mototriptracker.app.feature.common.hasLocationPermission
 import com.mototriptracker.app.feature.common.rememberStartWithLocationPermission
 
 /** How often Home re-reads permissions and services while it is visible. */
@@ -54,6 +60,7 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var showPermissionDeniedDialog by remember { mutableStateOf(false) }
+    var showLocationExplanation by remember { mutableStateOf(false) }
     var startAnywayIssue by remember { mutableStateOf<CapabilityIssue?>(null) }
 
     // F0.9 §17: re-check readiness every time Home comes back to the foreground - not only the first time it is
@@ -77,15 +84,31 @@ fun HomeScreen(
 
     val fixIssue = rememberCapabilityFixer(onAfterAttempt = viewModel::refreshCapabilityMode)
 
-    val startTripWithPermission = rememberStartWithLocationPermission(
-        onGranted = viewModel::onStartTripClick,
+    // PERM-001 / privacy-permissions.md 19.2, in order: explain precise location -> the system asks -> (PERM-003) say
+    // once if the trip would record no route -> offer notifications, once -> start. Each step only when needed, and a
+    // "no" at any of them leaves the person where they were.
+    val context = LocalContext.current
+    val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        // Granted or not, the trip starts: denied notifications never stop a recording (the Active Trip card explains).
+        viewModel.onStartTripClick()
+    }
+    val startAfterChecks = {
+        viewModel.prepareNotificationAsk(
+            onAsk = { notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) },
+            onSkip = viewModel::onStartTripClick
+        )
+    }
+    // PERM-003: judged from a fresh read at this point, not from what the card last showed - which also catches the
+    // person who has just chosen "approximate" in the system dialog.
+    val checkThenStart = {
+        viewModel.checkBeforeStart(onWarn = { startAnywayIssue = it }, onProceed = startAfterChecks)
+    }
+    val requestLocation = rememberStartWithLocationPermission(
+        onGranted = checkThenStart,
         onDenied = { showPermissionDeniedDialog = true }
     )
-
-    // PERM-003: a problem that would leave the trip with no route is said once, before starting - never silently, and
-    // judged from a fresh read at the tap, not from what the card last showed.
     val onStartTripClick = {
-        viewModel.checkBeforeStart(onWarn = { startAnywayIssue = it }, onProceed = { startTripWithPermission() })
+        if (hasLocationPermission(context)) requestLocation() else showLocationExplanation = true
     }
 
     HomeContent(
@@ -102,6 +125,13 @@ fun HomeScreen(
         LocationPermissionDeniedDialog(onDismiss = { showPermissionDeniedDialog = false })
     }
 
+    if (showLocationExplanation) {
+        LocationExplanationDialog(
+            onContinue = { showLocationExplanation = false; requestLocation() },
+            onNotNow = { showLocationExplanation = false }
+        )
+    }
+
     startAnywayIssue?.let { issue ->
         val copy = CapabilityIssueCopy.of(issue)
         AlertDialog(
@@ -109,7 +139,7 @@ fun HomeScreen(
             title = { Text(copy.title) },
             text = { Text(copy.startAnywayMessage.orEmpty()) },
             confirmButton = { TextButton(onClick = { startAnywayIssue = null; fixIssue(issue) }) { Text(copy.actionLabel) } },
-            dismissButton = { TextButton(onClick = { startAnywayIssue = null; startTripWithPermission() }) { Text("Start anyway") } }
+            dismissButton = { TextButton(onClick = { startAnywayIssue = null; startAfterChecks() }) { Text("Start anyway") } }
         )
     }
 }

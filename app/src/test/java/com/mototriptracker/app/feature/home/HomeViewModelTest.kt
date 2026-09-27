@@ -8,6 +8,7 @@ import com.mototriptracker.app.core.database.entity.TripStatisticsEntity
 import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.core.model.TripStatus
 import com.mototriptracker.app.testing.FakeCapabilityInputsProvider
+import com.mototriptracker.app.testing.TestOnboardingPreferences
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +73,7 @@ class HomeViewModelTest {
                     autoTrackingEnabledByUser = false
                 )
             ),
+            onboardingPreferences = TestOnboardingPreferences.create(),
             clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L)
         )
     }
