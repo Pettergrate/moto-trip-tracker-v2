@@ -53,16 +53,12 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
     @Inject lateinit var capabilityInputsProvider: CapabilityInputsProvider
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (!ActivityTransitionResult.hasResult(intent)) return
-        val result = ActivityTransitionResult.extractResult(intent) ?: return
-        if (result.transitionEvents.isEmpty()) return
+        val reading = readBroadcast(intent)
 
-        val nowWallMillis = clock.wallClockMillis()
-        val nowElapsedRealtimeNanos = clock.elapsedRealtimeNanos()
-        val samples = result.transitionEvents.mapNotNull { it.toSampleOrNull(nowWallMillis, nowElapsedRealtimeNanos) }
-        if (samples.isEmpty()) return
-
-        val pendingResult = goAsync()
+        // Even a broadcast with nothing usable in it is handled (and, while listening, recorded): one that arrives and leaves no
+        // durable trace cannot be told apart from one that never came.
+        // Nullable on purpose: the system always provides it, but a receiver driven directly (as the tests do) has none.
+        val pendingResult: PendingResult? = goAsync()
         CoroutineScope(SupervisorJob() + dispatchers.default).launch {
             try {
                 // One bad sample must not drop the rest of the batch (same
@@ -72,11 +68,49 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
                 // failed to write to. The bus emit is non-suspending and
                 // never throws (tryEmit), so it always runs regardless of
                 // whether the DB write above it succeeded.
-                handleTransitions(context, samples)
+                if (reading.samples.isEmpty()) {
+                    handleEmptyBroadcast(reading.emptyReason ?: ActivityTransitionRecorder.EMPTY_NO_USABLE_EVENTS)
+                } else {
+                    handleTransitions(context, reading.samples)
+                }
             } finally {
-                pendingResult.finish()
+                pendingResult?.finish()
             }
         }
+    }
+
+    /**
+     * The transitions inside a broadcast, or an empty list. Every way of coming out empty says why (no coordinates, no
+     * personal data): a broadcast that arrives and leaves no trace is impossible to tell from one that never came, and
+     * that is exactly what was missing when Auto Tracking recorded nothing for two weeks - the deliveries were arriving
+     * empty (an immutable PendingIntent, see `ActivityRecognitionRegistrar`) and this returned without a word.
+     */
+    @VisibleForTesting
+    internal fun samplesFrom(intent: Intent): List<ActivityTransitionSample> = readBroadcast(intent).samples
+
+    /** What a broadcast held: the usable transitions, or - when there are none - the reason, in the vocabulary the diagnostic event uses. */
+    internal class BroadcastReading(val samples: List<ActivityTransitionSample>, val emptyReason: String? = null)
+
+    @VisibleForTesting
+    internal fun readBroadcast(intent: Intent): BroadcastReading {
+        if (!ActivityTransitionResult.hasResult(intent)) {
+            Log.i(TAG, "Broadcast received with no transition result (action=${intent.action})")
+            return BroadcastReading(emptyList(), ActivityTransitionRecorder.EMPTY_NO_RESULT)
+        }
+        val result = ActivityTransitionResult.extractResult(intent)
+        if (result == null) {
+            Log.w(TAG, "Broadcast said it had a transition result but it could not be read")
+            return BroadcastReading(emptyList(), ActivityTransitionRecorder.EMPTY_UNREADABLE)
+        }
+        if (result.transitionEvents.isEmpty()) {
+            Log.i(TAG, "Transition result with no events")
+            return BroadcastReading(emptyList(), ActivityTransitionRecorder.EMPTY_NO_EVENTS)
+        }
+        val nowWallMillis = clock.wallClockMillis()
+        val nowElapsedRealtimeNanos = clock.elapsedRealtimeNanos()
+        val samples = result.transitionEvents.mapNotNull { it.toSampleOrNull(nowWallMillis, nowElapsedRealtimeNanos) }
+        Log.i(TAG, "Transition result: ${result.transitionEvents.size} event(s), ${samples.size} usable")
+        return if (samples.isEmpty()) BroadcastReading(emptyList(), ActivityTransitionRecorder.EMPTY_NO_USABLE_EVENTS) else BroadcastReading(samples)
     }
 
     /**
@@ -88,14 +122,7 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
      */
     @VisibleForTesting
     internal suspend fun handleTransitions(context: Context, samples: List<ActivityTransitionSample>) {
-        val listening = try {
-            DetectionListening.shouldListen(capabilityInputsProvider.current())
-        } catch (cancelled: kotlinx.coroutines.CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            false
-        }
-        if (!listening) {
+        if (!isListening()) {
             Log.i(TAG, "Not listening (Auto Tracking off or no permission): dropped ${samples.size} activity transition(s)")
             return
         }
@@ -108,6 +135,31 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
             activityTransitionBus.emit(sample)
         }
         maybeStartAutoDetection(context, samples)
+    }
+
+    /**
+     * A broadcast that arrived with nothing usable in it, while listening: recorded, so that a later look at the diagnostics
+     * (the screen, the export) can tell "Google never called" from "Google called with nothing" - the distinction that took
+     * a day of digging to make, because the log the phone keeps is gone in minutes. While *not* listening nothing is
+     * recorded at all, not even that a broadcast came: off has to mean the app keeps no trace of movement.
+     */
+    @VisibleForTesting
+    internal suspend fun handleEmptyBroadcast(reason: String) {
+        if (!isListening()) return
+        try {
+            recorder.recordEmptyBroadcast(reason)
+        } catch (error: Exception) {
+            Log.w(TAG, "Failed to record an empty activity broadcast ($reason)", error)
+        }
+    }
+
+    /** The listening rule; a read that fails means "not listening" - not being sure is not a reason to keep collecting. */
+    private suspend fun isListening(): Boolean = try {
+        DetectionListening.shouldListen(capabilityInputsProvider.current())
+    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        false
     }
 
     /**

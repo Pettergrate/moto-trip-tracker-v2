@@ -22,6 +22,11 @@ import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionRecorder
 import com.mototriptracker.app.tracking.service.TrackingForegroundService
+import com.google.android.gms.common.internal.safeparcel.SafeParcelableSerializer
+import com.google.android.gms.location.ActivityTransition
+import com.google.android.gms.location.ActivityTransitionEvent
+import com.google.android.gms.location.ActivityTransitionResult
+import com.google.android.gms.location.DetectedActivity
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -41,9 +46,10 @@ import org.robolectric.Shadows.shadowOf
  * `ActivityTransitionResult` extra that isn't practical to fabricate in a
  * unit test (unlike `FusedLocationGateway`, whose real delivery is likewise
  * verified on-device, not deeply unit tested here). What *is* testable and
- * worth guarding: an intent that carries no such result must be a silent
- * no-op, never a crash - this is exactly the shape a stray/malformed
- * broadcast to this receiver would take.
+ * worth guarding: an intent that carries no such result must never be a crash
+ * - this is exactly the shape a stray/malformed broadcast to this receiver would
+ * take. (While listening it is now also *recorded*, as an empty-broadcast
+ * diagnostic; this test uses a receiver that is not listening, so it stores nothing.)
  */
 @RunWith(RobolectricTestRunner::class)
 class ActivityTransitionReceiverTest {
@@ -292,5 +298,108 @@ class ActivityTransitionReceiverTest {
         receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(sample(ActivityType.IN_VEHICLE, TransitionType.ENTER)))
 
         assertEquals(TrackingForegroundService.ACTION_AUTO_DETECT, nextStartedServiceAction())
+    }
+
+    // Found on the phone: two weeks of deliveries arrived empty and were discarded without a trace. Reading a broadcast is now
+    // tested with a transition serialized the way Play Services sends it, and each way of coming out empty is a named case.
+
+    private fun intentWith(vararg events: ActivityTransitionEvent) = Intent(ActivityTransitionReceiver.ACTION_ACTIVITY_TRANSITION).also {
+        SafeParcelableSerializer.serializeToIntentExtra(ActivityTransitionResult(events.toList()), it, "com.google.android.location.internal.EXTRA_ACTIVITY_TRANSITION_RESULT")
+    }
+
+    @Test
+    fun aBroadcastCarryingATransitionIsReadIntoASample() {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+        val intent = intentWith(ActivityTransitionEvent(DetectedActivity.IN_VEHICLE, ActivityTransition.ACTIVITY_TRANSITION_ENTER, 5_000_000L))
+
+        val samples = receiver.samplesFrom(intent)
+
+        assertEquals(1, samples.size)
+        assertEquals(ActivityType.IN_VEHICLE, samples.single().activityType)
+        assertEquals(TransitionType.ENTER, samples.single().transitionType)
+    }
+
+    @Test
+    fun severalTransitionsInOneBroadcastAreAllRead() {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+        val intent = intentWith(
+            ActivityTransitionEvent(DetectedActivity.STILL, ActivityTransition.ACTIVITY_TRANSITION_EXIT, 1_000L),
+            ActivityTransitionEvent(DetectedActivity.IN_VEHICLE, ActivityTransition.ACTIVITY_TRANSITION_ENTER, 2_000L)
+        )
+
+        assertEquals(2, receiver.samplesFrom(intent).size)
+    }
+
+    /** This is what an immutable PendingIntent produced: the broadcast arrives, the transition is missing. It must come out empty - and, now, say so in the log. */
+    @Test
+    fun aBroadcastWithoutTheTransitionExtraComesOutEmpty() {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+
+        assertEquals(emptyList<ActivityTransitionSample>(), receiver.samplesFrom(Intent(ActivityTransitionReceiver.ACTION_ACTIVITY_TRANSITION)))
+    }
+
+    @Test
+    fun aResultWithNoEventsComesOutEmpty() {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+
+        assertEquals(emptyList<ActivityTransitionSample>(), receiver.samplesFrom(intentWith()))
+    }
+
+    // What a broadcast held is now also recorded, durably, while listening: the log the phone keeps is gone in minutes, and
+    // "Google never called" versus "Google called with nothing" is the distinction that had to be dug out by hand.
+
+    private fun receiver() = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+
+    @Test
+    fun aBroadcastWithoutTheTransitionExtraIsReadAsNoResult() {
+        val reading = receiver().readBroadcast(Intent(ActivityTransitionReceiver.ACTION_ACTIVITY_TRANSITION))
+
+        assertEquals(ActivityTransitionRecorder.EMPTY_NO_RESULT, reading.emptyReason)
+        assertEquals(0, reading.samples.size)
+    }
+
+    @Test
+    fun aResultWithNoEventsIsReadAsNoEvents() {
+        assertEquals(ActivityTransitionRecorder.EMPTY_NO_EVENTS, receiver().readBroadcast(intentWith()).emptyReason)
+    }
+
+    @Test
+    fun aBroadcastWithATransitionHasNoEmptyReason() {
+        val reading = receiver().readBroadcast(
+            intentWith(ActivityTransitionEvent(DetectedActivity.WALKING, ActivityTransition.ACTIVITY_TRANSITION_ENTER, 1_000L))
+        )
+
+        assertEquals(1, reading.samples.size)
+        assertNull(reading.emptyReason)
+    }
+
+    @Test
+    fun anEmptyBroadcastWhileListeningIsRecordedWithItsReasonAndNothingElse() = runTest {
+        receiver().handleEmptyBroadcast(ActivityTransitionRecorder.EMPTY_NO_RESULT)
+
+        val event = db.diagnosticEventDao().findAll().single()
+        assertEquals("ACTIVITY_BROADCAST_EMPTY", event.eventType)
+        assertEquals(ActivityTransitionRecorder.EMPTY_NO_RESULT, event.reasonCode)
+        assertNull("no activity, nothing that describes movement", event.stateAfter)
+        assertEquals(emptyMap<String, String>(), event.metadata)
+    }
+
+    /** Off has to mean the app keeps no trace of movement: not even that a broadcast arrived. */
+    @Test
+    fun anEmptyBroadcastWhileNotListeningLeavesNoTraceAtAll() = runTest {
+        val off = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto().copy(autoTrackingEnabledByUser = false)))
+
+        off.handleEmptyBroadcast(ActivityTransitionRecorder.EMPTY_NO_RESULT)
+
+        assertEquals(0, db.diagnosticEventDao().count())
+    }
+
+    @Test
+    fun whenTheCapabilityReadFailsAnEmptyBroadcastIsNotRecordedEither() = runTest {
+        val provider = FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()).apply { throwOnRead = true }
+
+        buildReceiver(provider).handleEmptyBroadcast(ActivityTransitionRecorder.EMPTY_NO_RESULT)
+
+        assertEquals(0, db.diagnosticEventDao().count())
     }
 }

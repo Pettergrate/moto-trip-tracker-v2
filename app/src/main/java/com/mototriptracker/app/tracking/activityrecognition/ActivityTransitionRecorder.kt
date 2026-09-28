@@ -30,6 +30,37 @@ class ActivityTransitionRecorder @Inject constructor(
     private val clock: Clock,
     private val idGenerator: IdGenerator
 ) {
+    /**
+     * A broadcast from Play Services that held nothing usable. `WARN`, because a working setup delivers transitions: seeing
+     * these is the sign that something between Google and the receiver is wrong. Carries only the reason - no coordinates,
+     * no activity, nothing that describes movement.
+     */
+    suspend fun recordEmptyBroadcast(reason: String) {
+        diagnosticEventDao.insert(
+            DiagnosticEventEntity(
+                eventId = idGenerator.newId(),
+                occurredAt = clock.wallClockMillis(),
+                elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                category = DiagnosticCategory.ACTIVITY_RECOGNITION,
+                eventType = "ACTIVITY_BROADCAST_EMPTY",
+                severity = DiagnosticSeverity.WARN,
+                source = "ActivityTransitionReceiver",
+                captureId = null,
+                tripId = null,
+                correlationId = null,
+                stateBefore = null,
+                stateAfter = null,
+                reasonCode = reason,
+                metadata = emptyMap(),
+                appVersion = BuildConfig.VERSION_NAME,
+                schemaVersion = 1,
+                detectorVersion = DetectorVersion(0),
+                locationProfileVersion = LocationProfileVersion(0),
+                processingVersion = ProcessingVersion(0)
+            )
+        )
+    }
+
     suspend fun record(sample: ActivityTransitionSample) {
         diagnosticEventDao.insert(
             DiagnosticEventEntity(
@@ -54,5 +85,13 @@ class ActivityTransitionRecorder @Inject constructor(
                 processingVersion = ProcessingVersion(0)
             )
         )
+    }
+
+    companion object {
+        /** The vocabulary of `reasonCode` on an `ACTIVITY_BROADCAST_EMPTY` event. */
+        const val EMPTY_NO_RESULT = "NO_RESULT"
+        const val EMPTY_UNREADABLE = "UNREADABLE"
+        const val EMPTY_NO_EVENTS = "NO_EVENTS"
+        const val EMPTY_NO_USABLE_EVENTS = "NO_USABLE_EVENTS"
     }
 }

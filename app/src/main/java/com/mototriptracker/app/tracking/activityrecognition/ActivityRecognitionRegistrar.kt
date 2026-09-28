@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.util.Log
 import com.google.android.gms.location.ActivityRecognitionClient
 import com.google.android.gms.location.ActivityTransition
@@ -40,6 +41,7 @@ class ActivityRecognitionRegistrar @Inject constructor(
 ) : ActivityTransitionRegistration {
     @SuppressLint("MissingPermission")
     override fun register() {
+        removeLegacyRegistration()
         val request = ActivityTransitionRequest(buildTransitions())
         activityRecognitionClient.requestActivityTransitionUpdates(request, pendingIntent())
             .addOnSuccessListener { Log.i(TAG, "Activity Recognition registered") }
@@ -49,25 +51,48 @@ class ActivityRecognitionRegistrar @Inject constructor(
     /** PERM-002: stops the delivery - what "Auto Tracking is off" has to mean. Logged either way, since a silent failure here would leave the app listening. */
     @SuppressLint("MissingPermission")
     override fun unregister() {
+        removeLegacyRegistration()
         activityRecognitionClient.removeActivityTransitionUpdates(pendingIntent())
             .addOnSuccessListener { Log.i(TAG, "Activity Recognition unregistered") }
             .addOnFailureListener { error -> Log.w(TAG, "Activity Recognition unregistration failed", error) }
     }
 
-    private fun pendingIntent(): PendingIntent {
-        val intent = Intent(context, ActivityTransitionReceiver::class.java)
-            .setAction(ActivityTransitionReceiver.ACTION_ACTIVITY_TRANSITION)
-        return PendingIntent.getBroadcast(
-            context,
-            REQUEST_CODE,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+    private fun transitionIntent(): Intent =
+        Intent(context, ActivityTransitionReceiver::class.java).setAction(ActivityTransitionReceiver.ACTION_ACTIVITY_TRANSITION)
+
+    /**
+     * **Mutable on purpose.** Play Services delivers a transition by *adding it to the intent* as an extra when it sends
+     * this PendingIntent; an immutable one silently refuses that, so every delivery arrived as an empty broadcast and
+     * [ActivityTransitionReceiver] threw it away - Auto Tracking could never detect anything. Google's own guidance for
+     * activity recognition and geofencing on Android 12+ is `FLAG_MUTABLE`. It is safe here because the intent is explicit
+     * (it names the receiver, which is not exported), so a holder of the PendingIntent can add extras but cannot redirect it.
+     *
+     * A new request code, not just a new flag: a PendingIntent that already exists keeps the mutability it was created
+     * with, so `FLAG_MUTABLE` on code 1001 would have changed nothing on any phone that already ran an earlier build.
+     */
+    internal fun pendingIntent(): PendingIntent =
+        PendingIntent.getBroadcast(context, REQUEST_CODE, transitionIntent(), PendingIntent.FLAG_UPDATE_CURRENT or mutableFlag())
+
+    /**
+     * Earlier builds registered with an immutable PendingIntent (request code 1001), which Play Services could never deliver
+     * a result through. Removed once it is found, so it neither lingers nor delivers empty broadcasts alongside the new one.
+     */
+    @SuppressLint("MissingPermission")
+    private fun removeLegacyRegistration() {
+        val legacy = PendingIntent.getBroadcast(
+            context, LEGACY_IMMUTABLE_REQUEST_CODE, transitionIntent(), PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        ) ?: return
+        activityRecognitionClient.removeActivityTransitionUpdates(legacy)
+            .addOnCompleteListener { legacy.cancel() }
     }
 
     companion object {
         private const val TAG = "ActivityRecognitionReg"
-        private const val REQUEST_CODE = 1001
+        private const val REQUEST_CODE = 1002
+        private const val LEGACY_IMMUTABLE_REQUEST_CODE = 1001
+
+        /** `FLAG_MUTABLE` exists from Android 12; before it a PendingIntent is mutable by default. */
+        internal fun mutableFlag(): Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) PendingIntent.FLAG_MUTABLE else 0
 
         /** F0.4 §4.1's 6-type vocabulary, both directions — 12 registrations in one request. */
         internal fun buildTransitions(): List<ActivityTransition> =
