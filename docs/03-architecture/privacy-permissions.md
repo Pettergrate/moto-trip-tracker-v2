@@ -145,6 +145,16 @@ No se solicitarán sin un nuevo requisito y revisión:
 - `QUERY_ALL_PACKAGES`;
 - Advertising ID / identificadores persistentes de dispositivo.
 
+### 5.2 Permisos añadidos por librerías (revisados 2026-09-27)
+
+El manifest fusionado de la app contiene, además de la matriz anterior, tres permisos que declaran sus dependencias. Son permisos "normal" (se conceden en la instalación) y ninguno da acceso a ubicación ni a datos personales:
+
+- `ACCESS_WIFI_STATE` — MapLibre (`org.maplibre.gl:android-sdk`): saber si el Wi-Fi está encendido para su red de tiles.
+- `WAKE_LOCK` — WorkManager (`androidx.work:work-runtime`): mantener el dispositivo despierto mientras corre un trabajo en segundo plano.
+- `<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` — `androidx.core`: permiso propio, de firma, que protege receivers registrados dinámicamente.
+
+`PrivacyManifestTest` (PRV-001) fija la lista completa: un permiso nuevo, propio o de una librería, hace fallar el test hasta que se revise y se documente aquí.
+
 ---
 
 ## 6. Política de ubicación precisa

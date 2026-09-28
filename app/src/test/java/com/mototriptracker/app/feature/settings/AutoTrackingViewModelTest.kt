@@ -1,9 +1,6 @@
 package com.mototriptracker.app.feature.settings
 
-import android.content.Context
-import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.lifecycle.viewModelScope
-import androidx.test.core.app.ApplicationProvider
 import com.mototriptracker.app.core.datastore.AutoTrackingPreferences
 import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.domain.capability.AutoTrackingRequirement
@@ -13,8 +10,8 @@ import com.mototriptracker.app.tracking.activityrecognition.AutoTrackingDetectio
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.testing.FailingDataStore
 import com.mototriptracker.app.testing.FakeActivityTransitionRegistration
+import com.mototriptracker.app.testing.InMemoryDataStore
 import com.mototriptracker.app.testing.FakeCapabilityInputsProvider
-import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -61,11 +58,8 @@ class AutoTrackingViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun preferences() = AutoTrackingPreferences(
-        PreferenceDataStoreFactory.create(
-            produceFile = { File(ApplicationProvider.getApplicationContext<Context>().filesDir, "test-autotracking-vm-${System.nanoTime()}.preferences_pb") }
-        )
-    )
+    // In memory: this class tests what the view model does with the switch, not the disk (see `InMemoryDataStore`).
+    private fun preferences() = AutoTrackingPreferences(InMemoryDataStore())
 
     private val registration = FakeActivityTransitionRegistration()
 
