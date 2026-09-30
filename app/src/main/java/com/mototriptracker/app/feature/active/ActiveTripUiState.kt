@@ -1,5 +1,6 @@
 package com.mototriptracker.app.feature.active
 
+import com.mototriptracker.app.domain.GeoPoint
 import com.mototriptracker.app.domain.capability.CapabilityIssue
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.tracking.persistence.PersistenceState
@@ -16,7 +17,13 @@ sealed interface ActiveTripUiState {
         val signal: ActiveTripSignal = ActiveTripSignal.OK,
         val persistence: PersistenceState = PersistenceState.HEALTHY,
         /** PERM-003: notifications are off, so the trip notification - with Pause and Finish - is not shown. */
-        val notificationsHidden: Boolean = false
+        val notificationsHidden: Boolean = false,
+        /**
+         * MAP-003/`ADR-023`: the route covered so far, throttle-simplified ([buildLiveRoute]) - approximate-only
+         * fixes excluded (`ADR-022`), same as [distanceMeters]. `TripRouteMap` itself renders the honest "Map not
+         * available yet" placeholder while this has fewer than 2 points.
+         */
+        val routePoints: List<GeoPoint> = emptyList()
     ) : ActiveTripUiState
 }
 

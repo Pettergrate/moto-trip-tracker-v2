@@ -39,13 +39,16 @@ import com.mototriptracker.app.feature.common.rememberCapabilityFixer
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationClock
 import com.mototriptracker.app.feature.common.formatDurationCompact
+import com.mototriptracker.app.feature.map.TripRouteMap
 import com.mototriptracker.app.tracking.persistence.PersistenceLevel
 import com.mototriptracker.app.tracking.persistence.PersistenceState
 
 /**
  * F0.9 §6: TRP-01. Back only leaves this screen (UX-05) - it's wired to a
- * plain `onBack` pop, never to Pause/Finish, and MAP-001 isn't built yet so
- * the route area is an honest placeholder rather than a fake map.
+ * plain `onBack` pop, never to Pause/Finish. MAP-003/`ADR-023`: the route
+ * covered so far is drawn live via the same `TripRouteMap` a completed Trip
+ * uses - it renders its own honest "Map not available yet" placeholder while
+ * fewer than 2 points exist yet, so no separate branch is needed here.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -151,12 +154,10 @@ private fun ActiveTripContent(
                         }
                     }
 
-                    // MAP-001 isn't built yet - an honest placeholder, not a fake route.
-                    Card(modifier = Modifier.fillMaxWidth().aspectRatio(1.2f)) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Map not available yet", style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
+                    TripRouteMap(
+                        points = uiState.routePoints,
+                        modifier = Modifier.fillMaxWidth().aspectRatio(1.2f)
+                    )
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedButton(

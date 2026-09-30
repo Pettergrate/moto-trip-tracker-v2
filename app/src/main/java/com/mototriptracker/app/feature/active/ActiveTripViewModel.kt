@@ -9,6 +9,9 @@ import com.mototriptracker.app.core.database.dao.ManualPauseIntervalDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.model.CaptureStatus
+import com.mototriptracker.app.domain.GeoPoint
+import com.mototriptracker.app.domain.LiveRouteState
+import com.mototriptracker.app.domain.buildLiveRoute
 import com.mototriptracker.app.domain.liveDistanceMeters
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
@@ -73,6 +76,9 @@ class ActiveTripViewModel @Inject constructor(
             if (capture == null) {
                 flowOf(ActiveTripUiState.NoActiveTrip)
             } else {
+                // Local to this capture's own flatMapLatest invocation - a fresh capture (or losing/regaining one)
+                // gets a fresh LiveRouteState, never carrying over a previous capture's simplification progress.
+                var liveRouteState = LiveRouteState()
                 combine(
                     rawTrackPointDao.observeAllByCapture(capture.id),
                     manualPauseIntervalDao.observeOpenByCapture(capture.id),
@@ -93,6 +99,10 @@ class ActiveTripViewModel @Inject constructor(
                         )
                     ) { persistence, settings, accuracyReason -> Triple(persistence, settings, accuracyReason) }
                 ) { points, openPause, openGapReason, _, (persistence, settings, accuracyReason) ->
+                    // ADR-022: an approximate-only fix is excluded from the live route, same as liveDistanceMeters.
+                    val geoPoints = points.filter { it.isApproximateLocation != true }.map { GeoPoint(it.latitude, it.longitude) }
+                    val liveRoute = buildLiveRoute(liveRouteState, geoPoints)
+                    liveRouteState = liveRoute.nextState
                     ActiveTripUiState.Active(
                         isPaused = openPause != null,
                         distanceMeters = liveDistanceMeters(points),
@@ -106,7 +116,8 @@ class ActiveTripViewModel @Inject constructor(
                             locationServicesOff = settings.locationServicesOff
                         ),
                         persistence = persistence,
-                        notificationsHidden = settings.notificationsHidden
+                        notificationsHidden = settings.notificationsHidden,
+                        routePoints = liveRoute.displayPoints
                     )
                 }
             }

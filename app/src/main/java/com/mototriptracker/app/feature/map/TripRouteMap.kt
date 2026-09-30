@@ -105,24 +105,48 @@ fun TripRouteMap(
     }
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     val fitRequested = remember { mutableStateOf(0) }
-    // Keyed on `points` so navigating from one Trip's detail to another's
-    // (the same `remember`ed-across-recomposition pattern MAP-001 already
-    // learned about `configureRoute`) doesn't leave the previous Trip's
-    // selection visually stuck on the new route.
-    var selectedPoint by remember(points) { mutableStateOf<GeoPoint?>(null) }
+    // Keyed on the route's own first point rather than the whole `points`
+    // list: a different Trip (or Split/Trim's preview) always starts at a
+    // different point, so a genuinely different route still clears the old
+    // selection - but MAP-003's live map hands this a new `points` *instance*
+    // on every single new raw point while the first point never changes for
+    // one capture, and resetting the selection on every live fix would make
+    // tap-to-select unusable while recording.
+    var selectedPoint by remember(points.firstOrNull()) { mutableStateOf<GeoPoint?>(null) }
 
-    // Recomposition with a *different* `points` (a different Trip, or the
-    // same Trip's route arriving after the map was already ready) must
-    // redraw the route, not just the very first one - `AndroidView`'s own
-    // `factory` runs exactly once for as long as this composable's
-    // `remember`ed `mapView` survives, which real navigation testing on a
-    // real device showed outlives a single Trip Detail visit (a second
-    // Trip's screen reused the first Trip's already-drawn route until this
-    // fix, even though the header/metrics above it updated correctly).
     // SET-002: the selection marker wears the accent the person chose (it used to be the one fixed orange).
     val selectedColor = MaterialTheme.colorScheme.primary.toMapHex()
-    LaunchedEffect(points, map, selectedColor) {
-        map?.let { configureRoute(it, points, markerPoints, selectedColor) }
+
+    // Configured at most once per real map instance - MAP-003/`ADR-023`:
+    // a live Trip's route grows every few seconds, and `configureRoute`'s own
+    // `setStyle` is a full vector-style re-fetch/rebuild, far too expensive to
+    // repeat on every new point. Recomposition with a *different* `points`
+    // identity still needs this to (re-)run exactly once for a genuinely new
+    // route (a different Trip, or the same Trip's route arriving after the
+    // map was already ready - `AndroidView`'s own `factory` runs exactly once
+    // for as long as this composable's `remember`ed `mapView` survives, which
+    // real navigation testing on a real device showed outlives a single Trip
+    // Detail visit), so this is keyed on the route's first point exactly like
+    // [selectedPoint] above, not just on `map`.
+    var configuredForRoute by remember { mutableStateOf<GeoPoint?>(null) }
+    LaunchedEffect(points.firstOrNull(), map, selectedColor) {
+        val currentMap = map
+        if (currentMap != null && configuredForRoute != points.firstOrNull()) {
+            configureRoute(currentMap, points, markerPoints, selectedColor)
+            configuredForRoute = points.firstOrNull()
+        }
+    }
+
+    // Applies every subsequent `points` change to the already-configured
+    // style in place instead (the route line and the current/last position
+    // marker) - cheap, no style rebuild. Deliberately never touches the
+    // camera here, so a live-recording rider's own pan/zoom is never fought
+    // by a new fix landing; re-fitting to the whole route-so-far is still
+    // available via the existing "⤢" button.
+    LaunchedEffect(points, map, configuredForRoute) {
+        if (map != null && configuredForRoute == points.firstOrNull()) {
+            map?.let { updateRouteAndEndSources(it, points) }
+        }
     }
 
     // Screen-pixel distance, not ground distance: a real-world meter
@@ -297,6 +321,19 @@ private fun configureRoute(map: MapLibreMap, points: List<GeoPoint>, initialMark
 private fun updateSelectedPointLayer(map: MapLibreMap, selected: List<GeoPoint>) {
     val source = map.style?.getSourceAs<GeoJsonSource>(SOURCE_SELECTED) ?: return
     source.setGeoJson(FeatureCollection.fromFeatures(markerFeatures(selected)))
+}
+
+/**
+ * MAP-003/`ADR-023`: the live-map counterpart to [updateSelectedPointLayer] - updates the route line and the
+ * current/last-position marker in place on an already-configured style, with no `setStyle` rebuild. [points] must
+ * have at least 2 elements (guaranteed by [TripRouteMap]'s own guard). The start marker is deliberately left
+ * untouched: it is always `points.first()`, which never changes while one capture is recording.
+ */
+private fun updateRouteAndEndSources(map: MapLibreMap, points: List<GeoPoint>) {
+    val style = map.style ?: return
+    val lineString = LineString.fromLngLats(points.map { Point.fromLngLat(it.longitude, it.latitude) })
+    style.getSourceAs<GeoJsonSource>(SOURCE_ROUTE)?.setGeoJson(Feature.fromGeometry(lineString))
+    style.getSourceAs<GeoJsonSource>(SOURCE_END)?.setGeoJson(Feature.fromGeometry(Point.fromLngLat(points.last().longitude, points.last().latitude)))
 }
 
 private fun markerFeatures(points: List<GeoPoint>): List<Feature> =
