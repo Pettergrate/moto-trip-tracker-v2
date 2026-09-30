@@ -917,6 +917,24 @@ Verified: 301/301 unit tests unchanged (no new unit-testable surface - `TripRout
 
 **Honest gaps:** (a) No new unit-testable surface, per the established pattern for this class of change. (b) Predictive Back's actual system gesture/animation was not exercised (only the app-bar Back button and the hardware/gesture Back key) - the underlying claim (a real Nav3 destination gets it "for free") rests on Nav3's own contract, not a direct visual confirmation of the predictive-back preview animation. (c) One device, one Android version.
 
+### MOTO-001 — Motorcycle Profiles
+
+**Objective:** owner-requested (2026-09-30), "grande y completo" - build the `FR-MOTO-001/002/003` family that `FND-003` already scoped a schema placeholder for but never implemented: a real Motorcycle entity a Trip can be associated with, more than one supported, and distance aggregated per motorcycle. `ADR-024`.
+
+**Investigation:** `MotorcycleEntity` has existed since `FND-003` - `Trip.motorcycleId` optional, `SET_NULL` on delete - but has no DAO and no code path ever writes a row; every real Trip-creation call site in `TrackingSessionCoordinator` hardcodes `motorcycleId = null`. Building this for real needs: a `MotorcycleDao` (insert/update/archive, never hard-delete, matching the entity's own `isArchived` field and F0.7 §11's "archivar no debe volver ilegible el historial"), a way to associate a Trip with one, and a live distance aggregate. The real design decision: **whether association happens automatically at Start/Finish, or manually from Trip Detail.** Automatic touches `TrackingSessionCoordinator` - this codebase's most reliability-critical file, including its abrupt-death recovery path - for a cosmetic association none of the three FRs actually requires to be automatic. `ADR-024`: manual assignment from Trip Detail, `TrackingSessionCoordinator` untouched.
+
+**Feasibility verdict: possible, and the manual-assignment scope keeps it fully additive** - no change to any tracking/persistence/recovery code path, only new DAO methods, a new Settings screen, and one new `TripDao` update query.
+
+### MAP-006 — Vehicle icon and heading on the map marker
+
+**Objective:** owner-requested (2026-09-30) - the map's current-position/end marker shows a chosen vehicle icon (motorcycle/car/truck/bicycle) instead of a plain colored circle, rotated to face the direction of travel, tied to `MOTO-001`'s motorcycles where one is assigned. `ADR-024`.
+
+**Investigation:** confirmed by a real (throwaway, reverted) compile check against this project's pinned MapLibre version - `SymbolLayer` with `PropertyFactory.textField`/`textRotate` renders an emoji as a rotatable marker, no bitmap assets or new dependency needed, matching `TripRouteMap.kt`'s own existing "plain glyph, not the extended icon pack" posture for its "⤢"/"⛶" buttons. Rotation needs a bearing; rather than add a stored bearing column (a second schema surface for a presentation-only detail), it's derived from the last two points of whatever route list `TripRouteMap` already has - a small new pure `bearingDegrees(from, to)` (`domain/Bearing.kt`), honest and gap-free (fewer than two points: no rotation, not a guessed one).
+
+**Icon precedence (`ADR-024`):** a Trip's own assigned motorcycle's vehicle type, else (live map only, no Trip row exists yet during an active capture) the "currently selected" motorcycle, else a global default - so the feature works even before anyone opens a Motorcycles list.
+
+**Feasibility verdict: possible**, and it composes directly on top of `MOTO-001`'s data layer and `MAP-003`'s already-built live-route/incremental-update path.
+
 ### MET-001 — Core metric presentation
 **Objective:** finish user-facing Core metrics, quality/degraded labels and recalculation visibility.
 
