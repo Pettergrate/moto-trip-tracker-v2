@@ -63,7 +63,6 @@ internal fun ThemeBase.labelRes(): Int = if (this == ThemeBase.DARK) R.string.ba
 fun AppearanceScreen(onBack: () -> Unit, viewModel: AppearanceViewModel = hiltViewModel()) {
     val saved by viewModel.appearance.collectAsStateWithLifecycle()
     val appearance = saved ?: Appearance.Default
-    val defaultVehicleType by viewModel.defaultVehicleType.collectAsStateWithLifecycle()
 
     Scaffold(
         topBar = {
@@ -105,13 +104,6 @@ fun AppearanceScreen(onBack: () -> Unit, viewModel: AppearanceViewModel = hiltVi
                         onSelected = viewModel::onAccentSelected,
                         modifier = Modifier.padding(16.dp)
                     )
-                }
-            }
-            item {
-                SettingsSection(stringResource(R.string.motorcycle_vehicle_type_label)) {
-                    Box(modifier = Modifier.padding(16.dp)) {
-                        VehicleTypePicker(selected = defaultVehicleType, onSelected = viewModel::onDefaultVehicleTypeSelected)
-                    }
                 }
             }
             item {

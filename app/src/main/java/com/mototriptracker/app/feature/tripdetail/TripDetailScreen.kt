@@ -1,6 +1,5 @@
 package com.mototriptracker.app.feature.tripdetail
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,7 +11,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
@@ -42,9 +40,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.mototriptracker.app.core.database.entity.MotorcycleEntity
-import com.mototriptracker.app.feature.common.MotorcyclePickerDialog
-import com.mototriptracker.app.feature.common.MotorcycleRow
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationCompact
 import com.mototriptracker.app.feature.common.formatElevationM
@@ -65,13 +60,11 @@ fun TripDetailScreen(
     viewModel: TripDetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val activeMotorcycles by viewModel.activeMotorcycles.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
     LaunchedEffect(tripId) { viewModel.load(tripId) }
 
     TripDetailContent(
         uiState = uiState,
-        activeMotorcycles = activeMotorcycles,
         onBack = onBack,
         onRename = viewModel::onRename,
         onToggleFavorite = viewModel::onToggleFavorite,
@@ -87,8 +80,7 @@ fun TripDetailScreen(
         },
         onSplit = { onSplit(tripId) },
         onTrim = { onTrim(tripId) },
-        onExpandMap = { onExpandMap(tripId) },
-        onAssignMotorcycle = viewModel::onAssignMotorcycle
+        onExpandMap = { onExpandMap(tripId) }
     )
 }
 
@@ -96,7 +88,6 @@ fun TripDetailScreen(
 @Composable
 private fun TripDetailContent(
     uiState: TripDetailUiState,
-    activeMotorcycles: List<MotorcycleEntity>,
     onBack: () -> Unit,
     onRename: (String) -> Unit,
     onToggleFavorite: () -> Unit,
@@ -105,11 +96,9 @@ private fun TripDetailContent(
     onMergeWithNext: () -> Unit,
     onSplit: () -> Unit,
     onTrim: () -> Unit,
-    onExpandMap: () -> Unit,
-    onAssignMotorcycle: (String?) -> Unit
+    onExpandMap: () -> Unit
 ) {
     var showRenameDialog by remember { mutableStateOf(false) }
-    var showMotorcyclePicker by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showTrashDialog by remember { mutableStateOf(false) }
     var pendingMerge by remember { mutableStateOf<PendingMerge?>(null) }
@@ -221,12 +210,6 @@ private fun TripDetailContent(
                 ) {
                     item { HeaderSection(uiState) }
                     item {
-                        MotorcycleRow(
-                            motorcycleName = uiState.motorcycleName,
-                            onClick = { showMotorcyclePicker = true }
-                        )
-                    }
-                    item {
                         // MAP-001/ADR-021: TripRouteMap itself renders the
                         // honest "Map not available yet" placeholder when
                         // routePoints has fewer than 2 points - no separate
@@ -236,8 +219,7 @@ private fun TripDetailContent(
                                 points = uiState.routePoints,
                                 modifier = Modifier.fillMaxWidth().aspectRatio(1.5f),
                                 markerPoints = scrubbedPoint?.let { listOf(it) } ?: emptyList(),
-                                focusPoint = scrubbedPoint,
-                                vehicleType = uiState.vehicleType
+                                focusPoint = scrubbedPoint
                             )
                             // MAP-005/`ADR-023`: opens the same map full-screen for easier
                             // manipulation - a plain glyph, matching TripRouteMap's own
@@ -283,18 +265,6 @@ private fun TripDetailContent(
                 showRenameDialog = false
             },
             onDismiss = { showRenameDialog = false }
-        )
-    }
-
-    if (showMotorcyclePicker && uiState is TripDetailUiState.Loaded) {
-        MotorcyclePickerDialog(
-            motorcycles = activeMotorcycles,
-            currentMotorcycleId = uiState.motorcycleId,
-            onSelect = { motorcycleId ->
-                onAssignMotorcycle(motorcycleId)
-                showMotorcyclePicker = false
-            },
-            onDismiss = { showMotorcyclePicker = false }
         )
     }
 
@@ -459,4 +429,3 @@ private fun RenameDialog(initialName: String, onConfirm: (String) -> Unit, onDis
         }
     )
 }
-

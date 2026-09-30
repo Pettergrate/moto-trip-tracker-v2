@@ -4,15 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mototriptracker.app.core.common.Clock
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
-import com.mototriptracker.app.core.database.dao.MotorcycleDao
 import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.TripDao
 import com.mototriptracker.app.core.database.dao.TripCaptureDao
 import com.mototriptracker.app.core.database.dao.TripPartDao
-import com.mototriptracker.app.core.datastore.MapMarkerPreferences
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.database.dao.TripStatisticsDao
-import com.mototriptracker.app.core.database.entity.MotorcycleEntity
 import com.mototriptracker.app.domain.GeoPoint
 import com.mototriptracker.app.domain.simplifyRoute
 import com.mototriptracker.app.feature.common.buildDataQualityNote
@@ -53,15 +50,9 @@ class TripDetailViewModel @Inject constructor(
     private val tripPartDao: TripPartDao,
     private val tripCaptureDao: TripCaptureDao,
     private val diagnosticEventDao: DiagnosticEventDao,
-    private val motorcycleDao: MotorcycleDao,
-    private val mapMarkerPreferences: MapMarkerPreferences,
     private val tripMerger: TripMerger,
     private val clock: Clock
 ) : ViewModel() {
-
-    /** MOTO-001: Trip Detail's own "assign motorcycle" picker - active motorcycles only, never archived (an already-assigned archived one still shows correctly via [uiState] itself, just isn't offered as a *new* choice). */
-    val activeMotorcycles: StateFlow<List<MotorcycleEntity>> = motorcycleDao.observeActive()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
 
     private val tripIdFlow = MutableStateFlow<String?>(null)
 
@@ -85,63 +76,52 @@ class TripDetailViewModel @Inject constructor(
         if (tripId == null) {
             flowOf(TripDetailUiState.Loading)
         } else {
-            // MOTO-001/`ADR-024`: `trip` (and specifically which motorcycle it's assigned to) is resolved first, so
-            // the motorcycle lookup below can react to *which* motorcycle it is, not just whether one exists.
-            tripDao.observeById(tripId).flatMapLatest { trip ->
+            combine(
+                tripDao.observeById(tripId),
+                tripStatisticsDao.observeByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION),
+                processedTrackPointDao.observeAllByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION),
+                adjacentTripsFlow,
+                // combine has typed overloads only up to five flows: the two recording flags travel together.
+                combine(interruptedFlow, dataLossFlow) { interrupted, dataLoss -> interrupted to dataLoss }
+            ) { trip, statistics, processedPoints, adjacent, (interrupted, dataLoss) ->
                 if (trip == null) {
-                    flowOf(TripDetailUiState.NotFound)
+                    TripDetailUiState.NotFound
                 } else {
-                    combine(
-                        tripStatisticsDao.observeByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION),
-                        processedTrackPointDao.observeAllByTripAndVersion(tripId, TripProcessingWorker.CURRENT_PROCESSING_VERSION),
-                        adjacentTripsFlow,
-                        // combine has typed overloads only up to five flows: the two recording flags and the
-                        // global default vehicle type travel together.
-                        combine(interruptedFlow, dataLossFlow, mapMarkerPreferences.defaultVehicleType) { interrupted, dataLoss, defaultVehicleType ->
-                            Triple(interrupted, dataLoss, defaultVehicleType)
-                        },
-                        trip.motorcycleId?.let { motorcycleDao.observeById(it) } ?: flowOf(null)
-                    ) { statistics, processedPoints, adjacent, (interrupted, dataLoss, defaultVehicleType), motorcycle ->
-                        // MAP-001: simplified once here, not per-recomposition -
-                        // ADR-006 still holds, this never becomes a source of
-                        // truth for distance/speed, only what the map draws.
-                        val routePoints = simplifyRoute(processedPoints.map { GeoPoint(it.latitude, it.longitude) })
-                        TripDetailUiState.Loaded(
-                            tripId = trip.id,
-                            displayName = trip.name ?: fallbackTripName(trip.createdAt),
-                            isUserNamed = trip.name != null,
-                            dateTimeLabel = formatDateTime(trip.createdAt),
-                            isFavorite = trip.isFavorite,
-                            distanceMeters = statistics?.distanceM,
-                            totalDurationMs = statistics?.totalDurationMs,
-                            movingDurationMs = statistics?.movingDurationMs,
-                            stoppedDurationMs = statistics?.stoppedDurationMs,
-                            manualPauseDurationMs = statistics?.manualPauseDurationMs,
-                            maxSpeedMps = statistics?.maxSpeedMps,
-                            averageSpeedMps = statistics?.averageSpeedMps,
-                            averageMovingSpeedMps = statistics?.averageMovingSpeedMps,
-                            minElevationM = statistics?.minElevationM,
-                            maxElevationM = statistics?.maxElevationM,
-                            startElevationM = statistics?.startElevationM,
-                            endElevationM = statistics?.endElevationM,
-                            ascentM = statistics?.ascentM,
-                            descentM = statistics?.descentM,
-                            calculatedAtLabel = statistics?.let { formatDateTime(it.computedAt) },
-                            qualityNote = statistics?.let { buildDataQualityNote(it.rejectedPointCount, it.gapCount) },
-                            routePoints = routePoints,
-                            previousTripCandidate = adjacent.previous,
-                            nextTripCandidate = adjacent.next,
-                            canSplit = processedPoints.size >= 2 * TripSplitter.MIN_POINTS_PER_HALF,
-                            canTrim = processedPoints.size >= TripBoundaryEditor.MIN_POINTS + 1,
-                            isCalculating = statistics == null,
-                            wasInterrupted = interrupted,
-                            hadDataLoss = dataLoss,
-                            motorcycleId = motorcycle?.id,
-                            motorcycleName = motorcycle?.name,
-                            // MAP-006/`ADR-024`'s icon precedence: the assigned motorcycle's own type, else the global default.
-                            vehicleType = motorcycle?.vehicleType ?: defaultVehicleType
-                        )
-                    }
+                    // MAP-001: simplified once here, not per-recomposition -
+                    // ADR-006 still holds, this never becomes a source of
+                    // truth for distance/speed, only what the map draws.
+                    val routePoints = simplifyRoute(processedPoints.map { GeoPoint(it.latitude, it.longitude) })
+                    TripDetailUiState.Loaded(
+                        tripId = trip.id,
+                        displayName = trip.name ?: fallbackTripName(trip.createdAt),
+                        isUserNamed = trip.name != null,
+                        dateTimeLabel = formatDateTime(trip.createdAt),
+                        isFavorite = trip.isFavorite,
+                        distanceMeters = statistics?.distanceM,
+                        totalDurationMs = statistics?.totalDurationMs,
+                        movingDurationMs = statistics?.movingDurationMs,
+                        stoppedDurationMs = statistics?.stoppedDurationMs,
+                        manualPauseDurationMs = statistics?.manualPauseDurationMs,
+                        maxSpeedMps = statistics?.maxSpeedMps,
+                        averageSpeedMps = statistics?.averageSpeedMps,
+                        averageMovingSpeedMps = statistics?.averageMovingSpeedMps,
+                        minElevationM = statistics?.minElevationM,
+                        maxElevationM = statistics?.maxElevationM,
+                        startElevationM = statistics?.startElevationM,
+                        endElevationM = statistics?.endElevationM,
+                        ascentM = statistics?.ascentM,
+                        descentM = statistics?.descentM,
+                        calculatedAtLabel = statistics?.let { formatDateTime(it.computedAt) },
+                        qualityNote = statistics?.let { buildDataQualityNote(it.rejectedPointCount, it.gapCount) },
+                        routePoints = routePoints,
+                        previousTripCandidate = adjacent.previous,
+                        nextTripCandidate = adjacent.next,
+                        canSplit = processedPoints.size >= 2 * TripSplitter.MIN_POINTS_PER_HALF,
+                        canTrim = processedPoints.size >= TripBoundaryEditor.MIN_POINTS + 1,
+                        isCalculating = statistics == null,
+                        wasInterrupted = interrupted,
+                        hadDataLoss = dataLoss
+                    )
                 }
             }
         }
@@ -175,14 +155,6 @@ class TripDetailViewModel @Inject constructor(
         val trimmed = newName.trim()
         viewModelScope.launch {
             tripDao.rename(tripId, trimmed.ifEmpty { null }, clock.wallClockMillis())
-        }
-    }
-
-    /** MOTO-001/`ADR-024`: manual assignment only - `null` un-assigns. Never touches `TrackingSessionCoordinator` (see the ADR's own reasoning). */
-    fun onAssignMotorcycle(motorcycleId: String?) {
-        val tripId = tripIdFlow.value ?: return
-        viewModelScope.launch {
-            tripDao.assignMotorcycle(tripId, motorcycleId, clock.wallClockMillis())
         }
     }
 

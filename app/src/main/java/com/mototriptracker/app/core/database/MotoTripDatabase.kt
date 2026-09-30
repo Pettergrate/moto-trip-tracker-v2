@@ -7,7 +7,6 @@ import com.mototriptracker.app.core.database.dao.CaptureEventDao
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
 import com.mototriptracker.app.core.database.dao.LocationGapDao
 import com.mototriptracker.app.core.database.dao.ManualPauseIntervalDao
-import com.mototriptracker.app.core.database.dao.MotorcycleDao
 import com.mototriptracker.app.core.database.dao.PointAssessmentDao
 import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
@@ -49,6 +48,11 @@ import com.mototriptracker.app.core.database.entity.TripTagEntity
  * (real user history already exists by now).
  * **v3 - REC-005 follow-up**: `raw_track_point` gains the nullable `isApproximateLocation` marker; see
  * [MIGRATION_2_3].
+ * **v4 - MOTO-001**: `motorcycle` gains `vehicleType` (see [MIGRATION_3_4]). The Motorcycle-profiles feature built
+ * on top of it was later removed (owner-requested - "no fue bien implementado") after already reaching a real
+ * device, so this column exists on-disk and must stay: reverting the schema on a device that already migrated to
+ * v4 would leave Room expecting a version it can't get back to. `MotorcycleEntity` stays in `entities` below,
+ * unused - no DAO exposes it any more.
  *
  * TripCaptureDao, DiagnosticEventDao, RawTrackPointDao (TRK-002),
  * CaptureEventDao/TripDao/TripPartDao (TRK-004) and
@@ -97,5 +101,4 @@ abstract class MotoTripDatabase : RoomDatabase() {
     abstract fun locationGapDao(): LocationGapDao
     abstract fun tripStatisticsDao(): TripStatisticsDao
     abstract fun manualPauseIntervalDao(): ManualPauseIntervalDao
-    abstract fun motorcycleDao(): MotorcycleDao
 }

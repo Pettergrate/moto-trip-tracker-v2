@@ -33,11 +33,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.mototriptracker.app.core.database.entity.MotorcycleEntity
 import com.mototriptracker.app.domain.capability.CapabilityIssue
 import com.mototriptracker.app.feature.common.CapabilityIssueCopy
-import com.mototriptracker.app.feature.common.MotorcyclePickerDialog
-import com.mototriptracker.app.feature.common.MotorcycleRow
 import com.mototriptracker.app.feature.common.rememberCapabilityFixer
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationClock
@@ -60,7 +57,6 @@ fun ActiveTripScreen(
     viewModel: ActiveTripViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val activeMotorcycles by viewModel.activeMotorcycles.collectAsStateWithLifecycle()
     val fixIssue = rememberCapabilityFixer(onAfterAttempt = {})
 
     // The only ways here are "an active trip exists" (Home's CTA) or a
@@ -73,13 +69,11 @@ fun ActiveTripScreen(
 
     ActiveTripContent(
         uiState = uiState,
-        activeMotorcycles = activeMotorcycles,
         onBack = onBack,
         onPauseClick = viewModel::onPauseClick,
         onResumeClick = viewModel::onResumeClick,
         onFixIssue = fixIssue,
-        onFinishConfirmed = viewModel::onFinishConfirmed,
-        onSelectMotorcycle = viewModel::onSelectMotorcycle
+        onFinishConfirmed = viewModel::onFinishConfirmed
     )
 }
 
@@ -87,16 +81,13 @@ fun ActiveTripScreen(
 @Composable
 private fun ActiveTripContent(
     uiState: ActiveTripUiState,
-    activeMotorcycles: List<MotorcycleEntity>,
     onFixIssue: (CapabilityIssue) -> Unit,
     onBack: () -> Unit,
     onPauseClick: () -> Unit,
     onResumeClick: () -> Unit,
-    onFinishConfirmed: () -> Unit,
-    onSelectMotorcycle: (String?) -> Unit
+    onFinishConfirmed: () -> Unit
 ) {
     var showFinishConfirmation by remember { mutableStateOf(false) }
-    var showMotorcyclePicker by remember { mutableStateOf(false) }
     val isPaused = (uiState as? ActiveTripUiState.Active)?.isPaused == true
 
     Scaffold(
@@ -163,12 +154,9 @@ private fun ActiveTripContent(
                         }
                     }
 
-                    MotorcycleRow(motorcycleName = uiState.motorcycleName, onClick = { showMotorcyclePicker = true })
-
                     TripRouteMap(
                         points = uiState.routePoints,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(1.2f),
-                        vehicleType = uiState.vehicleType
+                        modifier = Modifier.fillMaxWidth().aspectRatio(1.2f)
                     )
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -205,18 +193,6 @@ private fun ActiveTripContent(
             dismissButton = {
                 TextButton(onClick = { showFinishConfirmation = false }) { Text("Back") }
             }
-        )
-    }
-
-    if (showMotorcyclePicker) {
-        MotorcyclePickerDialog(
-            motorcycles = activeMotorcycles,
-            currentMotorcycleId = (uiState as? ActiveTripUiState.Active)?.motorcycleId,
-            onSelect = {
-                onSelectMotorcycle(it)
-                showMotorcyclePicker = false
-            },
-            onDismiss = { showMotorcyclePicker = false }
         )
     }
 }

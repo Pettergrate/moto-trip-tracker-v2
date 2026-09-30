@@ -1,6 +1,5 @@
 package com.mototriptracker.app.feature.tripdetail
 
-import com.mototriptracker.app.core.model.VehicleType
 import com.mototriptracker.app.domain.GeoPoint
 
 /** EDT-001: a chronologically-adjacent COMPLETED Trip Trip Detail can offer to merge with - enough to label the menu item and the confirmation dialog without a second DB round-trip. */
@@ -50,11 +49,6 @@ sealed interface TripDetailUiState {
         /** REC-003/F0.10 §22: one of this Trip's captures was sealed as interrupted (device restart, force stop...) - the route may be incomplete. */
         val wasInterrupted: Boolean = false,
         /** REC-006/F0.10 §14.2: a `DATA_LOSS_DETECTED` was recorded for one of this Trip captures - points could not be saved (full storage, a database failure) and are gone. */
-        val hadDataLoss: Boolean = false,
-        /** MOTO-001/`ADR-024`: `null` when this Trip has no motorcycle assigned - manual assignment only, never automatic. */
-        val motorcycleId: String? = null,
-        val motorcycleName: String? = null,
-        /** MAP-006/`ADR-024`: [motorcycleId]'s own vehicle type if assigned, else the global default - what the map draws at the current-position marker. */
-        val vehicleType: VehicleType = VehicleType.MOTORCYCLE
+        val hadDataLoss: Boolean = false
     ) : TripDetailUiState
 }

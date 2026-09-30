@@ -12,7 +12,6 @@ import com.mototriptracker.app.core.model.LocationProfileVersion
 import com.mototriptracker.app.core.model.StartSource
 import com.mototriptracker.app.testing.FakeCapabilityInputsProvider
 import com.mototriptracker.app.testing.TestDatabaseFactory
-import com.mototriptracker.app.testing.TestMapMarkerPreferences
 import com.mototriptracker.app.tracking.persistence.PersistenceHealthBus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -62,8 +61,7 @@ class ActiveTripNotificationNoticeTest {
         viewModel = ActiveTripViewModel(
             context = ApplicationProvider.getApplicationContext(), tripCaptureDao = db.tripCaptureDao(),
             rawTrackPointDao = db.rawTrackPointDao(), manualPauseIntervalDao = db.manualPauseIntervalDao(),
-            diagnosticEventDao = db.diagnosticEventDao(), motorcycleDao = db.motorcycleDao(),
-            mapMarkerPreferences = TestMapMarkerPreferences.create(), persistenceHealthBus = PersistenceHealthBus(),
+            diagnosticEventDao = db.diagnosticEventDao(), persistenceHealthBus = PersistenceHealthBus(),
             capabilityInputsProvider = provider, clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 2_000_000_000L)
         )
     }

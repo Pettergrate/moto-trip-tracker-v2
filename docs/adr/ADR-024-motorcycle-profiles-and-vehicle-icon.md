@@ -1,6 +1,6 @@
 # ADR-024 — Motorcycle Profiles (`FR-MOTO-001/002/003`), and a per-vehicle map icon with heading
 
-**Status:** Accepted
+**Status:** Superseded - the feature was removed the same day (owner: "no fue bien implementado, eliminemoslo"); see the Removal section at the end.
 **Date:** 2026-09-30
 **Project:** Moto Trip Tracker V2
 **Phase:** Phase 1 — `MOTO-001`/`MAP-006` (owner-requested)
@@ -65,6 +65,19 @@ Point 4's "currently selected" motorcycle preference was built (`MapMarkerPrefer
 **Fix:** `ActiveTripScreen` gained the same "Motorcycle" row Trip Detail already has (now via the shared `MotorcyclePickerDialog`), wired to a new `ActiveTripViewModel.onSelectMotorcycle`. `ActiveTripUiState.Active` and the view model's internal `HealthBundle` gained `motorcycleId`/`motorcycleName` alongside the existing `vehicleType`, so the row can show what's currently selected the same way Trip Detail's own row does. Confirmed live: selecting "Enduro" (🏍️) on a real in-progress trip correctly changed the live map's moving marker from the global default to Enduro's own icon.
 
 This is a different mistake from the first correction (that one was "the rendering path silently does nothing"; this one is "the selection path was never built"), and a reminder that this ADR's own icon-precedence tiers (point 5) are only as real as the UI that sets each one - the Trip-assignment tier had a picker from the start, the live-map tier didn't.
+
+## Removal (2026-09-30, owner: "este cambio no fue bien implementado por lo que mejor eliminemoslo")
+
+After the two corrections above, the owner judged the feature not well implemented and asked to remove it rather than keep fixing it forward. Removed:
+
+- `MotorcyclesScreen`/`MotorcyclesViewModel`, `MotorcycleDao`, `MapMarkerPreferences`, `domain/Bearing.kt`, `feature/common/MotorcyclePicker.kt`, and all their tests - deleted outright.
+- Every UI/`ViewModel` touch point this ADR added - Trip Detail's and Active Trip's "Motorcycle" rows and pickers, `TripRouteMap`'s vehicle-icon `SymbolLayer` (back to a plain `CircleLayer`, its pre-`MAP-006` shape), Settings' "Vehicles" section, Appearance's vehicle-type picker, `Destination.Motorcycles`/its nav wiring, `TripDao.assignMotorcycle` - reverted to each file's exact pre-task state (`git checkout` against `f180c77`, the commit right before this ADR's own first investigation).
+
+**What deliberately did NOT revert, and why:** the schema. `MotorcycleEntity.vehicleType`, `MIGRATION_3_4`, `MotoTripDatabase`'s version 4, and `app/schemas/.../4.json` all stay exactly as this ADR left them. The real test phone already ran this migration before the owner asked for the removal - rolling the compiled schema back to version 3 would leave Room facing an on-disk database at a version the app no longer declares, with no downgrade migration and this project's own standing rule against `fallbackToDestructiveMigration()`. The column and the (now unreferenced) `MotorcycleEntity`/`motorcycle` table stay in place, inert - harmless dead schema, not a live feature. `VehicleType` (`core/model/Taxonomies.kt`) stays too, for the same reason: it's what that column's values deserialize through.
+
+Verified: 801/801 unit tests (down from 809 - exactly the two files' own tests: `BearingTest`'s 6, `TripDetailViewModelTest`'s 2 motorcycle-specific cases), twice from clean. **On the phone**: fresh launch with the real, already-v4 database - no crash, all real trip history intact; Settings no longer shows "Vehicles" or the Appearance vehicle-type picker; the sept 26 Trip's map marker is back to the plain red circle, no "Motorcycle" row.
+
+If this is revisited later, it is a new task, not a reopening of this one - this ADR's own precedence design (point 5) and its two corrections are the record of what was tried and why it didn't land, not a spec to resume from.
 
 ## Traceability
 

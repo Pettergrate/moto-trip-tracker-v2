@@ -78,31 +78,6 @@
     <string name="accent_violet">Violet</string>
     <string name="accent_pink">Pink</string>
 
-    <!-- MOTO-001/`ADR-024`: Motorcycle Profiles - name/make/model/year, vehicle type, archive, distance per motorcycle. -->
-    <string name="settings_section_vehicles">Vehicles</string>
-    <string name="settings_motorcycles_title">Motorcycles</string>
-    <string name="settings_motorcycles_subtitle_empty">No motorcycles yet</string>
-    <string name="settings_motorcycles_subtitle_count">%1$d motorcycle(s)</string>
-    <string name="motorcycles_title">Motorcycles</string>
-    <string name="motorcycles_add">Add motorcycle</string>
-    <string name="motorcycles_section_active">Active</string>
-    <string name="motorcycles_section_archived">Archived</string>
-    <string name="motorcycles_empty">No motorcycles yet. Add one to track distance per vehicle and show its icon on the map.</string>
-    <string name="motorcycle_name_label">Name</string>
-    <string name="motorcycle_make_label">Make (optional)</string>
-    <string name="motorcycle_model_label">Model (optional)</string>
-    <string name="motorcycle_year_label">Year (optional)</string>
-    <string name="motorcycle_vehicle_type_label">Vehicle type</string>
-    <string name="motorcycle_archive">Archive</string>
-    <string name="motorcycle_unarchive">Unarchive</string>
-    <string name="motorcycle_save">Save</string>
-    <string name="motorcycle_cancel">Cancel</string>
-    <string name="motorcycle_distance_value">%1$s total</string>
-    <string name="vehicle_type_motorcycle">Motorcycle 🏍️</string>
-    <string name="vehicle_type_car">Car 🚗</string>
-    <string name="vehicle_type_truck">Truck 🚚</string>
-    <string name="vehicle_type_bicycle">Bicycle 🚲</string>
-
     <!-- SET-02 / ux-navigation.md 15: Auto Tracking - the switch, what state it is in and what it needs. -->
     <string name="settings_section_tracking">Tracking</string>
     <string name="autotracking_title">Auto Tracking</string>

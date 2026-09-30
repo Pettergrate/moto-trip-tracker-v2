@@ -44,14 +44,11 @@ fun SettingsScreen(
     onOpenDebug: () -> Unit,
     onOpenAppearance: () -> Unit,
     onOpenAutoTracking: () -> Unit,
-    onOpenMotorcycles: () -> Unit,
     appearanceViewModel: AppearanceViewModel = hiltViewModel(),
-    autoTrackingViewModel: AutoTrackingViewModel = hiltViewModel(),
-    motorcyclesViewModel: MotorcyclesViewModel = hiltViewModel()
+    autoTrackingViewModel: AutoTrackingViewModel = hiltViewModel()
 ) {
     val appearance by appearanceViewModel.appearance.collectAsStateWithLifecycle()
     val autoTracking by autoTrackingViewModel.uiState.collectAsStateWithLifecycle()
-    val motorcycles by motorcyclesViewModel.motorcycles.collectAsStateWithLifecycle()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -76,21 +73,6 @@ fun SettingsScreen(
                         title = stringResource(R.string.autotracking_title),
                         subtitle = autoTracking?.let { stringResource(it.state.shortLabelRes()) },
                         onClick = onOpenAutoTracking,
-                        showDivider = false
-                    )
-                }
-            }
-            item {
-                SettingsSection(stringResource(R.string.settings_section_vehicles)) {
-                    SettingsRow(
-                        icon = Icons.Filled.TwoWheeler,
-                        title = stringResource(R.string.settings_motorcycles_title),
-                        subtitle = if (motorcycles.isEmpty()) {
-                            stringResource(R.string.settings_motorcycles_subtitle_empty)
-                        } else {
-                            stringResource(R.string.settings_motorcycles_subtitle_count, motorcycles.size)
-                        },
-                        onClick = onOpenMotorcycles,
                         showDivider = false
                     )
                 }

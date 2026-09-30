@@ -10,7 +10,6 @@ import com.mototriptracker.app.core.database.dao.CaptureEventDao
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
 import com.mototriptracker.app.core.database.dao.LocationGapDao
 import com.mototriptracker.app.core.database.dao.ManualPauseIntervalDao
-import com.mototriptracker.app.core.database.dao.MotorcycleDao
 import com.mototriptracker.app.core.database.dao.PointAssessmentDao
 import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
@@ -99,7 +98,4 @@ object DatabaseModule {
 
     @Provides
     fun provideTripLineageLinkDao(database: MotoTripDatabase): TripLineageLinkDao = database.tripLineageLinkDao()
-
-    @Provides
-    fun provideMotorcycleDao(database: MotoTripDatabase): MotorcycleDao = database.motorcycleDao()
 }

@@ -69,8 +69,7 @@ fun TripMapScreen(
                         points = state.routePoints,
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         markerPoints = scrubbedPoint?.let { listOf(it) } ?: emptyList(),
-                        focusPoint = scrubbedPoint,
-                        vehicleType = state.vehicleType
+                        focusPoint = scrubbedPoint
                     )
                     if (state.routePoints.size >= 2) {
                         Column(modifier = Modifier.padding(top = 16.dp)) {

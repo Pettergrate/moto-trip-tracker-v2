@@ -9,7 +9,6 @@ import com.mototriptracker.app.core.theme.AccentColor
 import com.mototriptracker.app.core.theme.Appearance
 import com.mototriptracker.app.core.theme.ThemeBase
 import com.mototriptracker.app.testing.FailingDataStore
-import com.mototriptracker.app.testing.TestMapMarkerPreferences
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -51,8 +50,7 @@ class AppearanceViewModelTest {
         )
     )
 
-    private fun create(preferences: AppearancePreferences) =
-        AppearanceViewModel(preferences, TestMapMarkerPreferences.create()).also { viewModel = it }
+    private fun create(preferences: AppearancePreferences) = AppearanceViewModel(preferences).also { viewModel = it }
 
     private suspend fun AppearanceViewModel.settled(): Appearance = withTimeout(5_000) { appearance.first { it != null } }!!
 

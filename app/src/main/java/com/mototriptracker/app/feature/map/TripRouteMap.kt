@@ -1,9 +1,6 @@
 package com.mototriptracker.app.feature.map
 
-import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,8 +32,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.mototriptracker.app.domain.GeoPoint
-import com.mototriptracker.app.domain.bearingDegrees
-import com.mototriptracker.app.core.model.VehicleType
 import kotlin.math.hypot
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
@@ -50,7 +45,6 @@ import org.maplibre.android.style.layers.CircleLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.layers.PropertyFactory
-import org.maplibre.android.style.layers.SymbolLayer
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
@@ -90,20 +84,13 @@ import org.maplibre.geojson.Point
  * toward that point without changing zoom or touching `fitCameraToRoute`'s own
  * whole-route framing - the scrubber's own "follow the dragged point" need, additive
  * and `null` by default so no existing caller's behavior changes.
- *
- * MAP-006/`ADR-024`: the end/current-position marker is [vehicleType]'s own emoji glyph (a `SymbolLayer`, not a
- * bitmap - no new dependency, matching this file's own "⤢"/"⛶" plain-glyph posture) instead of a plain circle,
- * rotated to face the direction of travel - derived from [points]' own last two entries (`bearingDegrees`), never a
- * stored bearing column. `VehicleType` is a plain `core.model` enum (no Android dependency, `ADR-013`), so accepting
- * it directly does not widen `ADR-019`'s map-isolation boundary - only `org.maplibre.*` types stay confined here.
  */
 @Composable
 fun TripRouteMap(
     points: List<GeoPoint>,
     modifier: Modifier = Modifier,
     markerPoints: List<GeoPoint> = emptyList(),
-    focusPoint: GeoPoint? = null,
-    vehicleType: VehicleType = VehicleType.MOTORCYCLE
+    focusPoint: GeoPoint? = null
 ) {
     if (points.size < 2) {
         MapUnavailablePlaceholder(modifier)
@@ -130,11 +117,6 @@ fun TripRouteMap(
     // SET-002: the selection marker wears the accent the person chose (it used to be the one fixed orange).
     val selectedColor = MaterialTheme.colorScheme.primary.toMapHex()
 
-    // MAP-006: the vehicle icon is rasterized to a `Bitmap` at this density up front - the vector style's own
-    // glyph server (verified live: an emoji `textField` renders as nothing at all, silently, no error) doesn't
-    // carry emoji glyphs, so `iconImage` off Android's own emoji-capable text rendering is what actually shows up.
-    val density = LocalDensity.current.density
-
     // Configured at most once per real map instance - MAP-003/`ADR-023`:
     // a live Trip's route grows every few seconds, and `configureRoute`'s own
     // `setStyle` is a full vector-style re-fetch/rebuild, far too expensive to
@@ -150,22 +132,20 @@ fun TripRouteMap(
     LaunchedEffect(points.firstOrNull(), map, selectedColor) {
         val currentMap = map
         if (currentMap != null && configuredForRoute != points.firstOrNull()) {
-            configureRoute(currentMap, points, markerPoints, selectedColor, vehicleType, density)
+            configureRoute(currentMap, points, markerPoints, selectedColor)
             configuredForRoute = points.firstOrNull()
         }
     }
 
     // Applies every subsequent `points` change to the already-configured
     // style in place instead (the route line and the current/last position
-    // marker, including MAP-006's heading) - cheap, no style rebuild.
-    // Deliberately never touches the camera here, so a live-recording
-    // rider's own pan/zoom is never fought by a new fix landing; re-fitting
-    // to the whole route-so-far is still available via the existing "⤢"
-    // button. Also re-runs on a `vehicleType` change alone (e.g. the person
-    // picks a different icon while looking at a static completed Trip).
-    LaunchedEffect(points, map, configuredForRoute, vehicleType) {
+    // marker) - cheap, no style rebuild. Deliberately never touches the
+    // camera here, so a live-recording rider's own pan/zoom is never fought
+    // by a new fix landing; re-fitting to the whole route-so-far is still
+    // available via the existing "⤢" button.
+    LaunchedEffect(points, map, configuredForRoute) {
         if (map != null && configuredForRoute == points.firstOrNull()) {
-            map?.let { updateRouteAndEndSources(it, points, vehicleType) }
+            map?.let { updateRouteAndEndSources(it, points) }
         }
     }
 
@@ -283,25 +263,20 @@ private fun SelectedPointCard(point: GeoPoint, onDismiss: () -> Unit, modifier: 
     }
 }
 
-private fun configureRoute(map: MapLibreMap, points: List<GeoPoint>, initialMarkers: List<GeoPoint>, selectedColor: String, vehicleType: VehicleType, density: Float) {
+private fun configureRoute(map: MapLibreMap, points: List<GeoPoint>, initialMarkers: List<GeoPoint>, selectedColor: String) {
     val lineString = LineString.fromLngLats(points.map { Point.fromLngLat(it.longitude, it.latitude) })
     val routeSource = GeoJsonSource(SOURCE_ROUTE, Feature.fromGeometry(lineString))
     val startSource = GeoJsonSource(SOURCE_START, Feature.fromGeometry(Point.fromLngLat(points.first().longitude, points.first().latitude)))
     val endSource = GeoJsonSource(SOURCE_END, Feature.fromGeometry(Point.fromLngLat(points.last().longitude, points.last().latitude)))
     val selectedSource = GeoJsonSource(SOURCE_SELECTED, FeatureCollection.fromFeatures(markerFeatures(initialMarkers)))
 
-    val styleBuilder = Style.Builder()
-        .fromUri(OPENFREEMAP_LIBERTY_STYLE_URL)
-        .withSource(routeSource)
-        .withSource(startSource)
-        .withSource(endSource)
-        .withSource(selectedSource)
-    // MAP-006: all four vehicle icons are registered up front, not just the current one - a later `vehicleType`
-    // change (`updateRouteAndEndSources`) then only needs to swap `iconImage`'s id, no image re-registration.
-    VehicleType.entries.forEach { type -> styleBuilder.withImage(vehicleIconId(type), vehicleIconBitmap(type, density)) }
-
     map.setStyle(
-        styleBuilder
+        Style.Builder()
+            .fromUri(OPENFREEMAP_LIBERTY_STYLE_URL)
+            .withSource(routeSource)
+            .withSource(startSource)
+            .withSource(endSource)
+            .withSource(selectedSource)
             .withLayer(
                 LineLayer(LAYER_ROUTE, SOURCE_ROUTE).withProperties(
                     PropertyFactory.lineColor(ROUTE_COLOR),
@@ -318,18 +293,12 @@ private fun configureRoute(map: MapLibreMap, points: List<GeoPoint>, initialMark
                     PropertyFactory.circleStrokeWidth(2f)
                 )
             )
-            // MAP-006/`ADR-024`: the vehicle icon, not a plain circle - `iconImage`/`iconRotate` on a `SymbolLayer`,
-            // the bitmap rasterized from the emoji at [vehicleIconBitmap] (verified live: a `textField` emoji
-            // renders as nothing at all - the vector style's own glyph server carries no emoji glyphs).
-            // `iconAllowOverlap`/`iconIgnorePlacement`: this marker must never be hidden by the vector style's own
-            // place-name labels crowding the same spot.
             .withLayer(
-                SymbolLayer(LAYER_END, SOURCE_END).withProperties(
-                    PropertyFactory.iconImage(vehicleIconId(vehicleType)),
-                    PropertyFactory.iconRotate(endBearing(points)),
-                    PropertyFactory.iconRotationAlignment(Property.ICON_ROTATION_ALIGNMENT_MAP),
-                    PropertyFactory.iconAllowOverlap(true),
-                    PropertyFactory.iconIgnorePlacement(true)
+                CircleLayer(LAYER_END, SOURCE_END).withProperties(
+                    PropertyFactory.circleRadius(7f),
+                    PropertyFactory.circleColor(END_COLOR),
+                    PropertyFactory.circleStrokeColor(Color.WHITE),
+                    PropertyFactory.circleStrokeWidth(2f)
                 )
             )
             // Added last so it draws above start/end when a selected point
@@ -348,58 +317,6 @@ private fun configureRoute(map: MapLibreMap, points: List<GeoPoint>, initialMark
     }
 }
 
-/** MAP-006: `points` always has ≥2 elements by the time this is reachable ([TripRouteMap]'s own guard). */
-private fun endBearing(points: List<GeoPoint>): Float =
-    bearingDegrees(points[points.size - 2], points.last()).toFloat()
-
-private fun vehicleEmoji(vehicleType: VehicleType): String = when (vehicleType) {
-    VehicleType.MOTORCYCLE -> "🏍️"
-    VehicleType.CAR -> "🚗"
-    VehicleType.TRUCK -> "🚚"
-    VehicleType.BICYCLE -> "🚲"
-    // Unreachable: vehicleIconBitmap short-circuits NONE to dotBitmap before this is ever called.
-    VehicleType.NONE -> ""
-}
-
-private fun vehicleIconId(vehicleType: VehicleType): String = "vehicle-icon-${vehicleType.name}"
-
-/**
- * MAP-006: rasterizes [vehicleType]'s emoji to a `Bitmap` via Android's own (emoji-capable) text rendering, for use
- * as a `SymbolLayer`'s `iconImage`. Not a checked-in asset and no new dependency - still this file's own plain-glyph
- * posture, just rendered through a path that actually shows up on a real device (the vector style's glyph server,
- * used by `textField`, has no emoji glyphs to serve - confirmed live: it rendered nothing, silently, no error).
- *
- * Owner-requested opt-out: [VehicleType.NONE] renders as [dotBitmap] - the plain colored circle the marker used
- * before `MAP-006` - instead of an emoji.
- */
-private fun vehicleIconBitmap(vehicleType: VehicleType, density: Float): Bitmap {
-    if (vehicleType == VehicleType.NONE) return dotBitmap(density)
-    val emoji = vehicleEmoji(vehicleType)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = END_ICON_SIZE_DP * density }
-    val metrics = paint.fontMetrics
-    val width = paint.measureText(emoji).toInt().coerceAtLeast(1)
-    val height = (metrics.descent - metrics.ascent).toInt().coerceAtLeast(1)
-    return Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).apply {
-        Canvas(this).drawText(emoji, 0f, -metrics.ascent, paint)
-    }
-}
-
-/** Same visual shape as [LAYER_START]'s `CircleLayer` (radius/stroke), just [END_COLOR] instead of [START_COLOR] - the original end marker, before `MAP-006` replaced it with a vehicle icon by default. */
-private fun dotBitmap(density: Float): Bitmap {
-    val radiusPx = DOT_RADIUS_DP * density
-    val strokePx = DOT_STROKE_DP * density
-    val size = ((radiusPx + strokePx) * 2f).toInt().coerceAtLeast(1)
-    val center = size / 2f
-    val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor(END_COLOR); style = Paint.Style.FILL }
-    val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = strokePx }
-    return Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
-        Canvas(this).apply {
-            drawCircle(center, center, radiusPx, fillPaint)
-            drawCircle(center, center, radiusPx, strokePaint)
-        }
-    }
-}
-
 /** MAP-002: an empty [FeatureCollection] clears the marker - `GeoJsonSource.setGeoJson` on an already-configured style is enough, no full `configureRoute` re-run needed for a selection change. */
 private fun updateSelectedPointLayer(map: MapLibreMap, selected: List<GeoPoint>) {
     val source = map.style?.getSourceAs<GeoJsonSource>(SOURCE_SELECTED) ?: return
@@ -411,19 +328,12 @@ private fun updateSelectedPointLayer(map: MapLibreMap, selected: List<GeoPoint>)
  * current/last-position marker in place on an already-configured style, with no `setStyle` rebuild. [points] must
  * have at least 2 elements (guaranteed by [TripRouteMap]'s own guard). The start marker is deliberately left
  * untouched: it is always `points.first()`, which never changes while one capture is recording.
- *
- * MAP-006/`ADR-024`: also re-points the icon (a `vehicleType` change alone) and re-computes heading from the two
- * latest points - `setProperties` on an already-configured layer, still no `setStyle` rebuild.
  */
-private fun updateRouteAndEndSources(map: MapLibreMap, points: List<GeoPoint>, vehicleType: VehicleType) {
+private fun updateRouteAndEndSources(map: MapLibreMap, points: List<GeoPoint>) {
     val style = map.style ?: return
     val lineString = LineString.fromLngLats(points.map { Point.fromLngLat(it.longitude, it.latitude) })
     style.getSourceAs<GeoJsonSource>(SOURCE_ROUTE)?.setGeoJson(Feature.fromGeometry(lineString))
     style.getSourceAs<GeoJsonSource>(SOURCE_END)?.setGeoJson(Feature.fromGeometry(Point.fromLngLat(points.last().longitude, points.last().latitude)))
-    (style.getLayer(LAYER_END) as? SymbolLayer)?.setProperties(
-        PropertyFactory.iconImage(vehicleIconId(vehicleType)),
-        PropertyFactory.iconRotate(endBearing(points))
-    )
 }
 
 private fun markerFeatures(points: List<GeoPoint>): List<Feature> =
@@ -473,8 +383,3 @@ private const val END_COLOR = "#F44336"
 private const val SELECTION_TOLERANCE_DP = 40
 /** MAP-004: short enough to keep up with a dragged slider, still visibly eased rather than an instant jump-cut. */
 private const val FOCUS_EASE_DURATION_MS = 200
-/** MAP-006: the rasterized vehicle icon's logical size - noticeably larger than the plain circle it replaces, needs to read as an icon, not a tiny dot. */
-private const val END_ICON_SIZE_DP = 32f
-/** MAP-006: [VehicleType.NONE]'s dot - same radius/stroke as [LAYER_START]'s `CircleLayer` (`circleRadius(7f)`/`circleStrokeWidth(2f)`). */
-private const val DOT_RADIUS_DP = 7f
-private const val DOT_STROKE_DP = 2f
