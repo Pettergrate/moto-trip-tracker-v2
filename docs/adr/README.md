@@ -59,6 +59,7 @@ An ADR exists so a future implementation agent can answer five questions without
 | ADR-020 | Solo una TripCapture ACTIVE a la vez | Accepted | `ADR-020-single-active-capture-invariant.md` |
 | ADR-021 | Proveedor de mapa: MapLibre Native + OpenFreeMap | Accepted | `ADR-021-map-provider-maplibre-openfreemap.md` |
 | ADR-022 | Fixes tomados solo con ubicación aproximada: se conservan, no se usan como ruta | Accepted | `ADR-022-approximate-location-fixes-kept-not-used-as-route.md` |
+| ADR-023 | Mapa en vivo durante Trip activo + scrubber de ruta en Trip Detail | Accepted | `ADR-023-live-active-trip-map-and-route-scrubber.md` |
 
 ---
 

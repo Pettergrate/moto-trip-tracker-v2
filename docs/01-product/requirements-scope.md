@@ -503,6 +503,18 @@ Failure to load online map content MUST NOT invalidate or stop Trip recording.
 
 ---
 
+### FR-MAP-007 — Live route during active recording
+**Priority:** P2 research-gated  
+While a Trip is being recorded (`CaptureStatus.ACTIVE`), the route covered so far SHOULD be viewable on a map, updating as new points are recorded. This MUST degrade to the existing "Map not available yet" placeholder (`UX-15`) on any failure, exactly like the completed-Trip map (`FR-MAP-001`/`FR-MAP-006`), and MUST NOT touch capture, persistence or statistics (`ADR-019`). Investigated 2026-09-30, see `ADR-022` and backlog `MAP-003`.
+
+---
+
+### FR-MAP-008 — Route position scrubber
+**Priority:** P2 research-gated  
+Trip Detail SHOULD let the person drag a control along a bar representing the route/timeline and see the corresponding point highlighted on the map. This is a read-only preview control - it MUST NOT create, modify or persist any data (unlike `FR-EDT-003`/`FR-EDT-005`'s Split/Boundary-correction sliders, which share its interaction pattern but write a new Trip). Investigated 2026-09-30, see `ADR-022` and backlog `MAP-004`.
+
+---
+
 ## 4.9 Routes
 
 ### FR-RTE-001 — Reusable Route entity

@@ -873,6 +873,22 @@ Tap-to-select finds the nearest of `TripRouteMap`'s already-simplified `points` 
 
 Verified: 301/301 unit tests unchanged (no new unit-testable surface - `TripRouteMap` needs a real GL-capable environment, same as every other on-device-only claim in `MAP-001`'s own report) and confirmed live on the Honor DNY-NX9 against three of today's real pilot rides: tap-to-select works reliably post-fix, the info card and "×" dismiss both work, and selection correctly resets (doesn't leak) when navigating from one Trip's detail to a different, much shorter one.
 
+### MAP-003 — Live map during an active Trip
+
+**Objective:** owner-requested (2026-09-30) - while a Trip is being recorded, show the route covered so far on the map instead of the permanent "Map not available yet" placeholder `ActiveTripScreen` shows today, degrading to that same placeholder on any failure. `FR-MAP-007`, `ADR-023`.
+
+**Status: Investigation done (2026-09-30); implementation not yet started.** `ADR-021` (`MAP-001`) named this exact gap as deliberately out of its own scope, reasoning that "no Processed Track exists yet for an in-progress capture." Re-investigating the actual code found that framing only half right: it's true of the *processed* track, but **raw points are already live** - `ActiveTripViewModel` already subscribes to `rawTrackPointDao.observeAllByCapture(capture.id)`, a `Flow` that already re-emits as each point is recorded, just never mapped to a map. The real blockers are narrower and all bounded: `TripRouteMap.configureRoute` rebuilds the whole MapLibre style on every `points` change (fine for a completed Trip's one-time load, expensive if fed a list that grows every few seconds), `RouteSimplifier.simplifyRoute` is a full non-incremental recompute, and real on-device render cost has never been measured (`PERF-003`'s own stated gap - no device was available when it was written). `ADR-023` is the full investigation and the decision: approved, with a concrete technical approach (an incremental `TripRouteMap` update path instead of a full rebuild per emission, a throttled simplifier call, `isApproximateLocation`-excluded points per `ADR-022`, unchanged placeholder fallback).
+
+**Feasibility verdict: possible, real but bounded engineering work, no fundamental blocker found.** The one genuinely open question - actual GPU render cost on real hardware at recording cadence - is answerable now that a device is available, and is exactly what implementation's own on-device verification will measure before calling this done.
+
+### MAP-004 — Route position scrubber on Trip Detail
+
+**Objective:** owner-requested (2026-09-30) - a control the person drags along a bar representing the route/timeline, highlighting the corresponding point on Trip Detail's map. Read-only: never creates, edits or persists anything. `FR-MAP-008`, `ADR-023`.
+
+**Status: Investigation done (2026-09-30); implementation not yet started.** The mechanism this needs already exists and already ships, just for a different purpose: `TripRouteMap`'s `markerPoints` parameter puts the map under external control, and `TrimScreen`/`SplitScreen` already drive it from a slider today (`RangeSlider`/slider → view-model index → `markerPoints`) - a single-thumb, read-only scrubber over Trip Detail's already-loaded, already-simplified `routePoints` is the same interaction shape, minus the write-a-new-Trip step Split/Trim have. The one missing piece is camera follow: today only `fitCameraToRoute()` (whole-route bounds) exists, no "ease camera to point N." `ADR-023` covers the decision (a new, additive `focusPoint` parameter on `TripRouteMap`).
+
+**Feasibility verdict: possible, the most directly buildable of the two features investigated tonight** - no live-data concerns (Trip Detail's data is static, already fully processed), no unmeasured device-render questions beyond what `MAP-001`/`MAP-002` already exercise, and a proven interaction precedent already in the codebase.
+
 ### MET-001 — Core metric presentation
 **Objective:** finish user-facing Core metrics, quality/degraded labels and recalculation visibility.
 

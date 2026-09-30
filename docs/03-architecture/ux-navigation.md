@@ -601,6 +601,10 @@ Contrato UX del componente mapa:
 
 Core no necesita navegación turn-by-turn ni mapa 3D.
 
+**Investigado 2026-09-30 (`ADR-022`), dos extensiones al contrato de mapa:**
+- **Mapa en vivo durante Trip activo:** mientras se graba, la ruta recorrida hasta ese momento debe poder verse en el mapa, actualizándose según llegan puntos nuevos - degradando al placeholder existente (`UX-15`) ante cualquier fallo, igual que el mapa de un Trip completado. No debe tocar captura, persistencia ni estadísticas.
+- **Scrubber de posición en Trip Detail:** un control que se arrastra a lo largo de una barra que representa la ruta/línea de tiempo, resaltando en el mapa el punto correspondiente - de solo lectura, no crea ni modifica ningún dato, a diferencia de los sliders de Split/Trim que sí escriben un Trip nuevo.
+
 ---
 
 ## 20. Accesibilidad y ergonomía
@@ -785,6 +789,8 @@ Core no necesita navegación turn-by-turn ni mapa 3D.
 | UX-16 | Navegación/Back es compatible con Predictive Back; no se secuestra Back en la Activity raíz. | Must |
 | UX-17 | Reabrir la app durante un Trip activo muestra estado consistente con persistencia. | Must |
 | UX-18 | Font scaling y TalkBack no ocultan Pause/Resume/Finish ni hacen ambiguos sus estados. | Must |
+| UX-19 | El mapa en vivo durante un Trip activo degrada al placeholder existente ante cualquier fallo, sin afectar captura/persistencia/estadísticas. | Should |
+| UX-20 | El scrubber de Trip Detail es de solo lectura: arrastrarlo nunca crea, modifica ni persiste un Trip. | Should |
 
 ---
 
