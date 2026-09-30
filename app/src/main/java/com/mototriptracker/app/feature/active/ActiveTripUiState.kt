@@ -25,7 +25,10 @@ sealed interface ActiveTripUiState {
          * available yet" placeholder while this has fewer than 2 points.
          */
         val routePoints: List<GeoPoint> = emptyList(),
-        /** MAP-006/`ADR-024`: the "currently selected" motorcycle's own type, else the global default - no `TripEntity` exists yet to assign one to. */
+        /** MAP-006/`ADR-024`: which motorcycle is "currently selected" for the live map - `null` when none is (the global default is drawn instead). Independent of any Trip's own assignment, since no `TripEntity` exists yet. */
+        val motorcycleId: String? = null,
+        val motorcycleName: String? = null,
+        /** MAP-006/`ADR-024`: [motorcycleId]'s own vehicle type if selected, else the global default. */
         val vehicleType: VehicleType = VehicleType.MOTORCYCLE
     ) : ActiveTripUiState
 }
