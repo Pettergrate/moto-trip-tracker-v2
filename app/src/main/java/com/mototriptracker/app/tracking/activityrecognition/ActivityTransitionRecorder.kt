@@ -87,11 +87,56 @@ class ActivityTransitionRecorder @Inject constructor(
         )
     }
 
+    /**
+     * PERM-002 / AUTO-001 follow-up (2026-09-29): found on the owner's phone - Play Services correctly delivered and
+     * classified two `IN_VEHICLE` `ENTER` transitions matching a real commute, both recorded, and still no trip started.
+     * Nothing crashed; the decision that follows an `IN_VEHICLE ENTER` simply had no record of what it decided or why.
+     * Every one of [ActivityTransitionReceiver.maybeStartAutoDetection]'s branches now leaves one, category `DETECTOR`
+     * (the same category `TrackingSessionCoordinator` uses for an auto-started/finished capture) - so the *next* one has
+     * an answer instead of a silence to interpret.
+     */
+    suspend fun recordAutoDetectionDecision(eventType: String, reasonCode: String, stateAfter: String? = null) {
+        diagnosticEventDao.insert(
+            DiagnosticEventEntity(
+                eventId = idGenerator.newId(),
+                occurredAt = clock.wallClockMillis(),
+                elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                category = DiagnosticCategory.DETECTOR,
+                eventType = eventType,
+                severity = DiagnosticSeverity.INFO,
+                source = "ActivityTransitionReceiver",
+                captureId = null,
+                tripId = null,
+                correlationId = null,
+                stateBefore = null,
+                stateAfter = stateAfter,
+                reasonCode = reasonCode,
+                metadata = emptyMap(),
+                appVersion = BuildConfig.VERSION_NAME,
+                schemaVersion = 1,
+                detectorVersion = DetectorVersion(0),
+                locationProfileVersion = LocationProfileVersion(0),
+                processingVersion = ProcessingVersion(0)
+            )
+        )
+    }
+
     companion object {
         /** The vocabulary of `reasonCode` on an `ACTIVITY_BROADCAST_EMPTY` event. */
         const val EMPTY_NO_RESULT = "NO_RESULT"
         const val EMPTY_UNREADABLE = "UNREADABLE"
         const val EMPTY_NO_EVENTS = "NO_EVENTS"
         const val EMPTY_NO_USABLE_EVENTS = "NO_USABLE_EVENTS"
+
+        /** The vocabulary of `eventType`/`reasonCode` on an auto-detection decision. */
+        const val EVENT_AUTO_DETECTION_STARTED = "AUTO_DETECTION_STARTED"
+        const val EVENT_AUTO_DETECTION_NOT_STARTED = "AUTO_DETECTION_NOT_STARTED"
+        const val REASON_IN_VEHICLE_ENTER = "IN_VEHICLE_ENTER"
+        const val REASON_CAPTURE_ALREADY_ACTIVE = "CAPTURE_ALREADY_ACTIVE"
+        /** [stateAfter] carries the actual [com.mototriptracker.app.core.model.CapabilityMode] the resolver returned. */
+        const val REASON_CAPABILITY_NOT_ELIGIBLE = "CAPABILITY_NOT_ELIGIBLE"
+        const val REASON_POST_FINISH_SUPPRESSED = "POST_FINISH_SUPPRESSED"
+        /** The one branch that is not a silent early return: `startForegroundService` itself refused or threw. */
+        const val REASON_SERVICE_START_FAILED = "SERVICE_START_FAILED"
     }
 }

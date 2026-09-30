@@ -181,19 +181,50 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
      */
     @VisibleForTesting
     internal suspend fun maybeStartAutoDetection(context: Context, samples: List<ActivityTransitionSample>) {
-        val enteringVehicle = samples.any {
+        // The *specific* sample matters now, not just whether one exists: it is handed to the service so the
+        // candidate engine sees it even on a cold start (see TrackingForegroundService.seedFromIntent's KDoc).
+        val enteringVehicleSample = samples.firstOrNull {
             it.activityType == ActivityType.IN_VEHICLE && it.transitionType == TransitionType.ENTER
+        } ?: return
+
+        // Every branch below decides out loud from here on (found on the phone: two real commutes, both classified
+        // correctly, and no record of what this decided or why - see `ActivityTransitionRecorder.recordAutoDetectionDecision`).
+        if (tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) != null) {
+            logDecision(ActivityTransitionRecorder.EVENT_AUTO_DETECTION_NOT_STARTED, ActivityTransitionRecorder.REASON_CAPTURE_ALREADY_ACTIVE)
+            return
         }
-        if (!enteringVehicle) return
-        if (tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) != null) return
 
         val mode = CapabilityResolver.resolve(capabilityInputsProvider.current())
-        if (mode != CapabilityMode.FULL_AUTO && mode != CapabilityMode.ASSISTED_AUTO) return
+        if (mode != CapabilityMode.FULL_AUTO && mode != CapabilityMode.ASSISTED_AUTO) {
+            logDecision(ActivityTransitionRecorder.EVENT_AUTO_DETECTION_NOT_STARTED, ActivityTransitionRecorder.REASON_CAPABILITY_NOT_ELIGIBLE, stateAfter = mode.name)
+            return
+        }
 
         val lastEnded = tripCaptureDao.findMostRecentlyEnded()
-        if (PostFinishSuppression.isSuppressed(lastEnded?.endElapsedRealtimeNanos, clock.elapsedRealtimeNanos())) return
+        if (PostFinishSuppression.isSuppressed(lastEnded?.endElapsedRealtimeNanos, clock.elapsedRealtimeNanos())) {
+            logDecision(ActivityTransitionRecorder.EVENT_AUTO_DETECTION_NOT_STARTED, ActivityTransitionRecorder.REASON_POST_FINISH_SUPPRESSED)
+            return
+        }
 
-        context.startForegroundService(TrackingForegroundService.createAutoDetectIntent(context))
+        try {
+            context.startForegroundService(TrackingForegroundService.createAutoDetectIntent(context, enteringVehicleSample))
+            logDecision(ActivityTransitionRecorder.EVENT_AUTO_DETECTION_STARTED, ActivityTransitionRecorder.REASON_IN_VEHICLE_ENTER)
+        } catch (error: Exception) {
+            // Android 12+'s background-start restrictions can refuse a foreground service started from a broadcast
+            // receiver's context (`ForegroundServiceStartNotAllowedException`); this is the one branch that is not a
+            // quiet, deliberate early return, so the exception's class name is worth keeping (no message text: it could
+            // echo call arguments this codebase does not otherwise log).
+            Log.w(TAG, "startForegroundService for auto-detection failed", error)
+            logDecision(ActivityTransitionRecorder.EVENT_AUTO_DETECTION_NOT_STARTED, ActivityTransitionRecorder.REASON_SERVICE_START_FAILED, stateAfter = error::class.simpleName)
+        }
+    }
+
+    private suspend fun logDecision(eventType: String, reasonCode: String, stateAfter: String? = null) {
+        try {
+            recorder.recordAutoDetectionDecision(eventType, reasonCode, stateAfter)
+        } catch (error: Exception) {
+            Log.w(TAG, "Failed to record an auto-detection decision ($eventType/$reasonCode)", error)
+        }
     }
 
     private fun ActivityTransitionEvent.toSampleOrNull(nowWallMillis: Long, nowElapsedRealtimeNanos: Long): ActivityTransitionSample? {

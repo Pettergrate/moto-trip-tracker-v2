@@ -12,6 +12,9 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
 import com.mototriptracker.app.core.common.DispatcherProvider
+import com.mototriptracker.app.core.model.ActivityTransitionSample
+import com.mototriptracker.app.core.model.ActivityType
+import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.core.notification.TrackingNotificationController
 import com.mototriptracker.app.core.notification.TrackingNotificationController.Companion.NOTIFICATION_ID
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
@@ -29,6 +32,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -219,7 +223,7 @@ class TrackingForegroundService : Service() {
                 resumedCaptureId(result)?.let { processState.update { s -> s.copy(paused = false) } }
                 resumedCaptureId(result)?.let { refreshNotification(it) }
             }
-            ACTION_AUTO_DETECT -> ensureAutoDetection()
+            ACTION_AUTO_DETECT -> ensureAutoDetection(seedFromIntent(intent))
             else -> serviceScope.launch { rehydrateOrStop() }
         }
 
@@ -410,14 +414,34 @@ class TrackingForegroundService : Service() {
      * capture is confirmed (re-calling `startForeground` with the same ID
      * updates the existing notification in place).
      */
-    private fun ensureAutoDetection(): Job {
+    /**
+     * [seed] is the very transition that made [intent] arrive - see [seedFromIntent] for why the receiver hands it
+     * over explicitly instead of trusting the bus alone for it. It only matters for a genuinely fresh subscription: if
+     * one is already running (`autoDetectionJob` active), [seed] is simply not needed - a live subscriber has been
+     * getting everything from the bus already.
+     */
+    private fun ensureAutoDetection(seed: ActivityTransitionSample?): Job {
         autoDetectionJob?.takeIf { it.isActive }?.let { return it }
-        return serviceScope.launch { runAutoDetectionAndStop() }.also { autoDetectionJob = it }
+        return serviceScope.launch { runAutoDetectionAndStop(seed) }.also { autoDetectionJob = it }
     }
 
-    private suspend fun runAutoDetectionAndStop() {
+    private suspend fun runAutoDetectionAndStop(seed: ActivityTransitionSample?) {
+        // Found on the phone (2026-09-29): activityTransitionBus is a SharedFlow with no replay, so an emission with no
+        // subscriber yet present is lost for good - and the receiver always emits *before* this subscription can exist
+        // (starting the foreground service that leads here is asynchronous). The one sample that triggered this run in
+        // the first place was therefore the one sample the candidate engine could never see, on every cold start -
+        // proven by a dedicated SharedFlow probe, not just inferred. Prepending it here, once, closes that gap without
+        // touching the bus's semantics for anything already subscribed.
+        val activityEvents = if (seed != null) {
+            kotlinx.coroutines.flow.flow {
+                emit(seed)
+                emitAll(activityTransitionBus.events)
+            }
+        } else {
+            activityTransitionBus.events
+        }
         val outcome = coordinator.runAutoDetection(
-            activityEvents = activityTransitionBus.events,
+            activityEvents = activityEvents,
             onCaptureStarted = { captureId ->
                 processState.update { it.copy(recording = true) }
                 startForeground(NOTIFICATION_ID, notificationController.buildTrackingNotification())
@@ -469,7 +493,48 @@ class TrackingForegroundService : Service() {
         fun createResumeIntent(context: Context): Intent =
             Intent(context, TrackingForegroundService::class.java).setAction(ACTION_RESUME)
 
-        fun createAutoDetectIntent(context: Context): Intent =
-            Intent(context, TrackingForegroundService::class.java).setAction(ACTION_AUTO_DETECT)
+        /** [sample] is the specific transition that made the receiver decide to start - see [seedFromIntent]'s KDoc. */
+        fun createAutoDetectIntent(context: Context, sample: ActivityTransitionSample): Intent =
+            Intent(context, TrackingForegroundService::class.java)
+                .setAction(ACTION_AUTO_DETECT)
+                .putExtra(EXTRA_SEED_ACTIVITY_TYPE, sample.activityType.name)
+                .putExtra(EXTRA_SEED_TRANSITION_TYPE, sample.transitionType.name)
+                .putExtra(EXTRA_SEED_ELAPSED_REALTIME_NANOS, sample.elapsedRealtimeNanos)
+                .putExtra(EXTRA_SEED_WALL_TIME_EPOCH_MS, sample.wallTimeEpochMs)
+                .putExtra(EXTRA_SEED_SOURCE, sample.source)
+                .apply { sample.confidence?.let { putExtra(EXTRA_SEED_CONFIDENCE, it) } }
+
+        /**
+         * Rebuilds the sample [createAutoDetectIntent] encoded, or `null` if it is missing or malformed - an
+         * `ACTION_AUTO_DETECT` from anywhere else (there is only one real caller, but never trust an `Intent` blindly)
+         * then simply falls back to subscribing the bus with no seed, exactly as before this fix.
+         */
+        @VisibleForTesting
+        internal fun seedFromIntent(intent: Intent?): ActivityTransitionSample? {
+            if (intent == null) return null
+            val activityType = intent.getStringExtra(EXTRA_SEED_ACTIVITY_TYPE)?.let { name ->
+                runCatching { ActivityType.valueOf(name) }.getOrNull()
+            } ?: return null
+            val transitionType = intent.getStringExtra(EXTRA_SEED_TRANSITION_TYPE)?.let { name ->
+                runCatching { TransitionType.valueOf(name) }.getOrNull()
+            } ?: return null
+            val source = intent.getStringExtra(EXTRA_SEED_SOURCE) ?: return null
+            if (!intent.hasExtra(EXTRA_SEED_ELAPSED_REALTIME_NANOS) || !intent.hasExtra(EXTRA_SEED_WALL_TIME_EPOCH_MS)) return null
+            return ActivityTransitionSample(
+                activityType = activityType,
+                transitionType = transitionType,
+                elapsedRealtimeNanos = intent.getLongExtra(EXTRA_SEED_ELAPSED_REALTIME_NANOS, 0L),
+                wallTimeEpochMs = intent.getLongExtra(EXTRA_SEED_WALL_TIME_EPOCH_MS, 0L),
+                source = source,
+                confidence = if (intent.hasExtra(EXTRA_SEED_CONFIDENCE)) intent.getIntExtra(EXTRA_SEED_CONFIDENCE, 0) else null
+            )
+        }
+
+        private const val EXTRA_SEED_ACTIVITY_TYPE = "com.mototriptracker.app.extra.SEED_ACTIVITY_TYPE"
+        private const val EXTRA_SEED_TRANSITION_TYPE = "com.mototriptracker.app.extra.SEED_TRANSITION_TYPE"
+        private const val EXTRA_SEED_ELAPSED_REALTIME_NANOS = "com.mototriptracker.app.extra.SEED_ELAPSED_REALTIME_NANOS"
+        private const val EXTRA_SEED_WALL_TIME_EPOCH_MS = "com.mototriptracker.app.extra.SEED_WALL_TIME_EPOCH_MS"
+        private const val EXTRA_SEED_SOURCE = "com.mototriptracker.app.extra.SEED_SOURCE"
+        private const val EXTRA_SEED_CONFIDENCE = "com.mototriptracker.app.extra.SEED_CONFIDENCE"
     }
 }

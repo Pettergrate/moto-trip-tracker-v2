@@ -12,6 +12,7 @@ import com.mototriptracker.app.core.model.ActivityTransitionSample
 import com.mototriptracker.app.core.model.ActivityType
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.DetectorVersion
+import com.mototriptracker.app.core.model.DiagnosticCategory
 import com.mototriptracker.app.core.model.EndSource
 import com.mototriptracker.app.core.model.LocationProfileVersion
 import com.mototriptracker.app.core.model.StartSource
@@ -120,10 +121,16 @@ class ActivityTransitionReceiverTest {
         this.capabilityInputsProvider = capabilityInputsProvider
     }
 
-    private fun nextStartedServiceAction(): String? {
+    private fun nextStartedService(): Intent? {
         val application = ApplicationProvider.getApplicationContext<Application>()
-        return shadowOf(application).peekNextStartedService()?.action
+        return shadowOf(application).peekNextStartedService()
     }
+
+    private fun nextStartedServiceAction(): String? = nextStartedService()?.action
+
+    /** The last `DETECTOR` diagnostic in the database, or `null` if none was recorded - what `maybeStartAutoDetection` decided and why. */
+    private suspend fun latestDecision() =
+        db.diagnosticEventDao().findAll().filter { it.category == DiagnosticCategory.DETECTOR }.maxByOrNull { it.occurredAt }
 
     @Test
     fun startsAutoDetectionOnAnInVehicleEnterWithNoActiveCaptureAndFullAutoCapability() = runTest {
@@ -135,6 +142,28 @@ class ActivityTransitionReceiverTest {
         )
 
         assertEquals(TrackingForegroundService.ACTION_AUTO_DETECT, nextStartedServiceAction())
+        val decision = latestDecision()
+        assertEquals(ActivityTransitionRecorder.EVENT_AUTO_DETECTION_STARTED, decision?.eventType)
+        assertEquals(ActivityTransitionRecorder.REASON_IN_VEHICLE_ENTER, decision?.reasonCode)
+    }
+
+    /**
+     * Found on the phone: the transition that starts the service is the one `ActivityTransitionBus` cannot be trusted
+     * to deliver (no replay, and the service's own subscription cannot exist yet at this point) - see
+     * `ActivityTransitionBusProbeTest`. The receiver hands it over as the intent's seed instead.
+     */
+    @Test
+    fun theTriggeringSampleTravelsAsTheServiceIntentsSeed() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+
+        receiver.maybeStartAutoDetection(
+            ApplicationProvider.getApplicationContext(),
+            listOf(sample(ActivityType.IN_VEHICLE, TransitionType.ENTER))
+        )
+
+        val seed = TrackingForegroundService.seedFromIntent(nextStartedService())
+        assertEquals(ActivityType.IN_VEHICLE, seed?.activityType)
+        assertEquals(TransitionType.ENTER, seed?.transitionType)
     }
 
     @Test
@@ -147,6 +176,28 @@ class ActivityTransitionReceiverTest {
         )
 
         assertNull(nextStartedServiceAction())
+        val decision = latestDecision()
+        assertEquals(ActivityTransitionRecorder.EVENT_AUTO_DETECTION_NOT_STARTED, decision?.eventType)
+        assertEquals(ActivityTransitionRecorder.REASON_CAPABILITY_NOT_ELIGIBLE, decision?.reasonCode)
+        // FakeCapabilityProvider.cleanInstall() also has preciseLocationGranted=false, which the resolver checks first: LOCATION_DEGRADED.
+        assertEquals("LOCATION_DEGRADED", decision?.stateAfter)
+    }
+
+    /** Found on the phone: this exact branch, silent, is why two real commutes recorded transitions but started nothing. */
+    @Test
+    fun whenLocationIsDegradedTheDecisionRecordsTheRealModeNotJustManual() = runTest {
+        val inputs = FakeCapabilityProvider.fullAuto().copy(locationServicesEnabled = false)
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(inputs))
+
+        receiver.maybeStartAutoDetection(
+            ApplicationProvider.getApplicationContext(),
+            listOf(sample(ActivityType.IN_VEHICLE, TransitionType.ENTER))
+        )
+
+        assertNull(nextStartedServiceAction())
+        val decision = latestDecision()
+        assertEquals(ActivityTransitionRecorder.REASON_CAPABILITY_NOT_ELIGIBLE, decision?.reasonCode)
+        assertEquals("LOCATION_DEGRADED", decision?.stateAfter)
     }
 
     @Test
@@ -160,6 +211,23 @@ class ActivityTransitionReceiverTest {
         )
 
         assertNull(nextStartedServiceAction())
+        assertEquals(ActivityTransitionRecorder.REASON_CAPTURE_ALREADY_ACTIVE, latestDecision()?.reasonCode)
+    }
+
+    /** The receiver must never crash on this - Android 12+'s background-start limits can refuse the service outright. */
+    @Test
+    fun aRefusedServiceStartIsRecordedRatherThanCrashingTheReceiver() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+        val refusingContext = object : android.content.ContextWrapper(ApplicationProvider.getApplicationContext()) {
+            override fun startForegroundService(service: Intent) = throw IllegalStateException("background start not allowed")
+        }
+
+        receiver.maybeStartAutoDetection(refusingContext, listOf(sample(ActivityType.IN_VEHICLE, TransitionType.ENTER)))
+
+        val decision = latestDecision()
+        assertEquals(ActivityTransitionRecorder.EVENT_AUTO_DETECTION_NOT_STARTED, decision?.eventType)
+        assertEquals(ActivityTransitionRecorder.REASON_SERVICE_START_FAILED, decision?.reasonCode)
+        assertEquals("IllegalStateException", decision?.stateAfter)
     }
 
     @Test
@@ -214,6 +282,7 @@ class ActivityTransitionReceiverTest {
             "a rider still moving right after Finish must not immediately get a new candidate Trip",
             nextStartedServiceAction()
         )
+        assertEquals(ActivityTransitionRecorder.REASON_POST_FINISH_SUPPRESSED, latestDecision()?.reasonCode)
     }
 
     @Test

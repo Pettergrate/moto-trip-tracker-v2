@@ -111,7 +111,11 @@ class PrivacyManifestTest {
         val ours = setOf("com.mototriptracker.app.MainActivity", "com.mototriptracker.app.tracking.receiver.BootReceiver")
         val libraries = protectedLibraryComponents.keys + if (BuildConfig.DEBUG) setOf(DEBUG_ONLY_PREVIEW_ACTIVITY) else emptySet()
 
-        assertEquals("Exported components changed; each one is reachable by other apps and needs a reason.", ours + libraries, exported)
+        // DET-001 follow-up: exported, debug-build-only, and harmless - it only ever synthesizes an activity transition
+        // sample, the same thing Google's own broadcast carries (see its own KDoc). Absent from a release build.
+        val debugOnly = setOf("com.mototriptracker.app.debug.DebugActivityTransitionTrigger")
+
+        assertEquals("Exported components changed; each one is reachable by other apps and needs a reason.", ours + libraries + debugOnly, exported)
     }
 
     /**

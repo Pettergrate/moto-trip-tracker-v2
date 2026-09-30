@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Debug-only manifest additions, merged on top of `src/main/AndroidManifest.xml` for debug builds only (Gradle's
+    standard per-source-set merging) - none of this exists in a release build.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!--
+          DET-001 follow-up: lets `adb shell am broadcast` simulate a real Activity Recognition transition, so the
+          decision that follows one can be exercised on the one device available without waiting for a real ride. See
+          `DebugActivityTransitionTrigger`'s own KDoc for the exact command. Exported (harmless: it only ever
+          synthesizes a transition sample, the same thing Google's own broadcast carries) so shell can reach it directly
+          without needing signature-level access.
+        -->
+        <receiver
+            android:name=".debug.DebugActivityTransitionTrigger"
+            android:exported="true" />
+    </application>
+</manifest>

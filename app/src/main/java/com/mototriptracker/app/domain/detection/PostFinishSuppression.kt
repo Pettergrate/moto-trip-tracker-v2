@@ -22,6 +22,12 @@ object PostFinishSuppression {
         profile: PostFinishSuppressionProfile = PostFinishSuppressionProfile()
     ): Boolean {
         if (lastCaptureEndedAtElapsedRealtimeNanos == null) return false
+        // REL-INV-010: elapsedRealtime is monotonic only within one boot session - a reboot resets it to (near) zero, so a
+        // stored value from before it reads as later than "now". Found on the phone: with no reboot since, this stayed
+        // silently correct; after any reboot following the last Finish, the subtraction went negative - always less than
+        // the window - and suppressed every automatic start from then on, with no way out except a manual Finish (which
+        // never goes through this check at all). A reboot is exactly what makes "still moving right after Finish" moot.
+        if (nowElapsedRealtimeNanos < lastCaptureEndedAtElapsedRealtimeNanos) return false
         val elapsedMs = (nowElapsedRealtimeNanos - lastCaptureEndedAtElapsedRealtimeNanos) / 1_000_000
         return elapsedMs < profile.suppressionDurationMs
     }

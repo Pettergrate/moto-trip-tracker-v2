@@ -2,6 +2,7 @@ package com.mototriptracker.app.tracking.service
 
 import android.app.Notification
 import android.app.NotificationManager
+import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import com.mototriptracker.app.core.common.AndroidDispatcherProvider
 import com.mototriptracker.app.core.common.FakeClock
@@ -425,8 +426,12 @@ class TrackingForegroundServiceTest {
     fun actionAutoDetectShowsAValidatingNotificationInsteadOfTheTrackingOne() = runBlocking {
         val controller = buildServiceController()
 
-        controller.withIntent(TrackingForegroundService.createAutoDetectIntent(ApplicationProvider.getApplicationContext()))
-            .startCommand(0, 0)
+        controller.withIntent(
+            TrackingForegroundService.createAutoDetectIntent(
+                ApplicationProvider.getApplicationContext(),
+                activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L)
+            )
+        ).startCommand(0, 0)
 
         val manager = ApplicationProvider.getApplicationContext<android.content.Context>()
             .getSystemService(NotificationManager::class.java)
@@ -446,13 +451,18 @@ class TrackingForegroundServiceTest {
     @Test
     fun aSecondAutoDetectCommandWhileOneIsRunningReusesTheSameJob() = runBlocking {
         val controller = buildServiceController()
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
 
-        controller.withIntent(TrackingForegroundService.createAutoDetectIntent(ApplicationProvider.getApplicationContext()))
-            .startCommand(0, 0)
+        controller.withIntent(
+            TrackingForegroundService.createAutoDetectIntent(context, activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L))
+        ).startCommand(0, 0)
         val firstJob = controller.get().autoDetectionJob
 
-        controller.withIntent(TrackingForegroundService.createAutoDetectIntent(ApplicationProvider.getApplicationContext()))
-            .startCommand(0, 0)
+        // The dedupe guard checks the job before even looking at this second seed - it is simply discarded, which is
+        // correct: a live subscriber is already getting everything from the bus by now.
+        controller.withIntent(
+            TrackingForegroundService.createAutoDetectIntent(context, activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 1_000_000L))
+        ).startCommand(0, 0)
         val secondJob = controller.get().autoDetectionJob
 
         assertNotNull(firstJob)
@@ -462,19 +472,34 @@ class TrackingForegroundServiceTest {
         Unit
     }
 
+    /**
+     * Found on the phone (2026-09-29): the ENTER that triggers `ACTION_AUTO_DETECT` used to be emitted onto
+     * [ActivityTransitionBus] *before* this subscription could exist (starting the foreground service is
+     * asynchronous), and a no-replay `SharedFlow` does not deliver an emission to a later subscriber - so the one
+     * sample that opens the candidate was lost on every real cold start, proven separately by
+     * `ActivityTransitionBusProbeTest`. The ENTER now travels as the intent's seed instead; only the EXIT that
+     * abandons it here comes from the bus, exactly like a real second transition would.
+     */
     @Test
     fun actionAutoDetectStopsTheServiceWhenARealBusDeliveredCandidateIsAbandoned() = runBlocking {
         val controller = buildServiceController()
 
-        controller.withIntent(TrackingForegroundService.createAutoDetectIntent(ApplicationProvider.getApplicationContext()))
-            .startCommand(0, 0)
+        controller.withIntent(
+            TrackingForegroundService.createAutoDetectIntent(
+                ApplicationProvider.getApplicationContext(),
+                activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L)
+            )
+        ).startCommand(0, 0)
 
         val bus = controller.get().activityTransitionBus
         withTimeout(5_000) { bus.subscriptionCount.first { it > 0 } }
-        bus.emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L))
         bus.emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 1_000_000L))
 
-        controller.get().autoDetectionJob?.join()
+        // Bounded on purpose: if the seed is ever lost again, the candidate never opens, the EXIT above finds
+        // Idle (not Candidate) and does nothing, and this job then runs forever waiting for an abandonment that
+        // never comes - a regression like that must fail this test in seconds, not hang the whole suite (found the
+        // hard way: an earlier mutation of this exact fix hung a real run for over 30 minutes).
+        withTimeout(5_000) { controller.get().autoDetectionJob?.join() }
 
         assertEquals(
             TrackingSessionCoordinator.AutoDetectionOutcome.CandidateAbandoned,
@@ -484,12 +509,32 @@ class TrackingForegroundServiceTest {
         assertTrue(shadowOf(controller.get()).isStoppedBySelf)
     }
 
+    /** A bare `ACTION_AUTO_DETECT` (no seed extras - `seedFromIntent` returns `null`) still arms watching via the bus alone, exactly as before this fix. */
     @Test
-    fun actionAutoDetectDoesNotStartAnAutoCaptureWhenNoCandidateEverArrives() = runBlocking {
+    fun aBareAutoDetectIntentWithNoSeedStillArmsWatchingFromTheBusAlone() = runBlocking {
         val controller = buildServiceController()
 
-        controller.withIntent(TrackingForegroundService.createAutoDetectIntent(ApplicationProvider.getApplicationContext()))
+        controller.withIntent(Intent(ApplicationProvider.getApplicationContext(), TrackingForegroundService::class.java).setAction(TrackingForegroundService.ACTION_AUTO_DETECT))
             .startCommand(0, 0)
+        val bus = controller.get().activityTransitionBus
+        withTimeout(5_000) { bus.subscriptionCount.first { it > 0 } }
+
+        assertNull(db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE))
+        controller.destroy()
+        Unit
+    }
+
+    /** The seed alone is only ever the trigger to start watching - it never substitutes for real corroborating location. */
+    @Test
+    fun theSeedAloneNeverConfirmsACaptureWithoutCorroboratingEvidence() = runBlocking {
+        val controller = buildServiceController()
+
+        controller.withIntent(
+            TrackingForegroundService.createAutoDetectIntent(
+                ApplicationProvider.getApplicationContext(),
+                activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L)
+            )
+        ).startCommand(0, 0)
         val bus = controller.get().activityTransitionBus
         withTimeout(5_000) { bus.subscriptionCount.first { it > 0 } }
 
