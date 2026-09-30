@@ -791,6 +791,7 @@ Core no necesita navegación turn-by-turn ni mapa 3D.
 | UX-18 | Font scaling y TalkBack no ocultan Pause/Resume/Finish ni hacen ambiguos sus estados. | Must |
 | UX-19 | El mapa en vivo durante un Trip activo degrada al placeholder existente ante cualquier fallo, sin afectar captura/persistencia/estadísticas. | Should |
 | UX-20 | El scrubber de Trip Detail es de solo lectura: arrastrarlo nunca crea, modifica ni persiste un Trip. | Should |
+| UX-21 | El mapa de Trip Detail puede expandirse a pantalla completa mediante un botón explícito, con Atrás/Predictive Back para volver. | Should |
 
 ---
 

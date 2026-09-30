@@ -515,6 +515,12 @@ Trip Detail SHOULD let the person drag a control along a bar representing the ro
 
 ---
 
+### FR-MAP-009 — Full-screen map view
+**Priority:** P2  
+Trip Detail SHOULD let the person expand the route map to full screen for easier manipulation (pan/zoom, and `FR-MAP-008`'s scrubber), via an explicit button. Investigated 2026-09-30, see `ADR-023` and backlog `MAP-005`.
+
+---
+
 ## 4.9 Routes
 
 ### FR-RTE-001 — Reusable Route entity

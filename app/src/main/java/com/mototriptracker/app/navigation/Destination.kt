@@ -35,6 +35,9 @@ sealed interface Destination {
     /** EDT-003: boundary correction, pushed from Trip Detail - same standing as [Split]. */
     data class Trim(val tripId: String) : Destination
 
+    /** MAP-005/`ADR-023` follow-up: the same route full-screen, pushed from Trip Detail's "expand" button - same standing as [Split]/[Trim]. */
+    data class TripMap(val tripId: String) : Destination
+
     /** EXP-002: internal-only, reached from Settings - not a tab, no user-facing entry point elsewhere (EXP-001 acceptance). */
     data object FieldTestHarness : Destination
 

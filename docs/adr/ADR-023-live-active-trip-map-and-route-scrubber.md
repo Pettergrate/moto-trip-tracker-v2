@@ -67,6 +67,12 @@ Both stay behind `ADR-019`'s existing presentation-adapter boundary - `TripRoute
 
 ---
 
+### Clarifying note (2026-09-30) - `MAP-005`, full-screen map view
+
+The owner separately asked for a way to expand Trip Detail's map full-screen for easier manipulation (`FR-MAP-009`). Two shapes were considered: a `Dialog`-based full-screen overlay, or a real Navigation 3 destination (`Destination.TripMap(tripId)`) matching how `Split`/`Trim` already work. **Decided: a dedicated destination**, not a `Dialog` - no full-screen `Dialog` pattern exists anywhere else in this codebase (a first-of-its-kind UI paradigm would have to be introduced for it), while every other "focused sub-view of a Trip" already uses a pushed back-stack destination, which gets Predictive Back (`UX-16`) for free instead of needing its own back-handling. This does not change this ADR's decision, only extends `TripRouteMap`'s reuse to a second call site (`TripMapScreen`, reusing `TripDetailViewModel` directly rather than duplicating its route-loading query). Backlog `MAP-005`.
+
+---
+
 ### Decision lifecycle
 
 This ADR remains **Accepted** until explicitly superseded by a later ADR. Implementation tasks must not silently override it.

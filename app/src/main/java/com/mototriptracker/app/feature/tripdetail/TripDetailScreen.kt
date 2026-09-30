@@ -19,12 +19,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -40,11 +40,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.mototriptracker.app.domain.GeoPoint
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationCompact
 import com.mototriptracker.app.feature.common.formatElevationM
-import com.mototriptracker.app.feature.common.routeScrubberPercent
+import com.mototriptracker.app.feature.map.RouteScrubber
 import com.mototriptracker.app.feature.map.TripRouteMap
 import com.mototriptracker.app.feature.common.formatSpeedKmh
 import kotlinx.coroutines.launch
@@ -57,6 +56,7 @@ fun TripDetailScreen(
     onBack: () -> Unit,
     onSplit: (String) -> Unit,
     onTrim: (String) -> Unit,
+    onExpandMap: (String) -> Unit,
     viewModel: TripDetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -79,7 +79,8 @@ fun TripDetailScreen(
             coroutineScope.launch { if (viewModel.mergeWithNext()) onBack() }
         },
         onSplit = { onSplit(tripId) },
-        onTrim = { onTrim(tripId) }
+        onTrim = { onTrim(tripId) },
+        onExpandMap = { onExpandMap(tripId) }
     )
 }
 
@@ -94,7 +95,8 @@ private fun TripDetailContent(
     onMergeWithPrevious: () -> Unit,
     onMergeWithNext: () -> Unit,
     onSplit: () -> Unit,
-    onTrim: () -> Unit
+    onTrim: () -> Unit,
+    onExpandMap: () -> Unit
 ) {
     var showRenameDialog by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
@@ -212,12 +214,26 @@ private fun TripDetailContent(
                         // honest "Map not available yet" placeholder when
                         // routePoints has fewer than 2 points - no separate
                         // branch needed here.
-                        TripRouteMap(
-                            points = uiState.routePoints,
-                            modifier = Modifier.fillMaxWidth().aspectRatio(1.5f),
-                            markerPoints = scrubbedPoint?.let { listOf(it) } ?: emptyList(),
-                            focusPoint = scrubbedPoint
-                        )
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            TripRouteMap(
+                                points = uiState.routePoints,
+                                modifier = Modifier.fillMaxWidth().aspectRatio(1.5f),
+                                markerPoints = scrubbedPoint?.let { listOf(it) } ?: emptyList(),
+                                focusPoint = scrubbedPoint
+                            )
+                            // MAP-005/`ADR-023`: opens the same map full-screen for easier
+                            // manipulation - a plain glyph, matching TripRouteMap's own
+                            // "⤢" fit-to-route button rather than pulling in the extended
+                            // Material icon pack for one icon.
+                            if (uiState.routePoints.size >= 2) {
+                                FilledTonalIconButton(
+                                    onClick = onExpandMap,
+                                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)
+                                ) {
+                                    Text("⛶")
+                                }
+                            }
+                        }
                     }
                     if (uiState.routePoints.size >= 2) {
                         item {
@@ -315,31 +331,6 @@ private fun HeaderSection(state: TripDetailUiState.Loaded) {
                 color = MaterialTheme.colorScheme.error
             )
         }
-    }
-}
-
-/**
- * MAP-004/`FR-MAP-008`/`ADR-023`: a read-only preview control - dragging it only
- * moves [TripRouteMap]'s external marker/camera focus (via [onIndexChanged]), it
- * never creates, edits or persists anything, unlike Split/Trim's sliders which
- * share this same interaction shape but write a new Trip on save.
- */
-@Composable
-private fun RouteScrubber(routePoints: List<GeoPoint>, index: Int?, onIndexChanged: (Int) -> Unit) {
-    val maxIndex = routePoints.size - 1
-    val percent = routeScrubberPercent(index, maxIndex)
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Slider(
-            value = (index ?: 0).toFloat(),
-            onValueChange = { onIndexChanged(it.toInt()) },
-            valueRange = 0f..maxIndex.toFloat(),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Text(
-            if (index == null) "Drag to preview a point along the route" else "$percent% along the route",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
