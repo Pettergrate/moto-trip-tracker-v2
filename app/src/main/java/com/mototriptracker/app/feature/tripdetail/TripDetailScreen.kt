@@ -24,6 +24,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -39,9 +40,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mototriptracker.app.domain.GeoPoint
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationCompact
 import com.mototriptracker.app.feature.common.formatElevationM
+import com.mototriptracker.app.feature.common.routeScrubberPercent
 import com.mototriptracker.app.feature.map.TripRouteMap
 import com.mototriptracker.app.feature.common.formatSpeedKmh
 import kotlinx.coroutines.launch
@@ -192,6 +195,13 @@ private fun TripDetailContent(
             }
 
             is TripDetailUiState.Loaded -> {
+                // MAP-004/ADR-023: null until the person drags the scrubber -
+                // before that, TripRouteMap's own tap-to-select stays available
+                // exactly as before. Keyed on tripId so navigating to a
+                // different Trip doesn't carry over a stale scrubbed position.
+                var scrubberIndex by remember(uiState.tripId) { mutableStateOf<Int?>(null) }
+                val scrubbedPoint = scrubberIndex?.let { uiState.routePoints.getOrNull(it) }
+
                 LazyColumn(
                     modifier = Modifier.fillMaxSize().padding(innerPadding).padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -204,8 +214,19 @@ private fun TripDetailContent(
                         // branch needed here.
                         TripRouteMap(
                             points = uiState.routePoints,
-                            modifier = Modifier.fillMaxWidth().aspectRatio(1.5f)
+                            modifier = Modifier.fillMaxWidth().aspectRatio(1.5f),
+                            markerPoints = scrubbedPoint?.let { listOf(it) } ?: emptyList(),
+                            focusPoint = scrubbedPoint
                         )
+                    }
+                    if (uiState.routePoints.size >= 2) {
+                        item {
+                            RouteScrubber(
+                                routePoints = uiState.routePoints,
+                                index = scrubberIndex,
+                                onIndexChanged = { scrubberIndex = it }
+                            )
+                        }
                     }
                     item { CoreMetricsSection(uiState) }
                     item { TimeBreakdownSection(uiState) }
@@ -294,6 +315,31 @@ private fun HeaderSection(state: TripDetailUiState.Loaded) {
                 color = MaterialTheme.colorScheme.error
             )
         }
+    }
+}
+
+/**
+ * MAP-004/`FR-MAP-008`/`ADR-023`: a read-only preview control - dragging it only
+ * moves [TripRouteMap]'s external marker/camera focus (via [onIndexChanged]), it
+ * never creates, edits or persists anything, unlike Split/Trim's sliders which
+ * share this same interaction shape but write a new Trip on save.
+ */
+@Composable
+private fun RouteScrubber(routePoints: List<GeoPoint>, index: Int?, onIndexChanged: (Int) -> Unit) {
+    val maxIndex = routePoints.size - 1
+    val percent = routeScrubberPercent(index, maxIndex)
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Slider(
+            value = (index ?: 0).toFloat(),
+            onValueChange = { onIndexChanged(it.toInt()) },
+            valueRange = 0f..maxIndex.toFloat(),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            if (index == null) "Drag to preview a point along the route" else "$percent% along the route",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

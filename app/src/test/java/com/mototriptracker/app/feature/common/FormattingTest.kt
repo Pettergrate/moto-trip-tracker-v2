@@ -27,4 +27,21 @@ class FormattingTest {
     fun buildDataQualityNoteCombinesBothWhenBothAreNonZero() {
         assertEquals("3 GPS points excluded · 1 signal gap", buildDataQualityNote(rejectedPointCount = 3, gapCount = 1))
     }
+
+    @Test
+    fun routeScrubberPercentIsZeroBeforeTheScrubberIsEverDragged() {
+        assertEquals(0, routeScrubberPercent(index = null, maxIndex = 9))
+    }
+
+    @Test
+    fun routeScrubberPercentAtTheStartAndEndOfTheRoute() {
+        assertEquals(0, routeScrubberPercent(index = 0, maxIndex = 9))
+        assertEquals(100, routeScrubberPercent(index = 9, maxIndex = 9))
+    }
+
+    @Test
+    fun routeScrubberPercentPartway() {
+        assertEquals(50, routeScrubberPercent(index = 5, maxIndex = 10))
+        assertEquals(25, routeScrubberPercent(index = 1, maxIndex = 4))
+    }
 }

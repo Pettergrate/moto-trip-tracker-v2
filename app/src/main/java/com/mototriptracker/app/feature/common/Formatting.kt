@@ -13,6 +13,9 @@ fun formatSpeedKmh(metersPerSecond: Double): String = String.format(Locale.getDe
 /** "142 m" - HIS-001's Trip Detail elevation fields (PRC-003 not built yet, so callers only ever see this once real values exist). */
 fun formatElevationM(meters: Double): String = String.format(Locale.getDefault(), "%.0f m", meters)
 
+/** MAP-004: "42%" for the route scrubber - [index]/[maxIndex] as a percentage; `null` (not yet dragged) reads as 0. `maxIndex` is always ≥1 (the scrubber only renders for ≥2 route points), so this never divides by zero. */
+fun routeScrubberPercent(index: Int?, maxIndex: Int): Int = index?.let { (it * 100) / maxIndex } ?: 0
+
 /** "1h 47m" for durations at/over an hour, "39m" under an hour - matches F0.9's own wireframes. */
 fun formatDurationCompact(millis: Long): String {
     val totalMinutes = millis / 60_000L

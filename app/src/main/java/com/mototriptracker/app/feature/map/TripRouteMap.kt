@@ -35,6 +35,7 @@ import com.mototriptracker.app.domain.GeoPoint
 import kotlin.math.hypot
 import org.maplibre.android.MapLibre
 import org.maplibre.android.camera.CameraPosition
+import org.maplibre.android.camera.CameraUpdateFactory
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.MapLibreMap
@@ -78,9 +79,19 @@ import org.maplibre.geojson.Point
  * instead - the same high-contrast marker is drawn at each exact point
  * (Split's cut, Trim's start/end, driven by their sliders), and tap-selection plus its
  * info card are switched off so the two can't fight over one marker.
+ *
+ * MAP-004/`ADR-023`: [focusPoint], independent of [markerPoints], eases the camera
+ * toward that point without changing zoom or touching `fitCameraToRoute`'s own
+ * whole-route framing - the scrubber's own "follow the dragged point" need, additive
+ * and `null` by default so no existing caller's behavior changes.
  */
 @Composable
-fun TripRouteMap(points: List<GeoPoint>, modifier: Modifier = Modifier, markerPoints: List<GeoPoint> = emptyList()) {
+fun TripRouteMap(
+    points: List<GeoPoint>,
+    modifier: Modifier = Modifier,
+    markerPoints: List<GeoPoint> = emptyList(),
+    focusPoint: GeoPoint? = null
+) {
     if (points.size < 2) {
         MapUnavailablePlaceholder(modifier)
         return
@@ -151,6 +162,13 @@ fun TripRouteMap(points: List<GeoPoint>, modifier: Modifier = Modifier, markerPo
 
     LaunchedEffect(selectedPoint, markerPoints, map) {
         map?.let { updateSelectedPointLayer(it, markerPoints.ifEmpty { listOfNotNull(selectedPoint) }) }
+    }
+
+    LaunchedEffect(focusPoint, map) {
+        val currentMap = map
+        if (currentMap != null && focusPoint != null) {
+            currentMap.easeCamera(CameraUpdateFactory.newLatLng(LatLng(focusPoint.latitude, focusPoint.longitude)), FOCUS_EASE_DURATION_MS)
+        }
     }
 
     DisposableEffect(lifecycleOwner, mapView) {
@@ -326,3 +344,5 @@ private const val END_COLOR = "#F44336"
  * tolerance, not a detection threshold - no ADR-018 field-gate applies.
  */
 private const val SELECTION_TOLERANCE_DP = 40
+/** MAP-004: short enough to keep up with a dragged slider, still visibly eased rather than an instant jump-cut. */
+private const val FOCUS_EASE_DURATION_MS = 200
