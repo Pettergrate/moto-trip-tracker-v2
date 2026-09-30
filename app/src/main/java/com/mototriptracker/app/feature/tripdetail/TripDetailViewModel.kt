@@ -22,6 +22,7 @@ import com.mototriptracker.app.worker.TripMerger
 import com.mototriptracker.app.worker.TripSplitter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -190,7 +191,17 @@ class TripDetailViewModel @Inject constructor(
         val tripId = tripIdFlow.value ?: return false
         val candidate = if (previousOrNext) adjacentTripsFlow.value.previous else adjacentTripsFlow.value.next
         val otherTripId = candidate?.tripId ?: return false
-        return tripMerger.merge(tripId, otherTripId) is TripMerger.Result.Success
+        // REL-001: a storage failure mid-merge must not escape into the Screen's
+        // launched coroutine and crash the app - report it like any other refused
+        // merge instead (the same guard TrimViewModel.save()/SplitViewModel.split()
+        // already have; this call site was missing it).
+        return try {
+            tripMerger.merge(tripId, otherTripId) is TripMerger.Result.Success
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            false
+        }
     }
 
     private data class AdjacentTrips(val previous: MergeCandidate?, val next: MergeCandidate?)

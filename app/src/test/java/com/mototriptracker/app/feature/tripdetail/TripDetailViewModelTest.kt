@@ -20,6 +20,7 @@ import com.mototriptracker.app.core.model.TripStatus
 import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.feature.common.formatDateTime
 import com.mototriptracker.app.testing.FakeProcessingScheduler
+import com.mototriptracker.app.testing.FlakyTripLineageLinkDao
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.persistence.RawPointWriter
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
@@ -397,6 +398,46 @@ class TripDetailViewModelTest {
 
         assertFalse(success)
         assertEquals(TripStatus.COMPLETED, db.tripDao().findById("only-trip")?.status)
+    }
+
+    /**
+     * REL-001/REL-INV-002: unlike TrimViewModel.save()/SplitViewModel.split(), mergeWithAdjacent() had no try/catch
+     * around its own persistence call - a real storage failure mid-merge would have propagated out of the Screen's
+     * launched coroutine uncaught, crashing the app, instead of degrading like every other edit operation does.
+     */
+    @Test
+    fun mergeWithPreviousReportsFailureInsteadOfThrowingWhenPersistenceFailsMidTransaction() = runBlocking {
+        db.tripDao().insert(trip("earlier", createdAt = 1_000L))
+        db.tripDao().insert(trip("current", createdAt = 2_000L))
+        db.tripCaptureDao().insert(capture("cap-earlier", startedAt = 100L))
+        db.tripCaptureDao().insert(capture("cap-current", startedAt = 200L))
+        db.tripPartDao().insert(part("part-earlier", "earlier", "cap-earlier"))
+        db.tripPartDao().insert(part("part-current", "current", "cap-current"))
+        val flakyLineage = FlakyTripLineageLinkDao(db.tripLineageLinkDao()).apply { failing = true }
+        val faultyViewModel = TripDetailViewModel(
+            tripDao = db.tripDao(),
+            tripStatisticsDao = db.tripStatisticsDao(),
+            processedTrackPointDao = db.processedTrackPointDao(),
+            tripPartDao = db.tripPartDao(),
+            tripCaptureDao = db.tripCaptureDao(),
+            diagnosticEventDao = db.diagnosticEventDao(),
+            tripMerger = TripMerger(
+                database = db, tripDao = db.tripDao(), tripPartDao = db.tripPartDao(), tripCaptureDao = db.tripCaptureDao(),
+                tripEditOperationDao = db.tripEditOperationDao(), tripLineageLinkDao = flakyLineage,
+                processingScheduler = processingScheduler, clock = clock, idGenerator = FakeIdGenerator("merge")
+            ),
+            clock = clock
+        )
+        faultyViewModel.load("current")
+        withTimeout(5_000) { faultyViewModel.uiState.first { it is TripDetailUiState.Loaded && it.previousTripCandidate != null } }
+
+        val success = faultyViewModel.mergeWithPrevious()
+
+        assertFalse("a mid-transaction failure must be reported as 'did not merge', not thrown", success)
+        assertEquals("no partial state - the rolled-back transaction left both sources untouched", TripStatus.COMPLETED, db.tripDao().findById("earlier")?.status)
+        assertEquals(TripStatus.COMPLETED, db.tripDao().findById("current")?.status)
+        faultyViewModel.viewModelScope.coroutineContext[Job]?.cancel()
+        Unit
     }
 
     @Test
