@@ -29,6 +29,7 @@ import com.mototriptracker.app.feature.history.HistoryScreen
 import com.mototriptracker.app.feature.home.HomeScreen
 import com.mototriptracker.app.feature.settings.AppearanceScreen
 import com.mototriptracker.app.feature.settings.AutoTrackingScreen
+import com.mototriptracker.app.feature.settings.MotorcyclesScreen
 import com.mototriptracker.app.feature.settings.SettingsScreen
 import com.mototriptracker.app.feature.trash.TrashScreen
 import com.mototriptracker.app.feature.split.SplitScreen
@@ -120,6 +121,12 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
         }
     }
 
+    fun navigateToMotorcycles() {
+        if (backStack.lastOrNull() != Destination.Motorcycles) {
+            backStack.add(Destination.Motorcycles)
+        }
+    }
+
     NavDisplay(
         backStack = backStack,
         onBack = { backStack.removeLastOrNull() },
@@ -154,7 +161,8 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
                         onOpenTrash = ::navigateToTrash,
                         onOpenAppearance = ::navigateToAppearance,
                         onOpenAutoTracking = ::navigateToAutoTracking,
-                        onOpenDebug = ::navigateToDebug
+                        onOpenDebug = ::navigateToDebug,
+                        onOpenMotorcycles = ::navigateToMotorcycles
                     )
                 }
 
@@ -176,6 +184,10 @@ fun AppNavHost(initialDestination: Destination = Destination.Home) {
 
                 Destination.Trash -> NavEntry(destination) {
                     TrashScreen(onBack = { backStack.removeLastOrNull() })
+                }
+
+                Destination.Motorcycles -> NavEntry(destination) {
+                    MotorcyclesScreen(onBack = { backStack.removeLastOrNull() })
                 }
 
                 Destination.ActiveTrip -> NavEntry(destination) {
@@ -269,7 +281,7 @@ private fun Destination.tabLabel(): String = when (this) {
     Destination.Home -> "Home"
     Destination.History -> "History"
     Destination.Favorites -> "Favorites"
-    Destination.Settings, Destination.Appearance, Destination.AutoTracking, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, Destination.Debug, is Destination.TripDetail, is Destination.Split, is Destination.Trim, is Destination.TripMap ->
+    Destination.Settings, Destination.Appearance, Destination.AutoTracking, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, Destination.Debug, Destination.Motorcycles, is Destination.TripDetail, is Destination.Split, is Destination.Trim, is Destination.TripMap ->
         error("$this is not a bottom-nav tab")
 }
 
@@ -277,6 +289,6 @@ private fun Destination.tabIcon() = when (this) {
     Destination.Home -> Icons.Default.Home
     Destination.History -> Icons.AutoMirrored.Filled.List
     Destination.Favorites -> Icons.Default.Star
-    Destination.Settings, Destination.Appearance, Destination.AutoTracking, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, Destination.Debug, is Destination.TripDetail, is Destination.Split, is Destination.Trim, is Destination.TripMap ->
+    Destination.Settings, Destination.Appearance, Destination.AutoTracking, Destination.ActiveTrip, Destination.FieldTestHarness, Destination.Trash, Destination.Debug, Destination.Motorcycles, is Destination.TripDetail, is Destination.Split, is Destination.Trim, is Destination.TripMap ->
         error("$this is not a bottom-nav tab")
 }

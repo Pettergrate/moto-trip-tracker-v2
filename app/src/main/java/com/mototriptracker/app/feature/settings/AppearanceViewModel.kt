@@ -3,6 +3,8 @@ package com.mototriptracker.app.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mototriptracker.app.core.datastore.AppearancePreferences
+import com.mototriptracker.app.core.datastore.MapMarkerPreferences
+import com.mototriptracker.app.core.model.VehicleType
 import com.mototriptracker.app.core.theme.AccentColor
 import com.mototriptracker.app.core.theme.Appearance
 import com.mototriptracker.app.core.theme.ThemeBase
@@ -24,7 +26,8 @@ import kotlinx.coroutines.launch
  */
 @HiltViewModel
 class AppearanceViewModel @Inject constructor(
-    private val appearancePreferences: AppearancePreferences
+    private val appearancePreferences: AppearancePreferences,
+    private val mapMarkerPreferences: MapMarkerPreferences
 ) : ViewModel() {
 
     private val chosenThisSession = MutableStateFlow<Appearance?>(null)
@@ -33,11 +36,27 @@ class AppearanceViewModel @Inject constructor(
         chosen ?: saved
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    /** MAP-006/`ADR-024`: the global fallback icon - what the map draws when no motorcycle is more specifically known. */
+    val defaultVehicleType: StateFlow<VehicleType> = mapMarkerPreferences.defaultVehicleType
+        .stateIn(viewModelScope, SharingStarted.Eagerly, VehicleType.MOTORCYCLE)
+
     fun onBaseSelected(base: ThemeBase) = update { it.copy(base = base) }
 
     fun onAccentSelected(accent: AccentColor) = update { it.copy(accent = accent) }
 
     fun onResetToDefault() = update { Appearance.Default }
+
+    fun onDefaultVehicleTypeSelected(vehicleType: VehicleType) {
+        viewModelScope.launch {
+            try {
+                mapMarkerPreferences.setDefaultVehicleType(vehicleType)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                // Not remembered: the previous default returns next time. Never worth an error.
+            }
+        }
+    }
 
     private fun update(change: (Appearance) -> Appearance) {
         val next = change(appearance.value ?: Appearance.Default)

@@ -1,5 +1,6 @@
 package com.mototriptracker.app.feature.tripdetail
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Star
@@ -40,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.mototriptracker.app.core.database.entity.MotorcycleEntity
 import com.mototriptracker.app.feature.common.formatDistanceKm
 import com.mototriptracker.app.feature.common.formatDurationCompact
 import com.mototriptracker.app.feature.common.formatElevationM
@@ -60,11 +63,13 @@ fun TripDetailScreen(
     viewModel: TripDetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val activeMotorcycles by viewModel.activeMotorcycles.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
     LaunchedEffect(tripId) { viewModel.load(tripId) }
 
     TripDetailContent(
         uiState = uiState,
+        activeMotorcycles = activeMotorcycles,
         onBack = onBack,
         onRename = viewModel::onRename,
         onToggleFavorite = viewModel::onToggleFavorite,
@@ -80,7 +85,8 @@ fun TripDetailScreen(
         },
         onSplit = { onSplit(tripId) },
         onTrim = { onTrim(tripId) },
-        onExpandMap = { onExpandMap(tripId) }
+        onExpandMap = { onExpandMap(tripId) },
+        onAssignMotorcycle = viewModel::onAssignMotorcycle
     )
 }
 
@@ -88,6 +94,7 @@ fun TripDetailScreen(
 @Composable
 private fun TripDetailContent(
     uiState: TripDetailUiState,
+    activeMotorcycles: List<MotorcycleEntity>,
     onBack: () -> Unit,
     onRename: (String) -> Unit,
     onToggleFavorite: () -> Unit,
@@ -96,9 +103,11 @@ private fun TripDetailContent(
     onMergeWithNext: () -> Unit,
     onSplit: () -> Unit,
     onTrim: () -> Unit,
-    onExpandMap: () -> Unit
+    onExpandMap: () -> Unit,
+    onAssignMotorcycle: (String?) -> Unit
 ) {
     var showRenameDialog by remember { mutableStateOf(false) }
+    var showMotorcyclePicker by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showTrashDialog by remember { mutableStateOf(false) }
     var pendingMerge by remember { mutableStateOf<PendingMerge?>(null) }
@@ -210,6 +219,12 @@ private fun TripDetailContent(
                 ) {
                     item { HeaderSection(uiState) }
                     item {
+                        MotorcycleRow(
+                            motorcycleName = uiState.motorcycleName,
+                            onClick = { showMotorcyclePicker = true }
+                        )
+                    }
+                    item {
                         // MAP-001/ADR-021: TripRouteMap itself renders the
                         // honest "Map not available yet" placeholder when
                         // routePoints has fewer than 2 points - no separate
@@ -219,7 +234,8 @@ private fun TripDetailContent(
                                 points = uiState.routePoints,
                                 modifier = Modifier.fillMaxWidth().aspectRatio(1.5f),
                                 markerPoints = scrubbedPoint?.let { listOf(it) } ?: emptyList(),
-                                focusPoint = scrubbedPoint
+                                focusPoint = scrubbedPoint,
+                                vehicleType = uiState.vehicleType
                             )
                             // MAP-005/`ADR-023`: opens the same map full-screen for easier
                             // manipulation - a plain glyph, matching TripRouteMap's own
@@ -265,6 +281,18 @@ private fun TripDetailContent(
                 showRenameDialog = false
             },
             onDismiss = { showRenameDialog = false }
+        )
+    }
+
+    if (showMotorcyclePicker && uiState is TripDetailUiState.Loaded) {
+        MotorcyclePickerDialog(
+            motorcycles = activeMotorcycles,
+            currentMotorcycleId = uiState.motorcycleId,
+            onSelect = { motorcycleId ->
+                onAssignMotorcycle(motorcycleId)
+                showMotorcyclePicker = false
+            },
+            onDismiss = { showMotorcyclePicker = false }
         )
     }
 
@@ -331,6 +359,23 @@ private fun HeaderSection(state: TripDetailUiState.Loaded) {
                 color = MaterialTheme.colorScheme.error
             )
         }
+    }
+}
+
+/** MOTO-001/`ADR-024`: tap to assign/reassign - manual only, never automatic (see the ADR's own reasoning). */
+@Composable
+private fun MotorcycleRow(motorcycleName: String?, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("Motorcycle", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            motorcycleName ?: "Assign motorcycle",
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (motorcycleName == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -428,4 +473,50 @@ private fun RenameDialog(initialName: String, onConfirm: (String) -> Unit, onDis
             TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
+}
+
+/** MOTO-001: "None" always offered first so un-assigning is never harder than assigning. Archived motorcycles are deliberately not offered here (`activeMotorcycles` only) - an already-assigned archived one still displays correctly via [TripDetailUiState.Loaded.motorcycleName], it just isn't a *new* choice. */
+@Composable
+private fun MotorcyclePickerDialog(
+    motorcycles: List<MotorcycleEntity>,
+    currentMotorcycleId: String?,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Assign motorcycle") },
+        text = {
+            Column {
+                MotorcycleOptionRow("None", selected = currentMotorcycleId == null, onClick = { onSelect(null) })
+                motorcycles.forEach { motorcycle ->
+                    MotorcycleOptionRow(motorcycle.name, selected = motorcycle.id == currentMotorcycleId, onClick = { onSelect(motorcycle.id) })
+                }
+                if (motorcycles.isEmpty()) {
+                    Text(
+                        "No motorcycles yet - add one from Settings.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+private fun MotorcycleOptionRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        if (selected) Icon(Icons.Filled.Check, contentDescription = "Selected")
+    }
 }

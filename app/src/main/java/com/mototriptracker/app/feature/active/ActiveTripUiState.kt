@@ -1,5 +1,6 @@
 package com.mototriptracker.app.feature.active
 
+import com.mototriptracker.app.core.model.VehicleType
 import com.mototriptracker.app.domain.GeoPoint
 import com.mototriptracker.app.domain.capability.CapabilityIssue
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
@@ -23,7 +24,9 @@ sealed interface ActiveTripUiState {
          * fixes excluded (`ADR-022`), same as [distanceMeters]. `TripRouteMap` itself renders the honest "Map not
          * available yet" placeholder while this has fewer than 2 points.
          */
-        val routePoints: List<GeoPoint> = emptyList()
+        val routePoints: List<GeoPoint> = emptyList(),
+        /** MAP-006/`ADR-024`: the "currently selected" motorcycle's own type, else the global default - no `TripEntity` exists yet to assign one to. */
+        val vehicleType: VehicleType = VehicleType.MOTORCYCLE
     ) : ActiveTripUiState
 }
 

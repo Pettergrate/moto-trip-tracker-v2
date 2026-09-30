@@ -46,6 +46,9 @@ sealed interface Destination {
 
     /** TRS-001/F0.9 §14: reached from Settings' "Datos" section, not a tab - trashing is infrequent, unlike Favorites. */
     data object Trash : Destination
+
+    /** MOTO-001/`ADR-024`: reached from Settings' "Vehicles" section, not a tab - same standing as [Trash]/[AutoTracking]. */
+    data object Motorcycles : Destination
 }
 
 /** The three ADR-011 bottom-nav tabs, in display order. */

@@ -4,6 +4,7 @@ import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.common.FakeIdGenerator
 import com.mototriptracker.app.core.database.MotoTripDatabase
 import com.mototriptracker.app.core.database.entity.DiagnosticEventEntity
+import com.mototriptracker.app.core.database.entity.MotorcycleEntity
 import com.mototriptracker.app.core.database.entity.ProcessedTrackPointEntity
 import com.mototriptracker.app.core.database.entity.TripCaptureEntity
 import com.mototriptracker.app.core.database.entity.TripEntity
@@ -17,11 +18,13 @@ import com.mototriptracker.app.core.model.LocationProfileVersion
 import com.mototriptracker.app.core.model.ProcessingVersion
 import com.mototriptracker.app.core.model.StartSource
 import com.mototriptracker.app.core.model.TripStatus
+import com.mototriptracker.app.core.model.VehicleType
 import com.mototriptracker.app.feature.common.fallbackTripName
 import com.mototriptracker.app.feature.common.formatDateTime
 import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.FlakyTripLineageLinkDao
 import com.mototriptracker.app.testing.TestDatabaseFactory
+import com.mototriptracker.app.testing.TestMapMarkerPreferences
 import com.mototriptracker.app.tracking.persistence.RawPointWriter
 import com.mototriptracker.app.tracking.processing.TripProcessingWorker
 import com.mototriptracker.app.worker.TripMerger
@@ -76,6 +79,8 @@ class TripDetailViewModelTest {
             tripPartDao = db.tripPartDao(),
             tripCaptureDao = db.tripCaptureDao(),
             diagnosticEventDao = db.diagnosticEventDao(),
+            motorcycleDao = db.motorcycleDao(),
+            mapMarkerPreferences = TestMapMarkerPreferences.create(),
             tripMerger = tripMerger,
             clock = clock
         )
@@ -400,6 +405,49 @@ class TripDetailViewModelTest {
         assertEquals(TripStatus.COMPLETED, db.tripDao().findById("only-trip")?.status)
     }
 
+    /** MOTO-001/`ADR-024`: a Trip with no motorcycle assigned draws the global default vehicle type. */
+    @Test
+    fun withNoMotorcycleAssignedTheVehicleTypeIsTheGlobalDefault() = runBlocking {
+        db.tripDao().insert(trip("only-trip", createdAt = 5_000L))
+        viewModel.load("only-trip")
+
+        val state = withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded } } as TripDetailUiState.Loaded
+
+        assertEquals(VehicleType.MOTORCYCLE, state.vehicleType)
+        assertNull(state.motorcycleId)
+        assertNull(state.motorcycleName)
+    }
+
+    /** MOTO-001/`ADR-024`: assigning a motorcycle reflects both its name and its own vehicle type, reactively. */
+    @Test
+    fun assigningAMotorcycleReflectsItsNameAndOwnVehicleType() = runBlocking {
+        db.tripDao().insert(trip("only-trip", createdAt = 5_000L))
+        db.motorcycleDao().insert(
+            MotorcycleEntity(
+                id = "moto-1", name = "Enduro", make = "Honda", model = "CRF250L", year = 2021,
+                isArchived = false, createdAt = 1_000L, updatedAt = 1_000L, vehicleType = VehicleType.CAR
+            )
+        )
+        viewModel.load("only-trip")
+        withTimeout(5_000) { viewModel.uiState.first { it is TripDetailUiState.Loaded } }
+
+        viewModel.onAssignMotorcycle("moto-1")
+
+        val state = withTimeout(5_000) {
+            viewModel.uiState.first { it is TripDetailUiState.Loaded && it.motorcycleId == "moto-1" }
+        } as TripDetailUiState.Loaded
+        assertEquals("Enduro", state.motorcycleName)
+        assertEquals("the motorcycle's own type, not the global default", VehicleType.CAR, state.vehicleType)
+
+        viewModel.onAssignMotorcycle(null)
+
+        val unassigned = withTimeout(5_000) {
+            viewModel.uiState.first { it is TripDetailUiState.Loaded && it.motorcycleId == null }
+        } as TripDetailUiState.Loaded
+        assertNull(unassigned.motorcycleName)
+        assertEquals("back to the global default once un-assigned", VehicleType.MOTORCYCLE, unassigned.vehicleType)
+    }
+
     /**
      * REL-001/REL-INV-002: unlike TrimViewModel.save()/SplitViewModel.split(), mergeWithAdjacent() had no try/catch
      * around its own persistence call - a real storage failure mid-merge would have propagated out of the Screen's
@@ -421,6 +469,8 @@ class TripDetailViewModelTest {
             tripPartDao = db.tripPartDao(),
             tripCaptureDao = db.tripCaptureDao(),
             diagnosticEventDao = db.diagnosticEventDao(),
+            motorcycleDao = db.motorcycleDao(),
+            mapMarkerPreferences = TestMapMarkerPreferences.create(),
             tripMerger = TripMerger(
                 database = db, tripDao = db.tripDao(), tripPartDao = db.tripPartDao(), tripCaptureDao = db.tripCaptureDao(),
                 tripEditOperationDao = db.tripEditOperationDao(), tripLineageLinkDao = flakyLineage,

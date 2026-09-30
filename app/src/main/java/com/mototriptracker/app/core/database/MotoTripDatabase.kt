@@ -7,6 +7,7 @@ import com.mototriptracker.app.core.database.dao.CaptureEventDao
 import com.mototriptracker.app.core.database.dao.DiagnosticEventDao
 import com.mototriptracker.app.core.database.dao.LocationGapDao
 import com.mototriptracker.app.core.database.dao.ManualPauseIntervalDao
+import com.mototriptracker.app.core.database.dao.MotorcycleDao
 import com.mototriptracker.app.core.database.dao.PointAssessmentDao
 import com.mototriptracker.app.core.database.dao.ProcessedTrackPointDao
 import com.mototriptracker.app.core.database.dao.RawTrackPointDao
@@ -78,7 +79,7 @@ import com.mototriptracker.app.core.database.entity.TripTagEntity
         MotorcycleEntity::class,
         DiagnosticEventEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = true
 )
 @TypeConverters(DiagnosticMetadataConverters::class)
@@ -96,4 +97,5 @@ abstract class MotoTripDatabase : RoomDatabase() {
     abstract fun locationGapDao(): LocationGapDao
     abstract fun tripStatisticsDao(): TripStatisticsDao
     abstract fun manualPauseIntervalDao(): ManualPauseIntervalDao
+    abstract fun motorcycleDao(): MotorcycleDao
 }

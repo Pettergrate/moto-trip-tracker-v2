@@ -56,6 +56,10 @@ interface TripDao {
     @Query("UPDATE trip SET isFavorite = :isFavorite, updatedAt = :updatedAt WHERE id = :id")
     suspend fun setFavorite(id: String, isFavorite: Boolean, updatedAt: Long)
 
+    /** MOTO-001/`ADR-024`: manual assignment only, from Trip Detail - `null` un-assigns. Never called from `TrackingSessionCoordinator` (see the ADR's own reasoning). */
+    @Query("UPDATE trip SET motorcycleId = :motorcycleId, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun assignMotorcycle(id: String, motorcycleId: String?, updatedAt: Long)
+
     /** TRS-001/FR-HIS-005: soft-delete - a TRASHED Trip keeps every row (own, TripPart, statistics) untouched, just hidden from normal browsing. */
     @Query("UPDATE trip SET status = :newStatus, deletedAt = :deletedAt, updatedAt = :updatedAt WHERE id = :id")
     suspend fun trash(id: String, deletedAt: Long, updatedAt: Long, newStatus: TripStatus = TripStatus.TRASHED)

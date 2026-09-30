@@ -125,7 +125,7 @@ class DiagnosticSnapshotProviderTest {
     fun theAppSectionReadsTheRealDatabaseVersionAndTheDeviceNotAGuess() = runTest {
         val app = provider.snapshot().app
 
-        assertEquals(3, app.databaseSchemaVersion)
+        assertEquals("MOTO-001 bumped schema to v4 (MIGRATION_3_4)", 4, app.databaseSchemaVersion)
         assertEquals(36, app.androidApi)
         assertEquals("Acme Phone 9", app.device)
         assertEquals(0, app.processingVersion)

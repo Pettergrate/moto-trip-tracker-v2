@@ -29,3 +29,14 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
         db.execSQL("ALTER TABLE raw_track_point ADD COLUMN isApproximateLocation INTEGER")
     }
 }
+
+/**
+ * MOTO-001/`ADR-024`: `motorcycle` gains `vehicleType` - `NOT NULL DEFAULT 'MOTORCYCLE'`, safe because this table
+ * has never had a real row written by any code path (confirmed by grep before this task - `motorcycleId` is
+ * hardcoded `null` at every Trip-creation call site), so there is nothing to backfill or fabricate.
+ */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE motorcycle ADD COLUMN vehicleType TEXT NOT NULL DEFAULT 'MOTORCYCLE'")
+    }
+}

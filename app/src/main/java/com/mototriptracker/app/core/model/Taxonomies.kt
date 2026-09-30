@@ -34,6 +34,13 @@ enum class TrackPointDecision { ACCEPTED, SUSPECT, REJECTED }
 enum class StopOrigin { DETECTED, USER }
 
 /**
+ * MOTO-001/`ADR-024`: [MotorcycleEntity]'s own vehicle type - also what `MAP-006` draws as the map's
+ * current-position marker. [NONE] is the owner-requested opt-out: the plain colored dot the marker used before
+ * `MAP-006`, for whoever doesn't want a vehicle-specific icon.
+ */
+enum class VehicleType { MOTORCYCLE, CAR, TRUCK, BICYCLE, NONE }
+
+/**
  * F0.3's detection state machine states, reused (not duplicated) per F0.7 §5:
  * "no sustituye TripStatus ni CaptureStatus". No state machine exists yet
  * (DET-family) — TRK-002 uses only [TRACKING], since F0.3 §6 has Manual Start

@@ -156,7 +156,8 @@ private fun ActiveTripContent(
 
                     TripRouteMap(
                         points = uiState.routePoints,
-                        modifier = Modifier.fillMaxWidth().aspectRatio(1.2f)
+                        modifier = Modifier.fillMaxWidth().aspectRatio(1.2f),
+                        vehicleType = uiState.vehicleType
                     )
 
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
