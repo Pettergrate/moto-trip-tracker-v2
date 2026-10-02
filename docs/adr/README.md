@@ -64,6 +64,7 @@ An ADR exists so a future implementation agent can answer five questions without
 | ADR-025 | El detector corrobora con velocidad GPS; WALKING de Activity Recognition ya no termina un Trip por sí solo | Accepted | `ADR-025-detector-uses-gps-speed-and-walking-no-longer-ends-a-trip.md` |
 | ADR-026 | `ON_BICYCLE` cuenta como etiqueta de vehículo: puede iniciar un candidato y un cambio entre etiquetas no es un fin | Accepted | `ADR-026-on-bicycle-is-a-vehicle-label-for-starting-and-ending-a-trip.md` |
 | ADR-027 | Un Trip automático confirmado conserva los fixes vistos mientras se validaba y empieza en el primero | Accepted | `ADR-027-a-confirmed-automatic-trip-keeps-the-fixes-seen-while-it-was-validated.md` |
+| ADR-028 | Un servicio reiniciado vuelve a vigilar el fin de un Trip automático, reconstruyendo el motor de parada desde lo registrado | Accepted | `ADR-028-a-restarted-service-resumes-watching-an-automatic-trip-for-its-end.md` |
 
 ---
 

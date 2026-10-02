@@ -33,6 +33,19 @@ interface DiagnosticEventDao {
     @Query("SELECT COUNT(*) FROM diagnostic_event")
     suspend fun count(): Int
 
+    /**
+     * AUTO-002: the activity transitions the receiver recorded from a given moment on, oldest first - what a restarted
+     * stop monitoring replays to learn what it missed while the process was away (the receiver records them even when
+     * the app is not running). Bounded by wall time as well as by the elapsed-realtime stamp: that counter restarts at
+     * every boot, so after a reboot an old row can carry a larger value than a new one (the same trap
+     * `TripCaptureDao.findMostRecentlyEnded` fell into). Same-instant pairs keep the order they were recorded in.
+     */
+    @Query(
+        "SELECT * FROM diagnostic_event WHERE eventType = 'ACTIVITY_TRANSITION' AND occurredAt >= :sinceWallMillis " +
+            "AND elapsedRealtimeNanos >= :sinceElapsedRealtimeNanos ORDER BY elapsedRealtimeNanos ASC, rowid ASC"
+    )
+    suspend fun findActivityTransitionsSince(sinceWallMillis: Long, sinceElapsedRealtimeNanos: Long): List<DiagnosticEventEntity>
+
     /** REC-002: lets a recovery decision be recorded once per capture (F0.10 §25 step 8: "emitir evento diagnóstico una sola vez"). */
     @Query("SELECT COUNT(*) FROM diagnostic_event WHERE captureId = :captureId AND eventType = :eventType")
     suspend fun countByCaptureAndType(captureId: String, eventType: String): Int

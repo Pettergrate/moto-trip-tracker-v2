@@ -22,6 +22,8 @@ import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBu
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
 import com.mototriptracker.app.tracking.location.LocationGateway
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -220,6 +222,45 @@ class TrackingForegroundServiceTest {
             !shadowService.isStoppedBySelf
         )
         assertEquals(1, db.rawTrackPointDao().findAllByCapture(captureId).size)
+    }
+
+    /**
+     * AUTO-002: before this, a restart brought back plain recording for a capture the detector had started, and nobody
+     * watched for its end any more. Now the auto monitoring is what comes back (and it records the points itself).
+     */
+    @Test
+    fun nullIntentRestartWithAnActiveAutoCaptureResumesTheAutomaticMonitoringNotPlainRecording() = runBlocking {
+        val firstController = buildServiceController()
+        val started = firstController.get().coordinator.startAutoCapture() as TrackingSessionCoordinator.StartResult.Started
+
+        val restartedController = buildServiceController(
+            locationSamples = listOf(
+                LocationSample(
+                    wallTimeEpochMs = 2_000L,
+                    elapsedRealtimeNanos = 9_000L,
+                    receivedAtElapsedRealtimeNanos = 9_000L,
+                    latitude = 1.0,
+                    longitude = 2.0,
+                    horizontalAccuracyM = 5.0f,
+                    requestProfileId = "test-profile"
+                )
+            )
+        )
+        restartedController.withIntent(null).startCommand(0, 0)
+        restartedController.get().lastCommandJob?.join()
+        try {
+            val monitoring = restartedController.get().autoDetectionJob
+            assertNotNull("the automatic monitoring was resumed", monitoring)
+            assertTrue(monitoring!!.isActive)
+            assertNull("plain recording is not what came back", restartedController.get().locationRecordingJob)
+            withTimeout(10_000L) {
+                while (db.rawTrackPointDao().countByCapture(started.captureId) < 1) delay(20L)
+            }
+            assertEquals("the resumed run records into the same capture", 1, db.rawTrackPointDao().countByCapture(started.captureId))
+            assertEquals(1, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+        } finally {
+            restartedController.get().autoDetectionJob?.cancelAndJoin()
+        }
     }
 
     /** REC-001/F0.10 SS10.2: a reboot must never look like an ordinary same-boot restart. */

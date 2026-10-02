@@ -1,6 +1,9 @@
 package com.mototriptracker.app.tracking.coordinator
 
 import com.mototriptracker.app.core.database.MotoTripDatabase
+import com.mototriptracker.app.core.database.entity.DiagnosticEventEntity
+import com.mototriptracker.app.core.database.entity.ManualPauseIntervalEntity
+import com.mototriptracker.app.core.database.entity.RawTrackPointEntity
 import com.mototriptracker.app.core.common.FakeClock
 import com.mototriptracker.app.core.common.FakeIdGenerator
 import com.mototriptracker.app.core.model.ActivityTransitionSample
@@ -17,9 +20,11 @@ import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.testing.FakeLocationGateway
 import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
+import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionRecorder
 import com.mototriptracker.app.tracking.location.LocationGateway
 import com.mototriptracker.app.tracking.persistence.RawPointWriter
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -27,6 +32,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
@@ -606,6 +612,263 @@ class TrackingSessionCoordinatorTest {
         val oldestKept = (651 - cap + 1) * 400_000_000L // the 52nd of 651 fixes, 20.8 s
         assertEquals(oldestKept, points.first().elapsedRealtimeNanos)
         assertEquals(oldestKept, requireNotNull(db.tripCaptureDao().findById(tripCompleted.captureId)).startElapsedRealtimeNanos)
+    }
+
+    // --- AUTO-002 (ADR-028): an automatic capture whose service was restarted goes back to watching for its end ---
+
+    private fun rawPoint(captureId: String, sequenceNumber: Long, elapsedNanos: Long, lat: Double = 10.0, speedMps: Float? = null) = RawTrackPointEntity(
+        captureId = captureId,
+        sequenceNumber = sequenceNumber,
+        capturedAt = elapsedNanos / 1_000_000,
+        elapsedRealtimeNanos = elapsedNanos,
+        receivedAtElapsedRealtimeNanos = elapsedNanos,
+        latitude = lat,
+        longitude = -20.0,
+        horizontalAccuracyM = 5f,
+        altitudeEllipsoidM = null,
+        altitudeMslM = null,
+        verticalAccuracyM = null,
+        speedMps = speedMps,
+        speedAccuracyMps = null,
+        bearingDeg = null,
+        bearingAccuracyDeg = null,
+        provider = null,
+        isMock = null,
+        requestProfileId = "test-profile",
+        callbackBatchId = null,
+        detectorStateSnapshot = "TRACKING"
+    )
+
+    /**
+     * What the phone holds when the process died mid-ride: an ACTIVE capture the detector started, the points recorded
+     * so far, and the activity transitions the receiver stored (it records them even with the app not running).
+     * [points] are (elapsed seconds, speed); [transitions] are recorded in the order given.
+     */
+    private suspend fun seedAutoCaptureLeftBehindByADeadProcess(
+        points: List<Pair<Int, Float?>>,
+        transitions: List<ActivityTransitionSample>
+    ): String {
+        val started = coordinator.startAutoCapture() as TrackingSessionCoordinator.StartResult.Started
+        points.forEachIndexed { index, (seconds, speed) ->
+            db.rawTrackPointDao().insert(rawPoint(started.captureId, index.toLong(), seconds * 1_000_000_000L, lat = 10.0 + index * 0.0001, speedMps = speed))
+        }
+        val recorder = ActivityTransitionRecorder(db.diagnosticEventDao(), clock, FakeIdGenerator(prefix = "transition"))
+        transitions.forEach { recorder.record(it) }
+        return started.captureId
+    }
+
+    private fun transition(type: ActivityType, transition: TransitionType, seconds: Int) =
+        activitySample(type, transition, elapsedNanos = seconds * 1_000_000_000L)
+
+    @Test
+    fun aRestartedAutoCaptureKeepsRecordingIntoTheSameCaptureAndEndsWhenTheRideEnds() = runTest {
+        val captureId = seedAutoCaptureLeftBehindByADeadProcess(
+            points = listOf(10 to 8f, 20 to 8f),
+            transitions = listOf(transition(ActivityType.IN_VEHICLE, TransitionType.ENTER, 1))
+        )
+        var resumedCaptureId: String? = null
+        val activityFlow = timedFlow(45_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 45_000_000_000L))
+        val locationFlow = timedFlow(
+            30_000L to sample(elapsedNanos = 30_000_000_000L, lat = 10.001, speedMps = 8f),
+            40_000L to sample(elapsedNanos = 40_000_000_000L, lat = 10.002, speedMps = 8f),
+            80_000L to sample(elapsedNanos = 80_000_000_000L, lat = 10.002, speedMps = 0f) // 35 s after the EXIT: past the 30 s grace
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(
+            activityEvents = activityFlow,
+            onCaptureStarted = { resumedCaptureId = it },
+            resumeCaptureId = captureId,
+            stopProfile = shortStopGrace
+        )
+
+        val completed = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+        assertEquals("it ended the capture that was left behind, not a new one", captureId, completed.captureId)
+        assertEquals(captureId, resumedCaptureId)
+        assertEquals(EndSource.AUTO, requireNotNull(db.tripCaptureDao().findById(captureId)).endSource)
+        val points = db.rawTrackPointDao().findAllByCapture(captureId)
+        assertEquals("numbering continues from the points already stored", (0L..4L).toList(), points.map { it.sequenceNumber })
+        // The Trip ends at the last point before the vehicle stopped (the 40 s one), as for any automatic Finish.
+        assertEquals(3L, requireNotNull(db.tripPartDao().findByCaptureId(captureId)).endSequenceNumber)
+        val resumedEvent = db.diagnosticEventDao().findAll().single { it.eventType == TrackingSessionCoordinator.EVENT_AUTO_STOP_MONITORING_RESUMED }
+        assertEquals("TRACKING", resumedEvent.reasonCode)
+        assertEquals(captureId, resumedEvent.captureId)
+        assertEquals("2", resumedEvent.metadata["replayedPoints"])
+    }
+
+    @Test
+    fun aStopCandidateThatWasOpenBeforeTheRestartStillEndsTheTripAtTheRealStop() = runTest {
+        // The vehicle stopped at 22 s, the process died, and the service came back long after: Activity Recognition had
+        // delivered the EXIT to the receiver, which stored it, but the engine that should have counted the grace period
+        // was gone.
+        val captureId = seedAutoCaptureLeftBehindByADeadProcess(
+            points = listOf(10 to 8f, 20 to 8f, 25 to 0f),
+            transitions = listOf(
+                transition(ActivityType.IN_VEHICLE, TransitionType.ENTER, 1),
+                transition(ActivityType.IN_VEHICLE, TransitionType.EXIT, 22)
+            )
+        )
+        val locationFlow = timedFlow(60_000L to sample(elapsedNanos = 60_000_000_000L, lat = 10.0, speedMps = 0f))
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(
+            activityEvents = emptyFlow(),
+            resumeCaptureId = captureId,
+            stopProfile = shortStopGrace
+        )
+
+        assertTrue(outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
+        val part = requireNotNull(db.tripPartDao().findByCaptureId(captureId))
+        assertEquals("the Trip ends at the last point before the 22 s stop", 1L, part.endSequenceNumber)
+        assertEquals(20_000_000_000L, part.endElapsedRealtimeNanos)
+        val resumedEvent = db.diagnosticEventDao().findAll().single { it.eventType == TrackingSessionCoordinator.EVENT_AUTO_STOP_MONITORING_RESUMED }
+        assertEquals("STOP_CANDIDATE_OPEN", resumedEvent.reasonCode)
+    }
+
+    @Test
+    fun aStopCandidateThatTheVehicleMovingOffHadCancelledDoesNotEndTheTripAfterTheRestart() = runTest {
+        // EXIT at 22 s, then two fast fixes in a row (26 s and 28 s): the light turned green and the live engine
+        // cancelled the candidate. Rebuilt from the activity record alone it would still look open, and the first fix
+        // after the restart would end a ride that was still going.
+        val captureId = seedAutoCaptureLeftBehindByADeadProcess(
+            points = listOf(20 to 8f, 23 to 0f, 26 to 6f, 28 to 7f),
+            transitions = listOf(
+                transition(ActivityType.IN_VEHICLE, TransitionType.ENTER, 1),
+                transition(ActivityType.IN_VEHICLE, TransitionType.EXIT, 22)
+            )
+        )
+        val activityFlow = timedFlow(140_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 140_000_000_000L))
+        val locationFlow = timedFlow(
+            100_000L to sample(elapsedNanos = 100_000_000_000L, lat = 10.01, speedMps = 8f),
+            130_000L to sample(elapsedNanos = 130_000_000_000L, lat = 10.02, speedMps = 8f),
+            180_000L to sample(elapsedNanos = 180_000_000_000L, lat = 10.02, speedMps = 0f) // 40 s after the real EXIT
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(
+            activityEvents = activityFlow,
+            resumeCaptureId = captureId,
+            stopProfile = shortStopGrace
+        )
+
+        assertTrue(outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
+        // Four stored points (0-3), then the fixes at 100 s (4), 130 s (5) and 180 s (6): the Trip ends at the 130 s
+        // point, before the real stop at 140 s. An end taken from the stale candidate would have come at the 100 s fix.
+        assertEquals(5L, requireNotNull(db.tripPartDao().findByCaptureId(captureId)).endSequenceNumber)
+        val resumedEvent = db.diagnosticEventDao().findAll().single { it.eventType == TrackingSessionCoordinator.EVENT_AUTO_STOP_MONITORING_RESUMED }
+        assertEquals("the candidate the vehicle moving off cancelled is not open any more", "TRACKING", resumedEvent.reasonCode)
+    }
+
+    @Test
+    fun aRecordThatAlreadySaysTheRideEndedFinishesItAtOnce() = runTest {
+        // The process died after the last point that proved the stop (38 s after the EXIT, past the 30 s grace) was
+        // stored but before the Finish could run.
+        val captureId = seedAutoCaptureLeftBehindByADeadProcess(
+            points = listOf(10 to 8f, 20 to 8f, 25 to 0f, 60 to 0f),
+            transitions = listOf(
+                transition(ActivityType.IN_VEHICLE, TransitionType.ENTER, 1),
+                transition(ActivityType.IN_VEHICLE, TransitionType.EXIT, 22)
+            )
+        )
+        var resumeAnnounced = false
+
+        val outcome = coordinatorWithLocationFlow(emptyFlow()).runAutoDetection(
+            activityEvents = emptyFlow(),
+            onCaptureStarted = { resumeAnnounced = true },
+            resumeCaptureId = captureId,
+            stopProfile = shortStopGrace
+        )
+
+        assertTrue(outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
+        assertEquals(CaptureStatus.COMPLETED, requireNotNull(db.tripCaptureDao().findById(captureId)).status)
+        assertEquals(1L, requireNotNull(db.tripPartDao().findByCaptureId(captureId)).endSequenceNumber)
+        assertFalse("a ride that is already over is not announced as being watched again", resumeAnnounced)
+    }
+
+    @Test
+    fun resumingACaptureThatIsNoLongerActiveDoesNothing() = runTest {
+        val captureId = seedAutoCaptureLeftBehindByADeadProcess(points = listOf(10 to 8f, 20 to 8f), transitions = emptyList())
+        coordinator.finishCapture(captureId)
+        var started = false
+
+        val outcome = coordinatorWithLocationFlow(emptyFlow()).runAutoDetection(
+            activityEvents = emptyFlow(),
+            onCaptureStarted = { started = true },
+            resumeCaptureId = captureId
+        )
+
+        assertEquals(TrackingSessionCoordinator.AutoDetectionOutcome.CandidateAbandoned, outcome)
+        assertFalse(started)
+    }
+
+    /**
+     * Runs the resumed monitoring on real threads just long enough for it to say what state it rebuilt, then stops it:
+     * these cases have no ending to wait for, and virtual time could jump past a timeout while a Room call is pending.
+     */
+    private suspend fun theStateARestartRebuiltFor(captureId: String): DiagnosticEventEntity {
+        val activityEvents = Channel<ActivityTransitionSample>(Channel.UNLIMITED)
+        val run = CoroutineScope(Dispatchers.Default).async {
+            coordinatorWithLocationFlow(emptyFlow()).runAutoDetection(activityEvents.receiveAsFlow(), resumeCaptureId = captureId, stopProfile = shortStopGrace)
+        }
+        try {
+            return withTimeout(15_000L) {
+                var found: DiagnosticEventEntity? = null
+                while (found == null) {
+                    found = db.diagnosticEventDao().findAll().firstOrNull { it.eventType == TrackingSessionCoordinator.EVENT_AUTO_STOP_MONITORING_RESUMED }
+                    if (found == null) delay(20L)
+                }
+                found
+            }
+        } finally {
+            run.cancelAndJoin()
+            activityEvents.close()
+        }
+    }
+
+    @Test
+    fun aPauseThatIsOpenAtTheRestartMeansNothingIsReplayed() = runBlocking {
+        // A pause discards any stop candidate while it lasts; the transitions from before it must not bring one back.
+        val captureId = seedAutoCaptureLeftBehindByADeadProcess(
+            points = listOf(10 to 8f, 20 to 8f),
+            transitions = listOf(
+                transition(ActivityType.IN_VEHICLE, TransitionType.ENTER, 1),
+                transition(ActivityType.IN_VEHICLE, TransitionType.EXIT, 22)
+            )
+        )
+        coordinator.pauseCapture()
+
+        val event = theStateARestartRebuiltFor(captureId)
+
+        assertEquals("TRACKING", event.reasonCode)
+        assertEquals("0", event.metadata["replayedTransitions"])
+        assertEquals("0", event.metadata["replayedPoints"])
+    }
+
+    @Test
+    fun onlyWhatWasRecordedAfterTheLastPauseEndedIsReplayed() = runBlocking {
+        val captureId = seedAutoCaptureLeftBehindByADeadProcess(
+            points = listOf(10 to 8f, 20 to 8f),
+            transitions = listOf(
+                transition(ActivityType.IN_VEHICLE, TransitionType.ENTER, 1),
+                transition(ActivityType.IN_VEHICLE, TransitionType.EXIT, 22) // before the pause: its candidate was discarded
+            )
+        )
+        // A pause from 25 s to 30 s, closed. Later evidence, recorded later by the wall clock too.
+        db.manualPauseIntervalDao().insert(
+            ManualPauseIntervalEntity(
+                id = "pause-1", captureId = captureId, startedAt = 2_000L, endedAt = 3_000L,
+                startElapsedRealtimeNanos = 25_000_000_000L, endElapsedRealtimeNanos = 30_000_000_000L,
+                startReason = "USER", endReason = "USER"
+            )
+        )
+        clock.setWallClockMillis(4_000L)
+        ActivityTransitionRecorder(db.diagnosticEventDao(), clock, FakeIdGenerator(prefix = "later-transition"))
+            .record(transition(ActivityType.IN_VEHICLE, TransitionType.ENTER, 40))
+        db.rawTrackPointDao().insert(rawPoint(captureId, 2, 35_000_000_000L, lat = 10.01, speedMps = 8f))
+        db.rawTrackPointDao().insert(rawPoint(captureId, 3, 45_000_000_000L, lat = 10.02, speedMps = 8f))
+
+        val event = theStateARestartRebuiltFor(captureId)
+
+        assertEquals("the EXIT from before the pause is not replayed, so no candidate is open", "TRACKING", event.reasonCode)
+        assertEquals("1", event.metadata["replayedTransitions"])
+        assertEquals("2", event.metadata["replayedPoints"])
     }
 
     // --- DET-009 (ADR-026): Android also gives a motorcycle the label ON_BICYCLE. Replays of the two real rides of 2026-10-01 ---

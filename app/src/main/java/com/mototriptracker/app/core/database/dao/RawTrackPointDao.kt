@@ -33,6 +33,13 @@ interface RawTrackPointDao {
     @Query("SELECT * FROM raw_track_point WHERE captureId = :captureId ORDER BY sequenceNumber ASC")
     suspend fun findAllByCapture(captureId: String): List<RawTrackPointEntity>
 
+    /** AUTO-002: the points a restarted stop monitoring replays - those taken at or after a moment, in order, without loading the whole ride. */
+    @Query(
+        "SELECT * FROM raw_track_point WHERE captureId = :captureId AND elapsedRealtimeNanos >= :sinceElapsedRealtimeNanos " +
+            "ORDER BY sequenceNumber ASC"
+    )
+    suspend fun findByCaptureSince(captureId: String, sinceElapsedRealtimeNanos: Long): List<RawTrackPointEntity>
+
     /**
      * UI-001: a live, best-effort distance/route preview for an ACTIVE
      * capture — re-emits on every insert. Deliberately not the authoritative

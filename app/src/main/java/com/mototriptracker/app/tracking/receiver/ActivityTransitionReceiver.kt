@@ -19,6 +19,7 @@ import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.domain.capability.CapabilityResolver
 import com.mototriptracker.app.domain.capability.DetectionListening
 import com.mototriptracker.app.domain.detection.PostFinishSuppression
+import com.mototriptracker.app.domain.detection.entersFirstAtTheSameInstant
 import com.mototriptracker.app.domain.detection.isVehicleLike
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionRecorder
@@ -138,28 +139,6 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
         // The bus emit is non-suspending and never throws (tryEmit), so it runs whatever happened to the writes above.
         for (sample in samples.entersFirstAtTheSameInstant()) activityTransitionBus.emit(sample)
         maybeStartAutoDetection(context, samples)
-    }
-
-    /**
-     * DET-009 (`ADR-026`): Android reports a change of label as an EXIT of the old one and an ENTER of the new one with
-     * the very same timestamp, EXIT first (read back from the phone: every pair, to the nanosecond). Handed to the
-     * detector in that order, the EXIT of `IN_VEHICLE` would end a ride that was only being re-labelled `ON_BICYCLE`.
-     * Putting the ENTER first - only between events of the same instant, everything else stays as delivered - lets the
-     * engines see the new label as current before the old one's EXIT arrives.
-     */
-    @VisibleForTesting
-    internal fun List<ActivityTransitionSample>.entersFirstAtTheSameInstant(): List<ActivityTransitionSample> {
-        val ordered = ArrayList<ActivityTransitionSample>(size)
-        var start = 0
-        while (start < size) {
-            var end = start
-            while (end < size && this[end].elapsedRealtimeNanos == this[start].elapsedRealtimeNanos) end++
-            val sameInstant = subList(start, end)
-            ordered += sameInstant.filter { it.transitionType == TransitionType.ENTER }
-            ordered += sameInstant.filter { it.transitionType != TransitionType.ENTER }
-            start = end
-        }
-        return ordered
     }
 
     /**

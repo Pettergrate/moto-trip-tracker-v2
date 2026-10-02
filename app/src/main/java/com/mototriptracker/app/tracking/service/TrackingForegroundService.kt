@@ -14,6 +14,7 @@ import androidx.core.location.LocationManagerCompat
 import com.mototriptracker.app.core.common.DispatcherProvider
 import com.mototriptracker.app.core.model.ActivityTransitionSample
 import com.mototriptracker.app.core.model.ActivityType
+import com.mototriptracker.app.core.model.StartSource
 import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.core.notification.TrackingNotificationController
 import com.mototriptracker.app.core.notification.TrackingNotificationController.Companion.NOTIFICATION_ID
@@ -301,7 +302,13 @@ class TrackingForegroundService : Service() {
             }
             is TrackingSessionCoordinator.RecoveryOutcome.Resumed -> {
                 processState.update { it.copy(recording = true) }
-                ensureLocationRecording(outcome.captureId)
+                // AUTO-002: a capture the detector started is also the detector's to end. Plain recording would keep the
+                // points coming but nobody would ever notice the ride had ended; the auto run records them itself.
+                if (coordinator.findActiveCapture()?.startSource == StartSource.AUTO) {
+                    ensureAutoDetection(seed = null, resumeCaptureId = outcome.captureId)
+                } else {
+                    ensureLocationRecording(outcome.captureId)
+                }
                 ensureNotificationRefreshTicker(outcome.captureId)
                 refreshNotification(outcome.captureId)
             }
@@ -420,12 +427,12 @@ class TrackingForegroundService : Service() {
      * one is already running (`autoDetectionJob` active), [seed] is simply not needed - a live subscriber has been
      * getting everything from the bus already.
      */
-    private fun ensureAutoDetection(seed: ActivityTransitionSample?): Job {
+    private fun ensureAutoDetection(seed: ActivityTransitionSample?, resumeCaptureId: String? = null): Job {
         autoDetectionJob?.takeIf { it.isActive }?.let { return it }
-        return serviceScope.launch { runAutoDetectionAndStop(seed) }.also { autoDetectionJob = it }
+        return serviceScope.launch { runAutoDetectionAndStop(seed, resumeCaptureId) }.also { autoDetectionJob = it }
     }
 
-    private suspend fun runAutoDetectionAndStop(seed: ActivityTransitionSample?) {
+    private suspend fun runAutoDetectionAndStop(seed: ActivityTransitionSample?, resumeCaptureId: String? = null) {
         // Found on the phone (2026-09-29): activityTransitionBus is a SharedFlow with no replay, so an emission with no
         // subscriber yet present is lost for good - and the receiver always emits *before* this subscription can exist
         // (starting the foreground service that leads here is asynchronous). The one sample that triggered this run in
@@ -452,7 +459,8 @@ class TrackingForegroundService : Service() {
             locationServicesEnabled = ::isLocationServicesEnabled,
             preciseLocationGranted = ::hasPreciseLocationPermission,
             onLocationSignalChanged = { report -> coordinator.findActiveCapture()?.let { onLocationSignalChanged(it.id, report) } },
-            onPersistenceStateChanged = { state -> coordinator.findActiveCapture()?.let { onPersistenceStateChanged(it.id, state) } }
+            onPersistenceStateChanged = { state -> coordinator.findActiveCapture()?.let { onPersistenceStateChanged(it.id, state) } },
+            resumeCaptureId = resumeCaptureId
         )
         lastAutoDetectionOutcome = outcome
         stopForeground(STOP_FOREGROUND_REMOVE)
