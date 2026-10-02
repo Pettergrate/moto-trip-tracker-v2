@@ -893,8 +893,8 @@ class TrackingSessionCoordinator @Inject constructor(
                                 bestEffortDetectorLog(EVENT_CANDIDATE_STOP_CONFIRMED, decision.reasonCode, captureId, decision.evidence)
                                 throw StopAutoDetection(AutoDetectionOutcome.TripCompleted(captureId, result.tripId))
                             }
-                            CandidateStopDecision.CandidateOpened ->
-                                bestEffortDetectorLog(EVENT_CANDIDATE_STOP_ENTERED, "IN_VEHICLE_EXIT", captureId, null)
+                            is CandidateStopDecision.CandidateOpened ->
+                                bestEffortDetectorLog(EVENT_CANDIDATE_STOP_ENTERED, decision.reasonCode, captureId, null)
                             is CandidateStopDecision.Abandoned ->
                                 bestEffortDetectorLog(EVENT_CANDIDATE_STOP_CANCELLED, decision.reasonCode, captureId, decision.evidence)
                             CandidateStopDecision.NoChange -> Unit

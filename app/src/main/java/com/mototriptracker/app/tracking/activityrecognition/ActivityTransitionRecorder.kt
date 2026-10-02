@@ -132,6 +132,8 @@ class ActivityTransitionRecorder @Inject constructor(
         const val EVENT_AUTO_DETECTION_STARTED = "AUTO_DETECTION_STARTED"
         const val EVENT_AUTO_DETECTION_NOT_STARTED = "AUTO_DETECTION_NOT_STARTED"
         const val REASON_IN_VEHICLE_ENTER = "IN_VEHICLE_ENTER"
+        /** DET-009 (`ADR-026`): Android also labels a motorcycle ride `ON_BICYCLE`; that ENTER starts detection too. */
+        const val REASON_ON_BICYCLE_ENTER = "ON_BICYCLE_ENTER"
         const val REASON_CAPTURE_ALREADY_ACTIVE = "CAPTURE_ALREADY_ACTIVE"
         /** [stateAfter] carries the actual [com.mototriptracker.app.core.model.CapabilityMode] the resolver returned. */
         const val REASON_CAPABILITY_NOT_ELIGIBLE = "CAPABILITY_NOT_ELIGIBLE"

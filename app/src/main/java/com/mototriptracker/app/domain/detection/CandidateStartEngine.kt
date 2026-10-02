@@ -26,7 +26,8 @@ sealed interface CandidateStartDecision {
 /**
  * DET-002: F0.3 §5's CANDIDATE_START state, scoped to exactly its own
  * acceptance criterion — "no single sample starts a Trip by itself"
- * (DP-001). `IN_VEHICLE` ENTER (ADR-007's passive trigger) only *opens* a
+ * (DP-001). `IN_VEHICLE` ENTER (ADR-007's passive trigger; DET-009/ADR-026: or
+ * `ON_BICYCLE`, which Android also gives a motorcycle) only *opens* a
  * candidate; confirming it needs sustained time (DP-002 temporal
  * confirmation) AND real movement - either displacement from the
  * candidate's anchor point, or (DET-008) a sustained GPS speed. Activity
@@ -58,6 +59,8 @@ class CandidateStartEngine(private val profile: CandidateStartProfile = Candidat
         data object Idle : State
         data class Candidate(
             val openedAtElapsedRealtimeNanos: Long,
+            /** DET-009: the vehicle-like label that is current; only its EXIT abandons (a flip to the other label does not). */
+            val label: ActivityType,
             val anchorLatitude: Double? = null,
             val anchorLongitude: Double? = null,
             val fixCount: Int = 0,
@@ -81,19 +84,26 @@ class CandidateStartEngine(private val profile: CandidateStartProfile = Candidat
 
     private fun onActivity(sample: ActivityTransitionSample): CandidateStartDecision {
         val current = state
+        val label = sample.activityType
         return when {
-            sample.activityType == ActivityType.IN_VEHICLE &&
-                sample.transitionType == TransitionType.ENTER &&
-                current is State.Idle -> {
-                state = State.Candidate(openedAtElapsedRealtimeNanos = sample.elapsedRealtimeNanos)
+            !label.isVehicleLike() -> CandidateStartDecision.NoChange
+            sample.transitionType == TransitionType.ENTER && current is State.Idle -> {
+                state = State.Candidate(openedAtElapsedRealtimeNanos = sample.elapsedRealtimeNanos, label = label)
                 CandidateStartDecision.CandidateOpened
             }
-            sample.activityType == ActivityType.IN_VEHICLE &&
-                sample.transitionType == TransitionType.EXIT &&
-                current is State.Candidate -> abandon(current, REASON_IN_VEHICLE_EXIT, sample.elapsedRealtimeNanos)
+            // The other vehicle-like label took over (ADR-026): the same ride, not a new candidate and not an end.
+            sample.transitionType == TransitionType.ENTER && current is State.Candidate -> {
+                state = current.copy(label = label)
+                CandidateStartDecision.NoChange
+            }
+            // An EXIT of a label that is no longer the current one is the old half of a label change.
+            sample.transitionType == TransitionType.EXIT && current is State.Candidate && label == current.label ->
+                abandon(current, exitReason(label), sample.elapsedRealtimeNanos)
             else -> CandidateStartDecision.NoChange
         }
     }
+
+    private fun exitReason(label: ActivityType) = if (label == ActivityType.ON_BICYCLE) REASON_ON_BICYCLE_EXIT else REASON_IN_VEHICLE_EXIT
 
     private fun onLocation(sample: LocationSample): CandidateStartDecision {
         val candidate = state as? State.Candidate ?: return CandidateStartDecision.NoChange
@@ -166,6 +176,7 @@ class CandidateStartEngine(private val profile: CandidateStartProfile = Candidat
         const val REASON_CONFIRMED_DISPLACEMENT = "CONFIRMED_DISPLACEMENT"
         const val REASON_CONFIRMED_SPEED = "CONFIRMED_SPEED"
         const val REASON_IN_VEHICLE_EXIT = "IN_VEHICLE_EXIT"
+        const val REASON_ON_BICYCLE_EXIT = "ON_BICYCLE_EXIT"
         const val REASON_WINDOW_EXPIRED = "WINDOW_EXPIRED"
     }
 }

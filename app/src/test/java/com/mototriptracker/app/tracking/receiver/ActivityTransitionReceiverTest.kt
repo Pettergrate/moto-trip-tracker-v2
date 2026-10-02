@@ -84,10 +84,10 @@ class ActivityTransitionReceiverTest {
         assertEquals(0, db.diagnosticEventDao().count())
     }
 
-    private fun sample(type: ActivityType, transition: TransitionType) = ActivityTransitionSample(
+    private fun sample(type: ActivityType, transition: TransitionType, elapsedNanos: Long = 1_000L) = ActivityTransitionSample(
         activityType = type,
         transitionType = transition,
-        elapsedRealtimeNanos = 1_000L,
+        elapsedRealtimeNanos = elapsedNanos,
         wallTimeEpochMs = 1_000L,
         source = "test"
     )
@@ -164,6 +164,121 @@ class ActivityTransitionReceiverTest {
         val seed = TrackingForegroundService.seedFromIntent(nextStartedService())
         assertEquals(ActivityType.IN_VEHICLE, seed?.activityType)
         assertEquals(TransitionType.ENTER, seed?.transitionType)
+    }
+
+    // --- DET-009 (ADR-026): Android also gives a motorcycle the label ON_BICYCLE ---
+
+    @Test
+    fun startsAutoDetectionOnAnOnBicycleEnterAndRecordsWhichLabelStartedIt() = runTest {
+        // Field evidence (2026-10-01): two real 1 km rides, the second labelled ON_BICYCLE for 70 s before IN_VEHICLE -
+        // nothing started, because only IN_VEHICLE did.
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+
+        receiver.maybeStartAutoDetection(
+            ApplicationProvider.getApplicationContext(),
+            listOf(sample(ActivityType.ON_BICYCLE, TransitionType.ENTER))
+        )
+
+        assertEquals(TrackingForegroundService.ACTION_AUTO_DETECT, nextStartedServiceAction())
+        val decision = latestDecision()
+        assertEquals(ActivityTransitionRecorder.EVENT_AUTO_DETECTION_STARTED, decision?.eventType)
+        assertEquals(ActivityTransitionRecorder.REASON_ON_BICYCLE_ENTER, decision?.reasonCode)
+        assertEquals(ActivityType.ON_BICYCLE, TrackingForegroundService.seedFromIntent(nextStartedService())?.activityType)
+    }
+
+    @Test
+    fun aLabelChangeInOneBroadcastSeedsTheServiceWithTheNewLabelsEnter() = runTest {
+        // The first real ride at 18:39:45: IN_VEHICLE EXIT then ON_BICYCLE ENTER, the same instant, one broadcast.
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+
+        receiver.maybeStartAutoDetection(
+            ApplicationProvider.getApplicationContext(),
+            listOf(
+                sample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 5_000L),
+                sample(ActivityType.ON_BICYCLE, TransitionType.ENTER, elapsedNanos = 5_000L)
+            )
+        )
+
+        val seed = TrackingForegroundService.seedFromIntent(nextStartedService())
+        assertEquals(ActivityType.ON_BICYCLE, seed?.activityType)
+        assertEquals(TransitionType.ENTER, seed?.transitionType)
+    }
+
+    @Test
+    fun walkingRunningAndStillNeverStartAutoDetection() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+
+        receiver.maybeStartAutoDetection(
+            ApplicationProvider.getApplicationContext(),
+            listOf(
+                sample(ActivityType.WALKING, TransitionType.ENTER),
+                sample(ActivityType.ON_FOOT, TransitionType.ENTER),
+                sample(ActivityType.RUNNING, TransitionType.ENTER),
+                sample(ActivityType.STILL, TransitionType.ENTER)
+            )
+        )
+
+        assertNull(nextStartedServiceAction())
+    }
+
+    @Test
+    fun aLabelChangeIsHandedToTheBusEnterFirstSoTheOldLabelsExitIsNotTheEndOfTheRide() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn))
+        val published = collectPublished(receiver)
+
+        receiver.handleTransitions(
+            ApplicationProvider.getApplicationContext(),
+            listOf(
+                sample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 5_000L),
+                sample(ActivityType.ON_BICYCLE, TransitionType.ENTER, elapsedNanos = 5_000L)
+            )
+        )
+
+        assertEquals(
+            listOf(ActivityType.ON_BICYCLE to TransitionType.ENTER, ActivityType.IN_VEHICLE to TransitionType.EXIT),
+            published.map { it.activityType to it.transitionType }
+        )
+    }
+
+    @Test
+    fun theDiagnosticRecordKeepsTheOrderTheTransitionsArrivedIn() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn))
+
+        receiver.handleTransitions(
+            ApplicationProvider.getApplicationContext(),
+            listOf(
+                sample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 5_000L),
+                sample(ActivityType.ON_BICYCLE, TransitionType.ENTER, elapsedNanos = 5_000L)
+            )
+        )
+
+        val recorded = db.diagnosticEventDao().findAll().filter { it.eventType == "ACTIVITY_TRANSITION" }
+        assertEquals(listOf("EXIT", "ENTER"), recorded.sortedBy { it.eventId }.map { it.reasonCode })
+    }
+
+    @Test
+    fun onlyTransitionsOfTheSameInstantAreReorderedAndEverythingElseStaysAsDelivered() {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn))
+        val delivered = listOf(
+            sample(ActivityType.STILL, TransitionType.EXIT, elapsedNanos = 1_000L),
+            sample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 1_000L),
+            sample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 9_000L),
+            sample(ActivityType.ON_BICYCLE, TransitionType.ENTER, elapsedNanos = 9_000L),
+            sample(ActivityType.WALKING, TransitionType.ENTER, elapsedNanos = 4_000L)
+        )
+
+        val ordered = with(receiver) { delivered.entersFirstAtTheSameInstant() }
+
+        assertEquals(
+            listOf(
+                ActivityType.IN_VEHICLE to TransitionType.ENTER,
+                ActivityType.STILL to TransitionType.EXIT,
+                ActivityType.ON_BICYCLE to TransitionType.ENTER,
+                ActivityType.IN_VEHICLE to TransitionType.EXIT,
+                ActivityType.WALKING to TransitionType.ENTER
+            ),
+            ordered.map { it.activityType to it.transitionType }
+        )
     }
 
     @Test

@@ -53,7 +53,7 @@ class CandidateStopEngineTest {
     fun aSingleInVehicleExitAloneDoesNotEndTheTripImmediately() {
         val decision = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, 0L)))
 
-        assertEquals(CandidateStopDecision.CandidateOpened, decision)
+        assertEquals(CandidateStopDecision.CandidateOpened(CandidateStopEngine.REASON_IN_VEHICLE_EXIT), decision)
         assertTrue(engine.isCandidateOpen)
     }
 
@@ -260,7 +260,7 @@ class CandidateStopEngineTest {
 
         val decision = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, 2_000_000_000L)))
 
-        assertEquals(CandidateStopDecision.CandidateOpened, decision)
+        assertEquals(CandidateStopDecision.CandidateOpened(CandidateStopEngine.REASON_IN_VEHICLE_EXIT), decision)
         assertTrue(engine.isCandidateOpen)
     }
 
@@ -272,7 +272,7 @@ class CandidateStopEngineTest {
 
         val decision = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, 40_000_000_000L)))
 
-        assertEquals(CandidateStopDecision.CandidateOpened, decision)
+        assertEquals(CandidateStopDecision.CandidateOpened(CandidateStopEngine.REASON_IN_VEHICLE_EXIT), decision)
     }
 
     @Test
@@ -290,7 +290,7 @@ class CandidateStopEngineTest {
         repeat(10) { cycle ->
             val exitAt = nowNanos
             val opened = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, exitAt)))
-            assertEquals("cycle $cycle: exit should open a candidate", CandidateStopDecision.CandidateOpened, opened)
+            assertEquals("cycle $cycle: exit should open a candidate", CandidateStopDecision.CandidateOpened(CandidateStopEngine.REASON_IN_VEHICLE_EXIT), opened)
 
             nowNanos += 2_000_000_000L // 2s later - well under the 30s grace period this test's profile uses
             val abandoned = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.ENTER, nowNanos)))
@@ -304,10 +304,80 @@ class CandidateStopEngineTest {
         // any stale state behind that would block or alter this.
         val realExitAt = nowNanos
         val realExitDecision = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, realExitAt)))
-        assertEquals(CandidateStopDecision.CandidateOpened, realExitDecision)
+        assertEquals(CandidateStopDecision.CandidateOpened(CandidateStopEngine.REASON_IN_VEHICLE_EXIT), realExitDecision)
 
         val confirmDecision = engine.accept(DetectionEvent.Location(location(realExitAt + 31_000_000_000L)))
         assertTrue(confirmDecision is CandidateStopDecision.Confirmed)
         assertEquals(realExitAt, (confirmDecision as CandidateStopDecision.Confirmed).candidateOpenedAtElapsedRealtimeNanos)
+    }
+
+    // --- DET-009 (ADR-026): Android also gives a motorcycle the label ON_BICYCLE ---
+
+    private fun label(type: ActivityType, transition: TransitionType, atSeconds: Int) =
+        engine.accept(DetectionEvent.Activity(activity(type, transition, atSeconds * 1_000_000_000L)))
+
+    @Test
+    fun aRideThatEndsOnTheBicycleLabelOpensAStopCandidateAndSaysSo() {
+        // The second real ride began as ON_BICYCLE; a ride can just as well end with that label and no IN_VEHICLE.
+        val decision = label(ActivityType.ON_BICYCLE, TransitionType.EXIT, 0)
+
+        assertEquals(CandidateStopDecision.CandidateOpened(CandidateStopEngine.REASON_ON_BICYCLE_EXIT), decision)
+        assertTrue(engine.isCandidateOpen)
+    }
+
+    @Test
+    fun aBicycleLabelledStopConfirmsAfterTheGracePeriodLikeAnyOther() {
+        label(ActivityType.ON_BICYCLE, TransitionType.EXIT, 0)
+
+        val decision = fixAt(31, speedMps = 0f)
+
+        assertTrue(decision is CandidateStopDecision.Confirmed)
+        assertEquals(0L, (decision as CandidateStopDecision.Confirmed).candidateOpenedAtElapsedRealtimeNanos)
+    }
+
+    @Test
+    fun aBicycleEnterCancelsAnOpenStopCandidateAndSaysItWasTheBicycleLabel() {
+        exit(0)
+
+        val decision = label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 5)
+
+        assertTrue(decision is CandidateStopDecision.Abandoned)
+        assertEquals(CandidateStopEngine.REASON_ON_BICYCLE_ENTER, (decision as CandidateStopDecision.Abandoned).reasonCode)
+        assertFalse(engine.isCandidateOpen)
+    }
+
+    @Test
+    fun theOtherLabelTakingOverBeforeTheOldOnesExitIsNotAStop() {
+        // As the receiver hands a label change over: ENTER of the new label first, then the old label's EXIT.
+        label(ActivityType.IN_VEHICLE, TransitionType.ENTER, 0)
+        label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 100)
+
+        val decision = label(ActivityType.IN_VEHICLE, TransitionType.EXIT, 100)
+
+        assertEquals("the stale EXIT of the old label opens nothing", CandidateStopDecision.NoChange, decision)
+        assertFalse(engine.isCandidateOpen)
+    }
+
+    @Test
+    fun aLabelChangeThatArrivesExitFirstOpensAndImmediatelyCancelsTheCandidate() {
+        label(ActivityType.IN_VEHICLE, TransitionType.ENTER, 0)
+
+        val opened = label(ActivityType.IN_VEHICLE, TransitionType.EXIT, 100)
+        val cancelled = label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 100)
+
+        assertEquals(CandidateStopDecision.CandidateOpened(CandidateStopEngine.REASON_IN_VEHICLE_EXIT), opened)
+        assertTrue(cancelled is CandidateStopDecision.Abandoned)
+        assertFalse("nothing was left open to end the trip later", engine.isCandidateOpen)
+    }
+
+    @Test
+    fun theRealEndAfterALabelChangeStillOpensACandidate() {
+        label(ActivityType.IN_VEHICLE, TransitionType.ENTER, 0)
+        label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 100)
+        label(ActivityType.IN_VEHICLE, TransitionType.EXIT, 100)
+
+        val decision = label(ActivityType.ON_BICYCLE, TransitionType.EXIT, 260)
+
+        assertEquals(CandidateStopDecision.CandidateOpened(CandidateStopEngine.REASON_ON_BICYCLE_EXIT), decision)
     }
 }

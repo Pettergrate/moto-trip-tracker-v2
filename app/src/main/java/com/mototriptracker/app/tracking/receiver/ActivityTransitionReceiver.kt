@@ -19,6 +19,7 @@ import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.domain.capability.CapabilityResolver
 import com.mototriptracker.app.domain.capability.DetectionListening
 import com.mototriptracker.app.domain.detection.PostFinishSuppression
+import com.mototriptracker.app.domain.detection.isVehicleLike
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionRecorder
 import com.mototriptracker.app.tracking.activityrecognition.mapActivityType
@@ -133,9 +134,32 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
             } catch (error: Exception) {
                 Log.w(TAG, "Failed to record activity transition $sample", error)
             }
-            activityTransitionBus.emit(sample)
         }
+        // The bus emit is non-suspending and never throws (tryEmit), so it runs whatever happened to the writes above.
+        for (sample in samples.entersFirstAtTheSameInstant()) activityTransitionBus.emit(sample)
         maybeStartAutoDetection(context, samples)
+    }
+
+    /**
+     * DET-009 (`ADR-026`): Android reports a change of label as an EXIT of the old one and an ENTER of the new one with
+     * the very same timestamp, EXIT first (read back from the phone: every pair, to the nanosecond). Handed to the
+     * detector in that order, the EXIT of `IN_VEHICLE` would end a ride that was only being re-labelled `ON_BICYCLE`.
+     * Putting the ENTER first - only between events of the same instant, everything else stays as delivered - lets the
+     * engines see the new label as current before the old one's EXIT arrives.
+     */
+    @VisibleForTesting
+    internal fun List<ActivityTransitionSample>.entersFirstAtTheSameInstant(): List<ActivityTransitionSample> {
+        val ordered = ArrayList<ActivityTransitionSample>(size)
+        var start = 0
+        while (start < size) {
+            var end = start
+            while (end < size && this[end].elapsedRealtimeNanos == this[start].elapsedRealtimeNanos) end++
+            val sameInstant = subList(start, end)
+            ordered += sameInstant.filter { it.transitionType == TransitionType.ENTER }
+            ordered += sameInstant.filter { it.transitionType != TransitionType.ENTER }
+            start = end
+        }
+        return ordered
     }
 
     /**
@@ -184,8 +208,9 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
     internal suspend fun maybeStartAutoDetection(context: Context, samples: List<ActivityTransitionSample>) {
         // The *specific* sample matters now, not just whether one exists: it is handed to the service so the
         // candidate engine sees it even on a cold start (see TrackingForegroundService.seedFromIntent's KDoc).
+        // DET-009 (ADR-026): `ON_BICYCLE` counts - Android gave the owner's motorcycle that label for a whole ride.
         val enteringVehicleSample = samples.firstOrNull {
-            it.activityType == ActivityType.IN_VEHICLE && it.transitionType == TransitionType.ENTER
+            it.activityType.isVehicleLike() && it.transitionType == TransitionType.ENTER
         } ?: return
 
         // Every branch below decides out loud from here on (found on the phone: two real commutes, both classified
@@ -213,7 +238,14 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
 
         try {
             context.startForegroundService(TrackingForegroundService.createAutoDetectIntent(context, enteringVehicleSample))
-            logDecision(ActivityTransitionRecorder.EVENT_AUTO_DETECTION_STARTED, ActivityTransitionRecorder.REASON_IN_VEHICLE_ENTER)
+            logDecision(
+                ActivityTransitionRecorder.EVENT_AUTO_DETECTION_STARTED,
+                if (enteringVehicleSample.activityType == ActivityType.ON_BICYCLE) {
+                    ActivityTransitionRecorder.REASON_ON_BICYCLE_ENTER
+                } else {
+                    ActivityTransitionRecorder.REASON_IN_VEHICLE_ENTER
+                }
+            )
         } catch (error: Exception) {
             // Android 12+'s background-start restrictions can refuse a foreground service started from a broadcast
             // receiver's context (`ForegroundServiceStartNotAllowedException`); this is the one branch that is not a

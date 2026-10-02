@@ -9,7 +9,9 @@ import com.mototriptracker.app.domain.haversineMeters
 /** [CandidateStopEngine]'s output per [DetectionEvent] — most events change nothing. */
 sealed interface CandidateStopDecision {
     data object NoChange : CandidateStopDecision
-    data object CandidateOpened : CandidateStopDecision
+
+    /** DET-009: says which label's EXIT opened it (`IN_VEHICLE_EXIT` / `ON_BICYCLE_EXIT`) - a ride can end on either. */
+    data class CandidateOpened(val reasonCode: String) : CandidateStopDecision
 
     /** DET-008: the stop did not hold up - says why, and with what evidence. */
     data class Abandoned(val reasonCode: String, val evidence: CandidateEvidence) : CandidateStopDecision
@@ -83,6 +85,14 @@ class CandidateStopEngine(private val profile: CandidateStopProfile = CandidateS
 
     private var state: State = State.Tracking
 
+    /**
+     * DET-009: the vehicle-like label last seen entering, if any. A change of label arrives as an EXIT of the old one
+     * and an ENTER of the new one at the same instant, in either order; an EXIT that is not of the current label is
+     * the old half of that change, not the end of the ride. `null` until one is seen (the engine starts at the moment
+     * a ride is confirmed, with no memory of the label that started it), when any EXIT counts.
+     */
+    private var currentLabel: ActivityType? = null
+
     val isCandidateOpen: Boolean get() = state is State.CandidateStop
 
     fun accept(event: DetectionEvent): CandidateStopDecision = when (event) {
@@ -93,19 +103,22 @@ class CandidateStopEngine(private val profile: CandidateStopProfile = CandidateS
 
     private fun onActivity(sample: ActivityTransitionSample): CandidateStopDecision {
         val current = state
-        return when {
-            sample.activityType == ActivityType.IN_VEHICLE &&
-                sample.transitionType == TransitionType.EXIT &&
-                current is State.Tracking -> {
+        val label = sample.activityType
+        if (label.isVehicleLike()) {
+            if (sample.transitionType == TransitionType.ENTER) {
+                currentLabel = label
+                if (current is State.CandidateStop) {
+                    state = State.Tracking
+                    return CandidateStopDecision.Abandoned(enterReason(label), evidenceOf(current, sample.elapsedRealtimeNanos))
+                }
+            } else if (current is State.Tracking && (currentLabel == null || currentLabel == label)) {
+                currentLabel = null
                 state = State.CandidateStop(openedAtElapsedRealtimeNanos = sample.elapsedRealtimeNanos)
-                CandidateStopDecision.CandidateOpened
+                return CandidateStopDecision.CandidateOpened(exitReason(label))
             }
-            sample.activityType == ActivityType.IN_VEHICLE &&
-                sample.transitionType == TransitionType.ENTER &&
-                current is State.CandidateStop -> {
-                state = State.Tracking
-                CandidateStopDecision.Abandoned(REASON_IN_VEHICLE_ENTER, evidenceOf(current, sample.elapsedRealtimeNanos))
-            }
+            return CandidateStopDecision.NoChange
+        }
+        return when {
             isWalkingAwayEvidence(sample) && current is State.CandidateStop -> {
                 state = current.copy(walkingSeen = true)
                 CandidateStopDecision.NoChange
@@ -113,6 +126,10 @@ class CandidateStopEngine(private val profile: CandidateStopProfile = CandidateS
             else -> CandidateStopDecision.NoChange
         }
     }
+
+    private fun enterReason(label: ActivityType) = if (label == ActivityType.ON_BICYCLE) REASON_ON_BICYCLE_ENTER else REASON_IN_VEHICLE_ENTER
+
+    private fun exitReason(label: ActivityType) = if (label == ActivityType.ON_BICYCLE) REASON_ON_BICYCLE_EXIT else REASON_IN_VEHICLE_EXIT
 
     private fun isWalkingAwayEvidence(sample: ActivityTransitionSample): Boolean =
         sample.transitionType == TransitionType.ENTER &&
@@ -173,6 +190,9 @@ class CandidateStopEngine(private val profile: CandidateStopProfile = CandidateS
     companion object {
         const val REASON_GRACE_PERIOD_ELAPSED = "GRACE_PERIOD_ELAPSED"
         const val REASON_IN_VEHICLE_ENTER = "IN_VEHICLE_ENTER"
+        const val REASON_ON_BICYCLE_ENTER = "ON_BICYCLE_ENTER"
+        const val REASON_IN_VEHICLE_EXIT = "IN_VEHICLE_EXIT"
+        const val REASON_ON_BICYCLE_EXIT = "ON_BICYCLE_EXIT"
         const val REASON_MOVEMENT_RESUMED = "MOVEMENT_RESUMED"
     }
 }

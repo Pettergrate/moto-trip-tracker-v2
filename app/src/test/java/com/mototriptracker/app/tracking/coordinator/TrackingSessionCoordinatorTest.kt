@@ -514,6 +514,90 @@ class TrackingSessionCoordinatorTest {
         assertEquals(com.mototriptracker.app.core.model.TripStatus.COMPLETED, trip.status)
     }
 
+    // --- DET-009 (ADR-026): Android also gives a motorcycle the label ON_BICYCLE. Replays of the two real rides of 2026-10-01 ---
+
+    @Test
+    fun aRideLabelledOnBicycleFromTheStartIsRecordedAndEndsWhenThatLabelEnds() = runTest {
+        // The second real ride (21:02): ON_BICYCLE first, no IN_VEHICLE until the very end. Nothing started it before.
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.ON_BICYCLE, TransitionType.ENTER, elapsedNanos = 0L),
+            100_000L to activitySample(ActivityType.ON_BICYCLE, TransitionType.EXIT, elapsedNanos = 100_000_000_000L),
+            101_000L to activitySample(ActivityType.STILL, TransitionType.ENTER, elapsedNanos = 101_000_000_000L)
+        )
+        val locationFlow = timedFlow(
+            1L to sample(elapsedNanos = 1_000_000L),
+            20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0), // confirms the start
+            60_000L to sample(elapsedNanos = 60_000_000_000L, lat = 10.004, lon = -20.0, speedMps = 8f),
+            95_000L to sample(elapsedNanos = 95_000_000_000L, lat = 10.007, lon = -20.0, speedMps = 6f),
+            110_000L to sample(elapsedNanos = 110_000_000_000L, lat = 10.0071, lon = -20.0, speedMps = 0f),
+            140_000L to sample(elapsedNanos = 140_000_000_000L, lat = 10.0071, lon = -20.0, speedMps = 0f) // past the 30 s grace
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow, stopProfile = shortStopGrace)
+
+        val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+        val capture = requireNotNull(db.tripCaptureDao().findById(tripCompleted.captureId))
+        assertEquals(StartSource.AUTO, capture.startSource)
+        assertEquals(EndSource.AUTO, capture.endSource)
+        val events = db.diagnosticEventDao().findAll()
+        assertEquals("CONFIRMED_DISPLACEMENT", events.single { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_START_CONFIRMED }.reasonCode)
+        assertEquals(
+            "the stop candidate says it was the bicycle label that ended",
+            "ON_BICYCLE_EXIT",
+            events.single { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_STOP_ENTERED }.reasonCode
+        )
+    }
+
+    @Test
+    fun aRideRelabelledAfterFourSecondsIsNotAbandonedAndIsRecorded() = runTest {
+        // The first real ride (18:39): IN_VEHICLE for 4 s, then ON_BICYCLE for the rest. The old IN_VEHICLE EXIT
+        // abandoned the candidate at 3.5 s; the receiver now hands the new label's ENTER over first.
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            4_000L to activitySample(ActivityType.ON_BICYCLE, TransitionType.ENTER, elapsedNanos = 4_000_000_000L),
+            4_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 4_000_000_000L),
+            100_000L to activitySample(ActivityType.ON_BICYCLE, TransitionType.EXIT, elapsedNanos = 100_000_000_000L)
+        )
+        val locationFlow = timedFlow(
+            1L to sample(elapsedNanos = 1_000_000L),
+            20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0), // confirms the start
+            60_000L to sample(elapsedNanos = 60_000_000_000L, lat = 10.004, lon = -20.0, speedMps = 8f),
+            110_000L to sample(elapsedNanos = 110_000_000_000L, lat = 10.0041, lon = -20.0, speedMps = 0f),
+            140_000L to sample(elapsedNanos = 140_000_000_000L, lat = 10.0041, lon = -20.0, speedMps = 0f)
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow, stopProfile = shortStopGrace)
+
+        assertTrue("a ride that only changed label was recorded", outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
+        val events = db.diagnosticEventDao().findAll()
+        assertEquals(1, events.count { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_START_CONFIRMED })
+        assertEquals(0, events.count { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_START_REJECTED })
+    }
+
+    @Test
+    fun aLabelChangeMidRideDoesNotOpenAStopCandidateAndTheRealEndStillDoes() = runTest {
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.ON_BICYCLE, TransitionType.ENTER, elapsedNanos = 0L),
+            // Re-labelled IN_VEHICLE at 50 s: the new label's ENTER first, then the old label's EXIT.
+            50_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 50_000_000_000L),
+            50_000L to activitySample(ActivityType.ON_BICYCLE, TransitionType.EXIT, elapsedNanos = 50_000_000_000L),
+            100_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 100_000_000_000L)
+        )
+        val locationFlow = timedFlow(
+            1L to sample(elapsedNanos = 1_000_000L),
+            20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0), // confirms the start
+            60_000L to sample(elapsedNanos = 60_000_000_000L, lat = 10.004, lon = -20.0, speedMps = 8f),
+            110_000L to sample(elapsedNanos = 110_000_000_000L, lat = 10.0041, lon = -20.0, speedMps = 0f),
+            140_000L to sample(elapsedNanos = 140_000_000_000L, lat = 10.0041, lon = -20.0, speedMps = 0f)
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow, stopProfile = shortStopGrace)
+
+        assertTrue(outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
+        val opened = db.diagnosticEventDao().findAll().filter { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_STOP_ENTERED }
+        assertEquals("only the real end opened a stop candidate, not the label change", listOf("IN_VEHICLE_EXIT"), opened.map { it.reasonCode })
+    }
+
     @Test
     fun runAutoDetectionDoesNotEndTheTripWhenActivityRecognitionSaysWalkingAtAStopAndTheVehicleMovesOff() = runTest {
         // The field-day failure, end to end: 13 fragments in one ride, each cut the instant Activity Recognition said

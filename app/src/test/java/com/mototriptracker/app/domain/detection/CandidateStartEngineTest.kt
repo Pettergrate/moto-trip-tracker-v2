@@ -288,4 +288,109 @@ class CandidateStartEngineTest {
 
         assertEquals(CandidateStartDecision.CandidateOpened, decision)
     }
+
+    // --- DET-009 (ADR-026): Android also gives a motorcycle the label ON_BICYCLE ---
+
+    private fun label(type: ActivityType, transition: TransitionType, atSeconds: Int) =
+        engine.accept(DetectionEvent.Activity(activity(type, transition, atSeconds * 1_000_000_000L)))
+
+    @Test
+    fun anOnBicycleEnterOpensACandidateJustLikeInVehicleDoes() {
+        // Field evidence (2026-10-01): a 1 km motorcycle ride was labelled ON_BICYCLE for 70 s before IN_VEHICLE, so
+        // nothing ever opened.
+        val decision = label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 0)
+
+        assertEquals(CandidateStartDecision.CandidateOpened, decision)
+        assertTrue(engine.isCandidateOpen)
+    }
+
+    @Test
+    fun aRideLabelledOnBicycleStillNeedsRealMovementToConfirm() {
+        label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 0)
+
+        val decision = fixAt(11, speedMps = 0.2f)
+
+        assertEquals(CandidateStartDecision.NoChange, decision)
+        assertTrue(engine.isCandidateOpen)
+    }
+
+    @Test
+    fun aRideLabelledOnBicycleConfirmsOnSpeedLikeAnyOther() {
+        label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 0)
+        fixAt(0, speedMps = 6.0f)
+        fixAt(5, speedMps = 6.0f)
+
+        val decision = fixAt(11, speedMps = 6.0f)
+
+        assertTrue(decision is CandidateStartDecision.Confirmed)
+        assertEquals(CandidateStartEngine.REASON_CONFIRMED_SPEED, (decision as CandidateStartDecision.Confirmed).reasonCode)
+    }
+
+    @Test
+    fun anOnBicycleExitAbandonsAndSaysItWasTheBicycleLabel() {
+        label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 0)
+
+        val decision = label(ActivityType.ON_BICYCLE, TransitionType.EXIT, 2)
+
+        assertTrue(decision is CandidateStartDecision.Abandoned)
+        assertEquals(CandidateStartEngine.REASON_ON_BICYCLE_EXIT, (decision as CandidateStartDecision.Abandoned).reasonCode)
+        assertFalse(engine.isCandidateOpen)
+    }
+
+    @Test
+    fun theOtherLabelTakingOverIsTheSameRideNotAnEnd() {
+        // The first real ride: IN_VEHICLE at 0, re-labelled ON_BICYCLE 4 s later - ENTER of the new label first, as the
+        // receiver hands them over, then the old label's EXIT.
+        label(ActivityType.IN_VEHICLE, TransitionType.ENTER, 0)
+        label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 4)
+
+        val decision = label(ActivityType.IN_VEHICLE, TransitionType.EXIT, 4)
+
+        assertEquals("the stale EXIT of the old label is not an end", CandidateStartDecision.NoChange, decision)
+        assertTrue(engine.isCandidateOpen)
+    }
+
+    @Test
+    fun theFirstRealRideConfirmsAfterItsLabelChanges() {
+        // Replays the phone's 18:39 ride: 5.3 m/s on the very first fixes, label IN_VEHICLE -> ON_BICYCLE after 4 s.
+        label(ActivityType.IN_VEHICLE, TransitionType.ENTER, 0)
+        fixAt(1, speedMps = 5.3f)
+        label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 4)
+        label(ActivityType.IN_VEHICLE, TransitionType.EXIT, 4)
+        fixAt(6, speedMps = 5.5f)
+
+        val decision = fixAt(12, speedMps = 5.6f)
+
+        assertTrue(decision is CandidateStartDecision.Confirmed)
+        assertEquals(CandidateStartEngine.REASON_CONFIRMED_SPEED, (decision as CandidateStartDecision.Confirmed).reasonCode)
+    }
+
+    @Test
+    fun aLabelChangeThatArrivesExitFirstStillAbandons() {
+        // Not the order the receiver produces, and not what the engine can fix: an EXIT of the current label with no
+        // ENTER yet is an end. Pinned so the receiver's ordering stays the thing that keeps flips from abandoning.
+        label(ActivityType.IN_VEHICLE, TransitionType.ENTER, 0)
+
+        val decision = label(ActivityType.IN_VEHICLE, TransitionType.EXIT, 4)
+
+        assertTrue(decision is CandidateStartDecision.Abandoned)
+    }
+
+    @Test
+    fun walkingStillAndRunningNeverOpenACandidate() {
+        for (type in listOf(ActivityType.WALKING, ActivityType.ON_FOOT, ActivityType.RUNNING, ActivityType.STILL, ActivityType.UNKNOWN)) {
+            assertEquals("$type", CandidateStartDecision.NoChange, label(type, TransitionType.ENTER, 0))
+            assertFalse("$type", engine.isCandidateOpen)
+        }
+    }
+
+    @Test
+    fun anExitOfAnotherLabelDoesNotAbandonACandidateThatNeverSawThatLabel() {
+        label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 0)
+
+        val decision = label(ActivityType.IN_VEHICLE, TransitionType.EXIT, 3)
+
+        assertEquals(CandidateStartDecision.NoChange, decision)
+        assertTrue(engine.isCandidateOpen)
+    }
 }

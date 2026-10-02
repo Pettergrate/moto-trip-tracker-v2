@@ -280,6 +280,7 @@ F0.13 no obliga a un sistema de scoring específico. Si Fase 1 adopta score/conf
 Ejemplos:
 
 - `IN_VEHICLE_ENTER`
+- `ON_BICYCLE_ENTER` / `ON_BICYCLE_EXIT` (DET-009: Android also labels a motorcycle ride `ON_BICYCLE`; next to `IN_VEHICLE_ENTER` / `IN_VEHICLE_EXIT`)
 - `MOTION_CONFIRMED`
 - `DISPLACEMENT_CONFIRMED`
 - `SPEED_EVIDENCE_PRESENT`
