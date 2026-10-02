@@ -180,17 +180,23 @@ class TrackingSessionCoordinator @Inject constructor(
      * stamped [StartSource.AUTO] - used only by [runAutoDetection] once
      * `CandidateStartEngine` actually confirms.
      */
-    suspend fun startAutoCapture(): StartResult = startCapture(StartSource.AUTO)
+    /**
+     * DET-010: [firstKeptFix] is the first fix the detector saw while it was validating the candidate and is about to
+     * keep as this capture's first raw point. The capture - and so the Trip - begins at that fix, not at the moment
+     * the candidate was confirmed some seconds later: every place that measures a Trip (its duration, its part's
+     * range, the live timer) starts from the capture's own start.
+     */
+    suspend fun startAutoCapture(firstKeptFix: LocationSample? = null): StartResult = startCapture(StartSource.AUTO, firstKeptFix)
 
-    private suspend fun startCapture(source: StartSource): StartResult {
+    private suspend fun startCapture(source: StartSource, firstKeptFix: LocationSample? = null): StartResult {
         val wallNow = clock.wallClockMillis()
         val elapsedNow = clock.elapsedRealtimeNanos()
         val newCapture = TripCaptureEntity(
             id = idGenerator.newId(),
             status = CaptureStatus.ACTIVE,
-            startedAt = wallNow,
+            startedAt = firstKeptFix?.wallTimeEpochMs ?: wallNow,
             endedAt = null,
-            startElapsedRealtimeNanos = elapsedNow,
+            startElapsedRealtimeNanos = firstKeptFix?.elapsedRealtimeNanos ?: elapsedNow,
             endElapsedRealtimeNanos = null,
             localTimeZoneId = TimeZone.getDefault().id,
             startSource = source,
@@ -776,12 +782,15 @@ class TrackingSessionCoordinator @Inject constructor(
      * during a total, sustained GPS loss (tunnel, parking garage) where no
      * location sample would otherwise arrive to trigger the check.
      *
-     * Two known, deliberately accepted v1 gaps, not silently dropped:
-     * - F0.3 §6 requirement 5 ("SHOULD not lose a large initial route
-     *   section"): samples evaluated during candidate validation are never
-     *   retroactively persisted once confirmed - only samples from the
-     *   moment of confirmation onward are. Buffering/backdating them would
-     *   need real sample-retention/replay machinery this task doesn't build.
+     * DET-010 (`ADR-027`) closed what used to be the first of two accepted v1
+     * gaps, F0.3 §6 requirement 5 ("SHOULD not lose a large initial route
+     * section"): the fixes seen while a candidate was being validated are
+     * held in memory (a few hundred at most) and, once the candidate is
+     * confirmed, kept as the capture's first raw points - and the capture
+     * begins at the first of them. A candidate that is abandoned leaves
+     * nothing behind: those coordinates were never written anywhere.
+     *
+     * One known, deliberately accepted v1 gap, not silently dropped:
      * - If the process dies mid-flight, `TrackingForegroundService`'s
      *   existing sticky-restart path (`rehydrateOrStop`) resumes plain Raw
      *   Track recording for an already-confirmed AUTO capture (no data loss)
@@ -820,6 +829,8 @@ class TrackingSessionCoordinator @Inject constructor(
         }
 
         val startEngine = CandidateStartEngine(startProfile)
+        // DET-010: the fixes seen before a capture exists, in order - kept as its first raw points once confirmed.
+        val candidateFixes = ArrayDeque<LocationSample>()
         var stopEngine: CandidateStopEngine? = null
         var activeCaptureId: String? = null
         var nextSequenceNumber = 0L
@@ -833,20 +844,37 @@ class TrackingSessionCoordinator @Inject constructor(
             merge(activityFlow, locationFlow, tickerFlow).collect { event ->
                 val captureId = activeCaptureId
                 if (captureId == null) {
+                    if (event is DetectionEvent.Location) {
+                        candidateFixes.addLast(event.sample)
+                        if (candidateFixes.size > MAX_CANDIDATE_FIXES) candidateFixes.removeFirst()
+                    }
                     when (val decision = startEngine.accept(event)) {
                         is CandidateStartDecision.Confirmed -> {
-                            when (val started = startAutoCapture()) {
+                            when (val started = startAutoCapture(candidateFixes.firstOrNull())) {
                                 is StartResult.Started -> {
                                     bestEffortDetectorLog(EVENT_CANDIDATE_START_CONFIRMED, decision.reasonCode, started.captureId, decision.evidence)
                                     activeCaptureId = started.captureId
                                     nextSequenceNumber = (rawTrackPointDao.maxSequenceNumber(started.captureId) ?: -1) + 1
                                     stopEngine = CandidateStopEngine(stopProfile)
                                     signal = LocationSignalTracker(started.captureId, null, locationServicesEnabled, preciseLocationGranted, onLocationSignalChanged)
-                                    writer = RawPointWriter(
+                                    val newWriter = RawPointWriter(
                                         rawTrackPointDao, diagnosticEventDao, clock, idGenerator, started.captureId,
                                         capacity = rawBufferCapacity,
                                         onStateChanged = onPersistenceStateChanged
                                     )
+                                    writer = newWriter
+                                    // DET-010: what was seen while the candidate was validated is this capture's first evidence,
+                                    // marked as such: the detector was in CANDIDATE_START when each of these was taken.
+                                    for (fix in candidateFixes) {
+                                        newWriter.write(
+                                            fix.toRawTrackPointEntity(
+                                                started.captureId, nextSequenceNumber, approximate = !preciseLocationGranted(),
+                                                detectorState = DetectorState.CANDIDATE_START
+                                            )
+                                        )
+                                        nextSequenceNumber++
+                                    }
+                                    candidateFixes.clear()
                                     onCaptureStarted(started.captureId)
                                 }
                                 // Another Start (most likely manual - DP-005 "manual
@@ -1346,7 +1374,12 @@ class TrackingSessionCoordinator @Inject constructor(
         processingVersion = ProcessingVersion(0)
     )
 
-    private fun LocationSample.toRawTrackPointEntity(captureId: String, sequenceNumber: Long, approximate: Boolean) =
+    private fun LocationSample.toRawTrackPointEntity(
+        captureId: String,
+        sequenceNumber: Long,
+        approximate: Boolean,
+        detectorState: DetectorState = DetectorState.TRACKING
+    ) =
         RawTrackPointEntity(
             captureId = captureId,
             sequenceNumber = sequenceNumber,
@@ -1367,7 +1400,7 @@ class TrackingSessionCoordinator @Inject constructor(
             isMock = isMock,
             requestProfileId = requestProfileId,
             callbackBatchId = null,
-            detectorStateSnapshot = DetectorState.TRACKING.name,
+            detectorStateSnapshot = detectorState.name,
             isApproximateLocation = approximate
         )
 
@@ -1605,6 +1638,14 @@ class TrackingSessionCoordinator @Inject constructor(
          * until a location fix eventually returns.
          */
         private const val TICKER_INTERVAL_MS = 15_000L
+
+        /**
+         * DET-010: how many fixes a candidate keeps in memory before its capture exists. The candidate window is five
+         * minutes (`CandidateStartProfile.maxCandidateWindowMs`) and the location profile delivers roughly one fix per
+         * second at its fastest, so this is about twice what a whole window can hold: a bound for memory, not one a
+         * normal ride reaches. Past it the oldest fixes are dropped.
+         */
+        const val MAX_CANDIDATE_FIXES = 600
 
         /** REC-002: the [DiagnosticEventEntity.eventType] of a restart that couldn't legitimately resume an ACTIVE capture. */
         const val EVENT_RECOVERY_DEGRADED = "RECOVERY_DEGRADED"

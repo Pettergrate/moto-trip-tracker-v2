@@ -444,7 +444,7 @@ class TrackingSessionCoordinatorTest {
 
     @Test
     fun runAutoDetectionAbandonsWhenAnotherCaptureAlreadyWonTheRace() = runTest {
-        coordinator.startManualCapture()
+        val manual = coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started
         val activityFlow = timedFlow(
             0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L)
         )
@@ -457,6 +457,11 @@ class TrackingSessionCoordinatorTest {
 
         assertEquals(TrackingSessionCoordinator.AutoDetectionOutcome.CandidateAbandoned, outcome)
         assertEquals(1, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+        assertEquals(
+            "the fixes the lost candidate held are not the manual capture's evidence (DET-010)",
+            0,
+            db.rawTrackPointDao().countByCapture(manual.captureId)
+        )
     }
 
     @Test
@@ -499,19 +504,108 @@ class TrackingSessionCoordinatorTest {
 
         val points = db.rawTrackPointDao().findAllByCapture(tripCompleted.captureId)
         assertEquals(
-            "every sample once recording was confirmed is kept as raw evidence (ADR-006)",
-            listOf(25_000_000_000L, 29_000_000_000L, 40_000_000_000L, 60_000_000_000L),
+            "every sample is kept as raw evidence (ADR-006), including the two seen while the start was being validated (DET-010)",
+            listOf(1_000_000L, 20_000_000_000L, 25_000_000_000L, 29_000_000_000L, 40_000_000_000L, 60_000_000_000L),
             points.map { it.elapsedRealtimeNanos }
         )
+        assertEquals(listOf(0L, 1L, 2L, 3L, 4L, 5L), points.map { it.sequenceNumber })
+        assertEquals(
+            "the points taken while the candidate was validated say so",
+            listOf("CANDIDATE_START", "CANDIDATE_START", "TRACKING", "TRACKING", "TRACKING", "TRACKING"),
+            points.map { it.detectorStateSnapshot }
+        )
+
+        // DET-010: the capture - and so the Trip - begins at the first kept fix, not at the confirmation 20 s later.
+        assertEquals(1_000_000L, capture.startElapsedRealtimeNanos)
 
         // DET-008 / F0.3 §7 req. 5: the Trip ends at the last point before the vehicle stopped (the 25 s one - the
         // stop itself is at 28 s), not where the grace period ended.
         val part = requireNotNull(db.tripPartDao().findByCaptureId(tripCompleted.captureId))
-        assertEquals(0L, part.endSequenceNumber)
+        assertEquals(0L, part.startSequenceNumber)
+        assertEquals(1_000_000L, part.startElapsedRealtimeNanos)
+        assertEquals(2L, part.endSequenceNumber)
         assertEquals(25_000_000_000L, part.endElapsedRealtimeNanos)
 
         val trip = requireNotNull(db.tripDao().findById(tripCompleted.tripId))
         assertEquals(com.mototriptracker.app.core.model.TripStatus.COMPLETED, trip.status)
+    }
+
+    // --- DET-010 (ADR-027): the fixes seen while a start candidate is validated become the capture's first points ---
+
+    @Test
+    fun anAbandonedCandidateLeavesNoCaptureAndSoNoStoredCoordinates() = runTest {
+        // Fixes arrive while the candidate is open; it is then abandoned (the rider walked off). Nothing may be
+        // written: a raw point cannot exist without a capture, and no capture was created.
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            9_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 9_000_000_000L)
+        )
+        val locationFlow = timedFlow(
+            1L to sample(elapsedNanos = 1_000_000L),
+            4_000L to sample(elapsedNanos = 4_000_000_000L, lat = 10.0001, lon = -20.0),
+            8_000L to sample(elapsedNanos = 8_000_000_000L, lat = 10.0002, lon = -20.0)
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow)
+
+        assertEquals(TrackingSessionCoordinator.AutoDetectionOutcome.CandidateAbandoned, outcome)
+        assertEquals(0, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+        assertNull(db.tripCaptureDao().findMostRecentlyEnded())
+    }
+
+    @Test
+    fun theCaptureBeginsAtTheFirstKeptFixAndTheTripPartCoversTheRetainedPoints() = runTest {
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            50_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 50_000_000_000L)
+        )
+        val locationFlow = timedFlow(
+            2_000L to sample(elapsedNanos = 2_000_000_000L),
+            10_000L to sample(elapsedNanos = 10_000_000_000L, lat = 10.0003, lon = -20.0),
+            20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0), // confirms the start
+            30_000L to sample(elapsedNanos = 30_000_000_000L, lat = 10.002, lon = -20.0, speedMps = 9f),
+            90_000L to sample(elapsedNanos = 90_000_000_000L, lat = 10.002, lon = -20.0, speedMps = 0f)
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow, stopProfile = shortStopGrace)
+
+        val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+        val capture = requireNotNull(db.tripCaptureDao().findById(tripCompleted.captureId))
+        assertEquals("the capture began at the first fix it kept, not at the confirmation", 2_000_000_000L, capture.startElapsedRealtimeNanos)
+        assertEquals(2_000L, capture.startedAt)
+        val part = requireNotNull(db.tripPartDao().findByCaptureId(tripCompleted.captureId))
+        assertEquals("the Trip's duration is measured from there", 2_000_000_000L, part.startElapsedRealtimeNanos)
+        assertEquals(0L, part.startSequenceNumber)
+        val points = db.rawTrackPointDao().findAllByCapture(tripCompleted.captureId)
+        assertEquals(listOf(2_000_000_000L, 10_000_000_000L, 20_000_000_000L, 30_000_000_000L, 90_000_000_000L), points.map { it.elapsedRealtimeNanos })
+        assertEquals("sequence numbers continue without a gap or a repeat", (0L..4L).toList(), points.map { it.sequenceNumber })
+    }
+
+    @Test
+    fun aCandidateKeepsAtMostTheMostRecentFixesAndTheCaptureBeginsAtTheOldestOfThose() = runTest {
+        // 650 fixes in the same place (so nothing confirms), then the one that confirms: only the last
+        // MAX_CANDIDATE_FIXES of those 651 are kept, and the capture begins at the oldest of them.
+        val cap = TrackingSessionCoordinator.MAX_CANDIDATE_FIXES
+        val waiting = (1..650).map { i -> (i * 400L) to sample(elapsedNanos = i * 400_000_000L) }
+        val locationFlow = timedFlow(
+            *waiting.toTypedArray(),
+            270_000L to sample(elapsedNanos = 270_000_000_000L, lat = 10.001, lon = -20.0), // confirms the start
+            300_000L to sample(elapsedNanos = 300_000_000_000L, lat = 10.001, lon = -20.0, speedMps = 0f),
+            330_000L to sample(elapsedNanos = 330_000_000_000L, lat = 10.001, lon = -20.0, speedMps = 0f)
+        )
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            280_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 280_000_000_000L)
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow, stopProfile = shortStopGrace)
+
+        val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+        val points = db.rawTrackPointDao().findAllByCapture(tripCompleted.captureId)
+        assertEquals("the kept fixes plus the two taken after the start", cap + 2, points.size)
+        val oldestKept = (651 - cap + 1) * 400_000_000L // the 52nd of 651 fixes, 20.8 s
+        assertEquals(oldestKept, points.first().elapsedRealtimeNanos)
+        assertEquals(oldestKept, requireNotNull(db.tripCaptureDao().findById(tripCompleted.captureId)).startElapsedRealtimeNanos)
     }
 
     // --- DET-009 (ADR-026): Android also gives a motorcycle the label ON_BICYCLE. Replays of the two real rides of 2026-10-01 ---
@@ -661,7 +755,8 @@ class TrackingSessionCoordinatorTest {
 
         val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
         val part = requireNotNull(db.tripPartDao().findByCaptureId(tripCompleted.captureId))
-        assertEquals("all three recorded points stay in the Trip", 2L, part.endSequenceNumber)
+        // Two fixes seen while the start candidate was validated (1 ms and 20 s) are the capture's first points (DET-010).
+        assertEquals("all five recorded points stay in the Trip", 4L, part.endSequenceNumber)
         assertEquals(clock.elapsedRealtimeNanos(), part.endElapsedRealtimeNanos)
     }
 
@@ -684,7 +779,8 @@ class TrackingSessionCoordinatorTest {
         val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow, stopProfile = shortStopGrace)
 
         val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
-        assertEquals(3L, requireNotNull(db.tripPartDao().findByCaptureId(tripCompleted.captureId)).endSequenceNumber)
+        // Six points: the two seen while the start candidate was validated (DET-010), then four live ones.
+        assertEquals(5L, requireNotNull(db.tripPartDao().findByCaptureId(tripCompleted.captureId)).endSequenceNumber)
     }
 
     @Test
@@ -836,13 +932,14 @@ class TrackingSessionCoordinatorTest {
         // interruption, including the ones that landed between churn cycles.
         val points = db.rawTrackPointDao().findAllByCapture(tripCompleted.captureId)
         assertEquals(
-            listOf(25_000_000_000L, 31_000_000_000L, 36_000_000_000L, 41_000_000_000L, 80_000_000_000L),
+            // The first two were seen while the start candidate was validated (DET-010).
+            listOf(1_000_000L, 20_000_000_000L, 25_000_000_000L, 31_000_000_000L, 36_000_000_000L, 41_000_000_000L, 80_000_000_000L),
             points.map { it.elapsedRealtimeNanos }
         )
 
         // The Trip ends at the real stop (45 s), leaving the 80 s point - recorded while waiting out the grace period - outside it.
         val part = requireNotNull(db.tripPartDao().findByCaptureId(tripCompleted.captureId))
-        assertEquals(3L, part.endSequenceNumber)
+        assertEquals(5L, part.endSequenceNumber)
     }
 
     // --- TRK-003: pauseCapture/resumeCapture ----------------------------
