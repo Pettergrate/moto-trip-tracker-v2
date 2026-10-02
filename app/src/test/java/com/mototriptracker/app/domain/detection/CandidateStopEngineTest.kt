@@ -29,15 +29,25 @@ class CandidateStopEngineTest {
         source = "test"
     )
 
-    private fun location(elapsedNanos: Long) = LocationSample(
+    private fun location(elapsedNanos: Long, speedMps: Float? = null, latitude: Double = 10.0) = LocationSample(
         wallTimeEpochMs = elapsedNanos / 1_000_000,
         elapsedRealtimeNanos = elapsedNanos,
         receivedAtElapsedRealtimeNanos = elapsedNanos,
-        latitude = 10.0,
+        latitude = latitude,
         longitude = -84.0,
         horizontalAccuracyM = 5.0f,
-        requestProfileId = "tracking-manual-v0"
+        requestProfileId = "tracking-manual-v0",
+        speedMps = speedMps
     )
+
+    private fun exit(atSeconds: Int = 0) =
+        engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, atSeconds * 1_000_000_000L)))
+
+    private fun walking(atSeconds: Int) =
+        engine.accept(DetectionEvent.Activity(activity(ActivityType.WALKING, TransitionType.ENTER, atSeconds * 1_000_000_000L)))
+
+    private fun fixAt(seconds: Int, speedMps: Float?, latitude: Double = 10.0) =
+        engine.accept(DetectionEvent.Location(location(seconds * 1_000_000_000L, speedMps, latitude)))
 
     @Test
     fun aSingleInVehicleExitAloneDoesNotEndTheTripImmediately() {
@@ -98,30 +108,113 @@ class CandidateStopEngineTest {
 
         val decision = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.ENTER, 5_000_000_000L)))
 
-        assertEquals(CandidateStopDecision.Abandoned, decision)
+        assertTrue(decision is CandidateStopDecision.Abandoned)
+        assertEquals(CandidateStopEngine.REASON_IN_VEHICLE_ENTER, (decision as CandidateStopDecision.Abandoned).reasonCode)
+        assertFalse(engine.isCandidateOpen)
+    }
+
+    // --- DET-008: Activity Recognition's WALKING no longer ends a trip by itself ---
+
+    @Test
+    fun walkingAloneDoesNotEndTheTrip() {
+        // The bug this task exists for: 13 of 13 automatic Finishes in one real field day came the instant
+        // Activity Recognition said WALKING - at traffic lights and slow turns, not at the end of rides.
+        exit(0)
+
+        val decision = walking(atSeconds = 2)
+
+        assertEquals(CandidateStopDecision.NoChange, decision)
+        assertTrue("the candidate stays open, waiting for the grace period", engine.isCandidateOpen)
+    }
+
+    @Test
+    fun onFootAloneDoesNotEndTheTripEither() {
+        exit(0)
+
+        val decision = engine.accept(DetectionEvent.Activity(activity(ActivityType.ON_FOOT, TransitionType.ENTER, 1_000_000_000L)))
+
+        assertEquals(CandidateStopDecision.NoChange, decision)
+        assertTrue(engine.isCandidateOpen)
+    }
+
+    @Test
+    fun walkingDoesNotShortenTheGracePeriodItConfirmsAtTheSameMomentWithOrWithoutIt() {
+        exit(0)
+        walking(atSeconds = 2)
+        assertEquals("still inside the 30 s grace", CandidateStopDecision.NoChange, fixAt(29, speedMps = 0f))
+
+        val decision = fixAt(31, speedMps = 0f)
+
+        assertTrue(decision is CandidateStopDecision.Confirmed)
+        decision as CandidateStopDecision.Confirmed
+        assertEquals(CandidateStopEngine.REASON_GRACE_PERIOD_ELAPSED, decision.reasonCode)
+        assertEquals("opened at the vehicle's own exit, so the caller can trim the tail from there", 0L, decision.candidateOpenedAtElapsedRealtimeNanos)
+        assertTrue("walking was seen and is part of the evidence", decision.evidence.walkingSeen)
+    }
+
+    @Test
+    fun aRealStopStaysPutAndConfirmsAfterTheGracePeriodWithItsEvidence() {
+        exit(0)
+        fixAt(5, speedMps = 0.0f)
+        fixAt(15, speedMps = 0.3f)
+
+        val decision = fixAt(31, speedMps = 0.0f)
+
+        decision as CandidateStopDecision.Confirmed
+        assertEquals(3, decision.evidence.fixCount)
+        assertEquals(0.3f, decision.evidence.maxSpeedMps!!, 0.001f)
+        assertEquals(5_000L, decision.evidence.firstFixDelayMs)
+        assertEquals(0.0, decision.evidence.displacementMeters!!, 0.5)
+        assertFalse(decision.evidence.walkingSeen)
+    }
+
+    @Test
+    fun theLightTurningGreenCancelsTheStopEvenIfActivityRecognitionNeverSaysInVehicleAgain() {
+        // §7 requirement 4: "Resumed movement during candidate-stop MUST return to TRACKING without creating a split."
+        exit(0)
+        walking(atSeconds = 1)
+        fixAt(10, speedMps = 0.0f)
+        assertEquals("one fast fix is not yet movement", CandidateStopDecision.NoChange, fixAt(20, speedMps = 5.0f))
+
+        val decision = fixAt(22, speedMps = 6.5f)
+
+        assertTrue(decision is CandidateStopDecision.Abandoned)
+        decision as CandidateStopDecision.Abandoned
+        assertEquals(CandidateStopEngine.REASON_MOVEMENT_RESUMED, decision.reasonCode)
+        assertEquals(6.5f, decision.evidence.maxSpeedMps!!, 0.001f)
+        assertTrue(decision.evidence.walkingSeen)
         assertFalse(engine.isCandidateOpen)
     }
 
     @Test
-    fun walkingAwayConfirmsImmediatelyWithoutWaitingForTheGracePeriod() {
-        engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, 0L)))
+    fun aSingleGpsSpeedSpikeDoesNotCancelARealStop() {
+        // DP-001.
+        exit(0)
+        fixAt(10, speedMps = 0.0f)
+        fixAt(12, speedMps = 9.0f) // a glitch
+        fixAt(14, speedMps = 0.0f) // back to nothing - the run is broken
 
-        val decision = engine.accept(DetectionEvent.Activity(activity(ActivityType.WALKING, TransitionType.ENTER, 2_000_000_000L)))
-
-        assertTrue(decision is CandidateStopDecision.Confirmed)
-        val confirmed = decision as CandidateStopDecision.Confirmed
-        assertEquals(2_000_000_000L, confirmed.confirmedAtElapsedRealtimeNanos)
-        assertEquals(CandidateStopEngine.REASON_WALKING_AWAY, confirmed.reasonCode)
+        assertEquals(CandidateStopDecision.NoChange, fixAt(16, speedMps = 9.0f))
+        assertTrue(engine.isCandidateOpen)
+        assertTrue("and the stop still confirms on its own schedule", fixAt(31, speedMps = 0f) is CandidateStopDecision.Confirmed)
     }
 
     @Test
-    fun onFootEnteringAlsoConfirmsImmediately() {
-        engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, 0L)))
+    fun aWalkingPaceNeverCancelsTheStop() {
+        exit(0)
+        walking(atSeconds = 1)
+        for (second in 4..28 step 4) {
+            assertEquals(CandidateStopDecision.NoChange, fixAt(second, speedMps = 1.6f))
+        }
+        assertTrue("a rider walking away from the bike is a stop that confirms", fixAt(31, speedMps = 1.6f) is CandidateStopDecision.Confirmed)
+    }
 
-        val decision = engine.accept(DetectionEvent.Activity(activity(ActivityType.ON_FOOT, TransitionType.ENTER, 1_000_000_000L)))
-
-        assertTrue(decision is CandidateStopDecision.Confirmed)
-        assertEquals(CandidateStopEngine.REASON_WALKING_AWAY, (decision as CandidateStopDecision.Confirmed).reasonCode)
+    @Test
+    fun resumedMovementOnlyCountsWhileACandidateIsOpen() {
+        // Riding normally with no stop candidate: speed samples must not disturb anything.
+        assertEquals(CandidateStopDecision.NoChange, fixAt(1, speedMps = 12f))
+        assertEquals(CandidateStopDecision.NoChange, fixAt(3, speedMps = 12f))
+        assertFalse(engine.isCandidateOpen)
     }
 
     @Test
@@ -201,7 +294,7 @@ class CandidateStopEngineTest {
 
             nowNanos += 2_000_000_000L // 2s later - well under the 30s grace period this test's profile uses
             val abandoned = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.ENTER, nowNanos)))
-            assertEquals("cycle $cycle: re-entering traffic should abandon the candidate", CandidateStopDecision.Abandoned, abandoned)
+            assertTrue("cycle $cycle: re-entering traffic should abandon the candidate", abandoned is CandidateStopDecision.Abandoned)
             assertFalse(engine.isCandidateOpen)
 
             nowNanos += 1_000_000_000L

@@ -8,6 +8,7 @@ import com.mototriptracker.app.core.model.ActivityType
 import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.core.model.DetectorState
 import com.mototriptracker.app.core.model.DiagnosticCategory
+import com.mototriptracker.app.domain.detection.CandidateStopProfile
 import com.mototriptracker.app.core.model.DiagnosticSeverity
 import com.mototriptracker.app.core.model.EndSource
 import com.mototriptracker.app.core.model.LocationSample
@@ -19,6 +20,11 @@ import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.location.LocationGateway
 import com.mototriptracker.app.tracking.persistence.RawPointWriter
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
@@ -70,15 +76,19 @@ class TrackingSessionCoordinatorTest {
         idGenerator = FakeIdGenerator(prefix = "capture")
     )
 
-    private fun sample(elapsedNanos: Long, lat: Double = 10.0, lon: Double = -20.0) = LocationSample(
+    private fun sample(elapsedNanos: Long, lat: Double = 10.0, lon: Double = -20.0, speedMps: Float? = null) = LocationSample(
         wallTimeEpochMs = 2_000L,
         elapsedRealtimeNanos = elapsedNanos,
         receivedAtElapsedRealtimeNanos = elapsedNanos,
         latitude = lat,
         longitude = lon,
         horizontalAccuracyM = 5.0f,
-        requestProfileId = "test-profile"
+        requestProfileId = "test-profile",
+        speedMps = speedMps
     )
+
+    /** DET-008: a short grace period so the end-of-ride tests don't need minutes of synthetic samples. */
+    private val shortStopGrace = CandidateStopProfile(minConfirmationDurationMs = 30_000L)
 
     @Before
     fun setUp() {
@@ -242,6 +252,64 @@ class TrackingSessionCoordinatorTest {
     }
 
     @Test
+    fun finishCaptureWithATripEndTrimsThePartToTheLastPointAtOrBeforeIt() = runTest {
+        // DET-008: the points after the vehicle stopped stay as raw evidence, but the Trip does not include them.
+        val captureId =
+            (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinatorWith(listOf(sample(10_000_000_000L), sample(20_000_000_000L), sample(30_000_000_000L), sample(40_000_000_000L)))
+            .recordLocationUpdates(captureId)
+
+        val result = coordinator.finishCapture(captureId, EndSource.AUTO, tripEndsAtElapsedRealtimeNanos = 25_000_000_000L)
+
+        val part = requireNotNull(db.tripPartDao().findByCaptureId(captureId))
+        assertEquals(0L, part.startSequenceNumber)
+        assertEquals(1L, part.endSequenceNumber)
+        assertEquals("the Trip ends at the last kept point's own time (EDT-003's convention)", 20_000_000_000L, part.endElapsedRealtimeNanos)
+        assertEquals("nothing was deleted (ADR-006)", 4, db.rawTrackPointDao().countByCapture(captureId))
+        // The Trip's own time is that point's wall time ("when the ride ended"), not the moment the Finish ran (the clock reads 1000).
+        assertEquals(2_000L, requireNotNull(db.tripDao().findById((result as TrackingSessionCoordinator.FinishResult.Finished).tripId)).createdAt)
+    }
+
+    @Test
+    fun aRepeatedAutomaticFinishWithATripEndIsStillIdempotentAndChangesNothing() = runTest {
+        val captureId =
+            (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinatorWith(listOf(sample(10_000_000_000L), sample(20_000_000_000L), sample(30_000_000_000L))).recordLocationUpdates(captureId)
+        val first = coordinator.finishCapture(captureId, EndSource.AUTO, tripEndsAtElapsedRealtimeNanos = 25_000_000_000L)
+
+        val second = coordinator.finishCapture(captureId, EndSource.AUTO, tripEndsAtElapsedRealtimeNanos = 15_000_000_000L)
+
+        assertTrue(second is TrackingSessionCoordinator.FinishResult.AlreadyFinished)
+        assertEquals(first.tripId, second.tripId)
+        assertEquals(1L, requireNotNull(db.tripPartDao().findByCaptureId(captureId)).endSequenceNumber)
+    }
+
+    @Test
+    fun finishCaptureWithATripEndBeforeEveryRecordedPointTrimsNothing() = runTest {
+        // A Trip trimmed down to zero points would be empty; with nothing at or before the bound, the whole capture stays.
+        val captureId =
+            (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinatorWith(listOf(sample(10_000_000_000L), sample(20_000_000_000L))).recordLocationUpdates(captureId)
+
+        coordinator.finishCapture(captureId, EndSource.AUTO, tripEndsAtElapsedRealtimeNanos = 5_000_000_000L)
+
+        val part = requireNotNull(db.tripPartDao().findByCaptureId(captureId))
+        assertEquals(1L, part.endSequenceNumber)
+        assertEquals(clock.elapsedRealtimeNanos(), part.endElapsedRealtimeNanos)
+    }
+
+    @Test
+    fun aManualFinishNeverTrims() = runTest {
+        val captureId =
+            (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
+        coordinatorWith(listOf(sample(10_000_000_000L), sample(20_000_000_000L), sample(30_000_000_000L))).recordLocationUpdates(captureId)
+
+        coordinator.finishCapture(captureId)
+
+        assertEquals(2L, requireNotNull(db.tripPartDao().findByCaptureId(captureId)).endSequenceNumber)
+    }
+
+    @Test
     fun repeatedFinishIsIdempotentAndDoesNotCreateASecondTripOrEnqueueTwice() = runTest {
         val captureId =
             (coordinator.startManualCapture() as TrackingSessionCoordinator.StartResult.Started).captureId
@@ -392,9 +460,10 @@ class TrackingSessionCoordinatorTest {
     }
 
     @Test
-    fun runAutoDetectionConfirmsStartsAnAutoCaptureThenAutoFinishesOnWalkingAway() = runTest {
+    fun runAutoDetectionConfirmsStartsAnAutoCaptureThenAutoFinishesWhenTheRideEndsAndLeavesTheWalkingTailOutOfTheTrip() = runTest {
         val activityFlow = timedFlow(
             0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            // The vehicle stops here, and the rider walks away: Activity Recognition says so a moment later.
             28_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 28_000_000_000L),
             30_000L to activitySample(ActivityType.WALKING, TransitionType.ENTER, elapsedNanos = 30_000_000_000L)
         )
@@ -403,14 +472,20 @@ class TrackingSessionCoordinatorTest {
             1L to sample(elapsedNanos = 1_000_000L),
             // >=15s and >=40m from the anchor - confirms the start.
             20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0),
-            // Arrives once a real capture exists - this one IS persisted.
-            25_000L to sample(elapsedNanos = 25_000_000_000L, lat = 10.0011, lon = -20.0)
+            // Arrives once a real capture exists - this one IS persisted, and is before the vehicle stopped.
+            25_000L to sample(elapsedNanos = 25_000_000_000L, lat = 10.0011, lon = -20.0),
+            // The walk away (walking pace): persisted (raw evidence is never thrown away) but not part of the Trip.
+            29_000L to sample(elapsedNanos = 29_000_000_000L, lat = 10.0012, lon = -20.0, speedMps = 1.2f),
+            40_000L to sample(elapsedNanos = 40_000_000_000L, lat = 10.0013, lon = -20.0, speedMps = 1.3f),
+            // 32 s after the vehicle stopped, past the 30 s grace: the stop is confirmed here, not at the WALKING sample.
+            60_000L to sample(elapsedNanos = 60_000_000_000L, lat = 10.0013, lon = -20.0, speedMps = 1.3f)
         )
         var startedCaptureId: String? = null
 
         val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(
             activityEvents = activityFlow,
-            onCaptureStarted = { startedCaptureId = it }
+            onCaptureStarted = { startedCaptureId = it },
+            stopProfile = shortStopGrace
         )
 
         assertTrue(outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
@@ -423,11 +498,203 @@ class TrackingSessionCoordinatorTest {
         assertEquals(EndSource.AUTO, capture.endSource)
 
         val points = db.rawTrackPointDao().findAllByCapture(tripCompleted.captureId)
-        assertEquals(1, points.size)
-        assertEquals(25_000_000_000L, points.single().elapsedRealtimeNanos)
+        assertEquals(
+            "every sample once recording was confirmed is kept as raw evidence (ADR-006)",
+            listOf(25_000_000_000L, 29_000_000_000L, 40_000_000_000L, 60_000_000_000L),
+            points.map { it.elapsedRealtimeNanos }
+        )
+
+        // DET-008 / F0.3 §7 req. 5: the Trip ends at the last point before the vehicle stopped (the 25 s one - the
+        // stop itself is at 28 s), not where the grace period ended.
+        val part = requireNotNull(db.tripPartDao().findByCaptureId(tripCompleted.captureId))
+        assertEquals(0L, part.endSequenceNumber)
+        assertEquals(25_000_000_000L, part.endElapsedRealtimeNanos)
 
         val trip = requireNotNull(db.tripDao().findById(tripCompleted.tripId))
         assertEquals(com.mototriptracker.app.core.model.TripStatus.COMPLETED, trip.status)
+    }
+
+    @Test
+    fun runAutoDetectionDoesNotEndTheTripWhenActivityRecognitionSaysWalkingAtAStopAndTheVehicleMovesOff() = runTest {
+        // The field-day failure, end to end: 13 fragments in one ride, each cut the instant Activity Recognition said
+        // WALKING at a stop. Here the vehicle stops, AR says WALKING, then the light turns green - and the ride
+        // really ends at a second stop later on.
+        val locationFlow = timedFlow(
+            1L to sample(elapsedNanos = 1_000_000L),
+            20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0), // confirms the start
+            26_000L to sample(elapsedNanos = 26_000_000_000L, lat = 10.001, lon = -20.0, speedMps = 0f),
+            // The light turns green: two fixes in a row at vehicle speed.
+            34_000L to sample(elapsedNanos = 34_000_000_000L, lat = 10.00105, lon = -20.0, speedMps = 5f),
+            36_000L to sample(elapsedNanos = 36_000_000_000L, lat = 10.0012, lon = -20.0, speedMps = 7f),
+            // Well past the 30 s grace counted from the first stop (24 s): had that candidate stayed open it would
+            // have ended the trip here. It is the second stop (60 s) that ends it, 40 s later.
+            60_000L to sample(elapsedNanos = 60_000_000_000L, lat = 10.004, lon = -20.0, speedMps = 0f),
+            100_000L to sample(elapsedNanos = 100_000_000_000L, lat = 10.004, lon = -20.0, speedMps = 0f)
+        )
+        val activityFlowWithSecondStop = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            24_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 24_000_000_000L),
+            25_000L to activitySample(ActivityType.WALKING, TransitionType.ENTER, elapsedNanos = 25_000_000_000L),
+            59_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 59_000_000_000L)
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(
+            activityEvents = activityFlowWithSecondStop,
+            stopProfile = shortStopGrace
+        )
+
+        // One logical Trip across the stop at the light: a single capture, ended at the real stop (59 s), not the first (24 s).
+        val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+        assertEquals(1, db.tripCaptureDao().countByStatus(CaptureStatus.COMPLETED))
+        val part = requireNotNull(db.tripPartDao().findByCaptureId(tripCompleted.captureId))
+        assertEquals("the last point recorded before the second stop (59 s) is the 36 s one", 36_000_000_000L, part.endElapsedRealtimeNanos)
+
+        val events = db.diagnosticEventDao().findAll().sortedBy { it.occurredAt }
+        val abandoned = events.single { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_STOP_CANCELLED }
+        assertEquals("MOVEMENT_RESUMED", abandoned.reasonCode)
+        assertEquals("true", abandoned.metadata["walkingSeen"])
+        assertEquals(2, events.count { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_STOP_ENTERED })
+        assertEquals("GRACE_PERIOD_ELAPSED", events.single { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_STOP_CONFIRMED }.reasonCode)
+    }
+
+    @Test
+    fun runAutoDetectionDoesNotTrimWhenThePointsAfterTheStopHaveNoUsableSpeedToSayTheVehicleStayedStopped() = runTest {
+        // Poor-accuracy fixes (or any fix without a speed) cannot show that the vehicle stopped, so the points after the
+        // candidate opened might be real riding: they stay in the Trip rather than being orphaned by the trim.
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            28_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 28_000_000_000L)
+        )
+        val locationFlow = timedFlow(
+            1L to sample(elapsedNanos = 1_000_000L),
+            20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0),
+            25_000L to sample(elapsedNanos = 25_000_000_000L, lat = 10.001, lon = -20.0),
+            29_000L to sample(elapsedNanos = 29_000_000_000L, lat = 10.001, lon = -20.0),
+            60_000L to sample(elapsedNanos = 60_000_000_000L, lat = 10.001, lon = -20.0)
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow, stopProfile = shortStopGrace)
+
+        val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+        val part = requireNotNull(db.tripPartDao().findByCaptureId(tripCompleted.captureId))
+        assertEquals("all three recorded points stay in the Trip", 2L, part.endSequenceNumber)
+        assertEquals(clock.elapsedRealtimeNanos(), part.endElapsedRealtimeNanos)
+    }
+
+    @Test
+    fun runAutoDetectionDoesNotTrimWhenTheCandidateAlreadySawAVehicleSpeedFix() = runTest {
+        // One spike (not the two in a row that would have cancelled the stop) is still a sign the vehicle may have moved.
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            28_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 28_000_000_000L)
+        )
+        val locationFlow = timedFlow(
+            1L to sample(elapsedNanos = 1_000_000L),
+            20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0),
+            25_000L to sample(elapsedNanos = 25_000_000_000L, lat = 10.001, lon = -20.0, speedMps = 0f),
+            29_000L to sample(elapsedNanos = 29_000_000_000L, lat = 10.001, lon = -20.0, speedMps = 5f),
+            40_000L to sample(elapsedNanos = 40_000_000_000L, lat = 10.001, lon = -20.0, speedMps = 0f),
+            60_000L to sample(elapsedNanos = 60_000_000_000L, lat = 10.001, lon = -20.0, speedMps = 0f)
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow, stopProfile = shortStopGrace)
+
+        val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+        assertEquals(3L, requireNotNull(db.tripPartDao().findByCaptureId(tripCompleted.captureId)).endSequenceNumber)
+    }
+
+    @Test
+    fun aManualPauseDiscardsAnOpenStopCandidateSoResumingDoesNotEndTheTrip() = runBlocking {
+        // The stop engine counts grace time in absolute timestamps, so a candidate left open across a pause would confirm
+        // on the first fix after Resume - and, with the Trip now trimmed back to where the candidate opened, cut off the
+        // riding that follows. Driven through channels and polled on real threads: the order of "candidate opens ->
+        // pause -> resume -> first fix" has to be exact, which the virtual-time flows cannot promise across Room calls.
+        val activityEvents = Channel<ActivityTransitionSample>(Channel.UNLIMITED)
+        val locationFixes = Channel<LocationSample>(Channel.UNLIMITED)
+        val run = async(Dispatchers.Default) {
+            coordinatorWithLocationFlow(locationFixes.receiveAsFlow()).runAutoDetection(activityEvents.receiveAsFlow(), stopProfile = shortStopGrace)
+        }
+        suspend fun awaitUntil(what: String, condition: suspend () -> Boolean) {
+            withTimeout(15_000L) { while (!condition()) delay(20L) }
+        }
+        try {
+            activityEvents.send(activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L))
+            // Two channels merged on real threads have no promised order: a fix overtaking the ENTER would be dropped as
+            // "no candidate yet", and the next one would become the anchor with nothing to measure displacement from.
+            delay(300L)
+            locationFixes.send(sample(elapsedNanos = 1_000_000L))
+            delay(300L)
+            locationFixes.send(sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0)) // confirms the start
+            awaitUntil("the capture to start") { db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE) == 1 }
+
+            activityEvents.send(activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 25_000_000_000L))
+            awaitUntil("the stop candidate to open") {
+                db.diagnosticEventDao().findAll().any { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_STOP_ENTERED }
+            }
+
+            coordinator.pauseCapture()
+            locationFixes.send(sample(elapsedNanos = 30_000_000_000L, lat = 10.001, lon = -20.0, speedMps = 0f)) // arrives while paused
+            delay(500L)
+            coordinator.resumeCapture()
+            // Riding again, 35 s after the candidate opened - past the 30 s grace had the candidate survived the pause.
+            locationFixes.send(sample(elapsedNanos = 60_000_000_000L, lat = 10.002, lon = -20.0, speedMps = 8f))
+            delay(700L)
+
+            assertEquals("the trip is still being recorded", 1, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+            assertTrue(
+                "no stop was confirmed",
+                db.diagnosticEventDao().findAll().none { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_STOP_CONFIRMED }
+            )
+        } finally {
+            run.cancel()
+            activityEvents.close()
+            locationFixes.close()
+        }
+    }
+
+    @Test
+    fun runAutoDetectionLogsWhyACandidateStartNeverConfirmedSoALostRideCanBeExplained() = runTest {
+        // DET-008: four rides in one field day never started and nothing said why.
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            10_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 10_000_000_000L)
+        )
+
+        val outcome = coordinatorWithLocationFlow(emptyFlow()).runAutoDetection(activityFlow)
+
+        assertEquals(TrackingSessionCoordinator.AutoDetectionOutcome.CandidateAbandoned, outcome)
+        val event = db.diagnosticEventDao().findAll().single { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_START_REJECTED }
+        assertEquals(DiagnosticCategory.DETECTOR, event.category)
+        assertEquals("IN_VEHICLE_EXIT", event.reasonCode)
+        assertEquals("no fix ever arrived", "0", event.metadata["fixCount"])
+        assertNull(event.captureId)
+    }
+
+    @Test
+    fun runAutoDetectionLogsTheEvidenceThatConfirmedTheStartAndTheStop() = runTest {
+        val activityFlow = timedFlow(
+            0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L),
+            28_000L to activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 28_000_000_000L)
+        )
+        val locationFlow = timedFlow(
+            1L to sample(elapsedNanos = 1_000_000L),
+            20_000L to sample(elapsedNanos = 20_000_000_000L, lat = 10.001, lon = -20.0),
+            60_000L to sample(elapsedNanos = 60_000_000_000L, lat = 10.001, lon = -20.0)
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow, stopProfile = shortStopGrace)
+
+        val tripCompleted = outcome as TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted
+        val events = db.diagnosticEventDao().findAll()
+        val started = events.single { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_START_CONFIRMED }
+        assertEquals("CONFIRMED_DISPLACEMENT", started.reasonCode)
+        assertEquals(tripCompleted.captureId, started.captureId)
+        val opened = events.single { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_STOP_ENTERED }
+        assertEquals(tripCompleted.captureId, opened.captureId)
+        val stopped = events.single { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_STOP_CONFIRMED }
+        assertEquals("GRACE_PERIOD_ELAPSED", stopped.reasonCode)
+        assertNotNull(stopped.metadata["elapsedMs"])
+        assertTrue("diagnostics carry counts and speeds, never a coordinate", events.none { e -> e.metadata.keys.any { it.contains("lat", true) || it.contains("lon", true) } })
     }
 
     @Test
@@ -458,13 +725,16 @@ class TrackingSessionCoordinatorTest {
             25_000L to sample(elapsedNanos = 25_000_000_000L),
             31_000L to sample(elapsedNanos = 31_000_000_000L),
             36_000L to sample(elapsedNanos = 36_000_000_000L),
-            41_000L to sample(elapsedNanos = 41_000_000_000L)
+            41_000L to sample(elapsedNanos = 41_000_000_000L),
+            // Past the 30 s grace counted from the real stop at 45 s (DET-008: WALKING no longer ends it on its own).
+            80_000L to sample(elapsedNanos = 80_000_000_000L, speedMps = 0f)
         )
         var startedCaptureId: String? = null
 
         val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(
             activityEvents = activityFlow,
-            onCaptureStarted = { startedCaptureId = it }
+            onCaptureStarted = { startedCaptureId = it },
+            stopProfile = shortStopGrace
         )
 
         assertTrue(outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
@@ -482,9 +752,13 @@ class TrackingSessionCoordinatorTest {
         // interruption, including the ones that landed between churn cycles.
         val points = db.rawTrackPointDao().findAllByCapture(tripCompleted.captureId)
         assertEquals(
-            listOf(25_000_000_000L, 31_000_000_000L, 36_000_000_000L, 41_000_000_000L),
+            listOf(25_000_000_000L, 31_000_000_000L, 36_000_000_000L, 41_000_000_000L, 80_000_000_000L),
             points.map { it.elapsedRealtimeNanos }
         )
+
+        // The Trip ends at the real stop (45 s), leaving the 80 s point - recorded while waiting out the grace period - outside it.
+        val part = requireNotNull(db.tripPartDao().findByCaptureId(tripCompleted.captureId))
+        assertEquals(3L, part.endSequenceNumber)
     }
 
     // --- TRK-003: pauseCapture/resumeCapture ----------------------------
@@ -608,16 +882,18 @@ class TrackingSessionCoordinatorTest {
     @Test
     fun runAutoDetectionDoesNotPersistOrAutoFinishWhileManuallyPaused() = runTest {
         // TRK-003/F0.3 SS8: "automatic stop detection should not silently
-        // close a manually paused Trip." The EXIT/WALKING pair below would
-        // normally auto-finish immediately (walking-away confirms with no
-        // grace period) - since it's emitted only after Pause is already
-        // durably applied, it must be completely ignored; only the real stop
-        // emitted after Resume actually finishes the trip. `confirmed` makes
-        // the activity flow wait for the location-driven confirm (and this
-        // test's own Pause call inside `onCaptureStarted`) before emitting
-        // the in-pause events - the same in-flow-sequencing fix as the
-        // `recordLocationUpdates` test above, needed here because two
-        // separate flows (activity/location) are involved.
+        // close a manually paused Trip." The EXIT/WALKING pair below is
+        // emitted only after Pause is already durably applied, so it must be
+        // completely ignored; only the real stop emitted after Resume (and
+        // the grace period that follows it) actually finishes the trip.
+        // `confirmed` makes the activity flow wait for the location-driven
+        // confirm (and this test's own Pause call inside `onCaptureStarted`)
+        // before emitting the in-pause events - the same in-flow-sequencing
+        // fix as the `recordLocationUpdates` test above, needed here because
+        // two separate flows (activity/location) are involved. DET-008: the
+        // stop is now confirmed by the grace period elapsing, not by the
+        // WALKING event itself - driven here by advancing the test clock,
+        // which the detection ticker reads.
         val confirmed = CompletableDeferred<Unit>()
         val activityFlow = flow {
             emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L))
@@ -627,6 +903,9 @@ class TrackingSessionCoordinatorTest {
             coordinator.resumeCapture()
             emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 40_000_000_000L))
             emit(activitySample(ActivityType.WALKING, TransitionType.ENTER, elapsedNanos = 41_000_000_000L))
+            // Time passes: the next tick of the (always running) detection ticker now reads far past the 30 s grace
+            // counted from the post-Resume stop at 40 s, which is what confirms it - no sample ordering to race.
+            clock.setElapsedRealtimeNanos(100_000_000_000L)
         }
         val locationFlow = flowOf(
             sample(elapsedNanos = 1_000_000L),
@@ -641,7 +920,8 @@ class TrackingSessionCoordinatorTest {
                 startedCaptureId = it
                 coordinator.pauseCapture()
                 confirmed.complete(Unit)
-            }
+            },
+            stopProfile = shortStopGrace
         )
 
         assertTrue(outcome is TrackingSessionCoordinator.AutoDetectionOutcome.TripCompleted)
@@ -721,6 +1001,8 @@ class TrackingSessionCoordinatorTest {
             resumed.await()
             emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 100_000_000_000L))
             emit(activitySample(ActivityType.WALKING, TransitionType.ENTER, elapsedNanos = 101_000_000_000L))
+            // The detection ticker now reads far past the 30 s grace counted from the post-Resume stop at 100 s.
+            clock.setElapsedRealtimeNanos(200_000_000_000L)
         }
         val locationFlow = flow {
             emit(sample(elapsedNanos = 1_000_000L))
@@ -744,7 +1026,8 @@ class TrackingSessionCoordinatorTest {
             onForgottenPauseWarning = {
                 warned = true
                 warningFired.complete(Unit)
-            }
+            },
+            stopProfile = shortStopGrace
         )
 
         assertTrue("expected a forgotten-pause warning", warned)

@@ -19,6 +19,17 @@ interface RawTrackPointDao {
     @Query("SELECT MAX(sequenceNumber) FROM raw_track_point WHERE captureId = :captureId")
     suspend fun maxSequenceNumber(captureId: String): Long?
 
+    /**
+     * DET-008: where an automatic Finish ends the Trip - the last point recorded at or before the moment the vehicle
+     * stopped, so the walk away from it is left out of the Trip (the points themselves stay: ADR-006). Returns the
+     * point, not just its number, because the Trip's end is that point's own time (EDT-003's convention).
+     */
+    @Query(
+        "SELECT * FROM raw_track_point WHERE captureId = :captureId AND elapsedRealtimeNanos <= :atOrBeforeElapsedRealtimeNanos " +
+            "ORDER BY sequenceNumber DESC LIMIT 1"
+    )
+    suspend fun findLastAtOrBefore(captureId: String, atOrBeforeElapsedRealtimeNanos: Long): RawTrackPointEntity?
+
     @Query("SELECT * FROM raw_track_point WHERE captureId = :captureId ORDER BY sequenceNumber ASC")
     suspend fun findAllByCapture(captureId: String): List<RawTrackPointEntity>
 

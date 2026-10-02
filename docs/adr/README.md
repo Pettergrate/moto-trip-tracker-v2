@@ -60,7 +60,8 @@ An ADR exists so a future implementation agent can answer five questions without
 | ADR-021 | Proveedor de mapa: MapLibre Native + OpenFreeMap | Accepted | `ADR-021-map-provider-maplibre-openfreemap.md` |
 | ADR-022 | Fixes tomados solo con ubicación aproximada: se conservan, no se usan como ruta | Accepted | `ADR-022-approximate-location-fixes-kept-not-used-as-route.md` |
 | ADR-023 | Mapa en vivo durante Trip activo + scrubber de ruta en Trip Detail | Accepted | `ADR-023-live-active-trip-map-and-route-scrubber.md` |
-| ADR-024 | Perfiles de motocicleta (FR-MOTO) + ícono de vehículo con orientación en el mapa | Accepted | `ADR-024-motorcycle-profiles-and-vehicle-icon.md` |
+| ADR-024 | Perfiles de motocicleta (FR-MOTO) + ícono de vehículo con orientación en el mapa | Superseded (removed 2026-09-30) | `ADR-024-motorcycle-profiles-and-vehicle-icon.md` |
+| ADR-025 | El detector corrobora con velocidad GPS; WALKING de Activity Recognition ya no termina un Trip por sí solo | Accepted | `ADR-025-detector-uses-gps-speed-and-walking-no-longer-ends-a-trip.md` |
 
 ---
 

@@ -28,11 +28,18 @@ interface TripCaptureDao {
     /**
      * DET-006/F0.3 §9: the reference point for post-Finish auto-start
      * suppression - whichever capture (COMPLETED or ABORTED) ended most
-     * recently, regardless of how. Ordered by `endElapsedRealtimeNanos`
-     * (GPS-004: elapsed-realtime is the authoritative clock for "how much
-     * time has passed" math), not `endedAt`.
+     * recently, regardless of how. Ordered by `endedAt` (wall clock), which
+     * is comparable across reboots. It used to be ordered by
+     * `endElapsedRealtimeNanos` (GPS-004's authoritative clock for "how much
+     * time has passed"), but that counter restarts at every boot: a capture
+     * from before the last reboot with a bigger value than "now" sorted
+     * first, so this returned a stale row and the caller's reboot guard
+     * ("now is earlier than its end -> not suppressed") silently disabled
+     * DET-006 for the whole boot (DET-008). The caller still does the
+     * "how much time has passed" math on the returned row's
+     * `endElapsedRealtimeNanos`.
      */
-    @Query("SELECT * FROM trip_capture WHERE status != :activeStatus ORDER BY endElapsedRealtimeNanos DESC LIMIT 1")
+    @Query("SELECT * FROM trip_capture WHERE status != :activeStatus ORDER BY endedAt DESC LIMIT 1")
     suspend fun findMostRecentlyEnded(activeStatus: CaptureStatus = CaptureStatus.ACTIVE): TripCaptureEntity?
 
     /**

@@ -33,10 +33,13 @@ import com.mototriptracker.app.core.model.LocationSample
 import com.mototriptracker.app.core.model.ProcessingVersion
 import com.mototriptracker.app.core.model.StartSource
 import com.mototriptracker.app.core.model.TripStatus
+import com.mototriptracker.app.domain.detection.CandidateEvidence
 import com.mototriptracker.app.domain.detection.CandidateStartDecision
 import com.mototriptracker.app.domain.detection.CandidateStartEngine
+import com.mototriptracker.app.domain.detection.CandidateStartProfile
 import com.mototriptracker.app.domain.detection.CandidateStopDecision
 import com.mototriptracker.app.domain.detection.CandidateStopEngine
+import com.mototriptracker.app.domain.detection.CandidateStopProfile
 import com.mototriptracker.app.domain.detection.DetectionEvent
 import com.mototriptracker.app.domain.detection.ForgottenFinishDecision
 import com.mototriptracker.app.domain.detection.ForgottenFinishEngine
@@ -644,8 +647,19 @@ class TrackingSessionCoordinator @Inject constructor(
      * lists don't define such a column — inventing one ahead of PRC-001
      * actually needing it would be exactly the kind of unrequested schema
      * this project avoids.
+     *
+     * DET-008: [tripEndsAtElapsedRealtimeNanos], given only by an automatic stop, ends the Trip's
+     * `TripPart` at the last point recorded at or before the moment the vehicle stopped instead of at "now" - the
+     * grace period that confirmed the stop is spent standing or walking away, and F0.3 §7 requirement 5 says that
+     * must not extend the route as a walking Trip. The raw points after it stay stored (ADR-006); only the part's
+     * range leaves them out, the same mechanism EDT-003's boundary correction uses (including the Trip's
+     * `createdAt` being that last point's time). Without any point at or before it, nothing is trimmed.
      */
-    suspend fun finishCapture(captureId: String, endSource: EndSource = EndSource.MANUAL): FinishResult {
+    suspend fun finishCapture(
+        captureId: String,
+        endSource: EndSource = EndSource.MANUAL,
+        tripEndsAtElapsedRealtimeNanos: Long? = null
+    ): FinishResult {
         val result = database.withTransaction {
             val capture = requireNotNull(tripCaptureDao.findById(captureId)) {
                 "finishCapture called with an unknown captureId: $captureId"
@@ -694,6 +708,11 @@ class TrackingSessionCoordinator @Inject constructor(
                 updatedAt = wallNow
             )
 
+            // DET-008: the Trip ends at the last point recorded before the vehicle stopped - that point's own time,
+            // for both the part and the Trip's `createdAt` ("when the ride ended"), the convention EDT-003's
+            // boundary correction already uses. No point at or before the bound: nothing is trimmed.
+            val trimmedEndPoint = tripEndsAtElapsedRealtimeNanos?.let { rawTrackPointDao.findLastAtOrBefore(captureId, it) }
+
             val tripId = idGenerator.newId()
             tripDao.insert(
                 TripEntity(
@@ -704,13 +723,13 @@ class TrackingSessionCoordinator @Inject constructor(
                     motorcycleId = null,
                     routeId = null,
                     notes = null,
-                    createdAt = wallNow,
+                    createdAt = trimmedEndPoint?.capturedAt ?: wallNow,
                     updatedAt = wallNow,
                     deletedAt = null
                 )
             )
 
-            val lastSequenceNumber = rawTrackPointDao.maxSequenceNumber(captureId)
+            val lastSequenceNumber = trimmedEndPoint?.sequenceNumber ?: rawTrackPointDao.maxSequenceNumber(captureId)
             tripPartDao.insert(
                 TripPartEntity(
                     id = idGenerator.newId(),
@@ -718,7 +737,7 @@ class TrackingSessionCoordinator @Inject constructor(
                     captureId = captureId,
                     orderIndex = 0,
                     startElapsedRealtimeNanos = capture.startElapsedRealtimeNanos,
-                    endElapsedRealtimeNanos = elapsedNow,
+                    endElapsedRealtimeNanos = trimmedEndPoint?.elapsedRealtimeNanos ?: elapsedNow,
                     startSequenceNumber = if (lastSequenceNumber == null) null else 0L,
                     endSequenceNumber = lastSequenceNumber
                 )
@@ -786,7 +805,10 @@ class TrackingSessionCoordinator @Inject constructor(
         locationServicesEnabled: () -> Boolean = { true },
         preciseLocationGranted: () -> Boolean = { true },
         onLocationSignalChanged: suspend (LocationSignalReport) -> Unit = {},
-        onPersistenceStateChanged: suspend (PersistenceState) -> Unit = {}
+        onPersistenceStateChanged: suspend (PersistenceState) -> Unit = {},
+        /** Only tests pass these: the production values are the profiles' own placeholders (`ADR-018`/`ADR-025`). */
+        startProfile: CandidateStartProfile = CandidateStartProfile(),
+        stopProfile: CandidateStopProfile = CandidateStopProfile()
     ): AutoDetectionOutcome {
         val activityFlow: Flow<DetectionEvent> = activityEvents.map { DetectionEvent.Activity(it) }
         val locationFlow: Flow<DetectionEvent> = locationGateway.locationUpdates().map { DetectionEvent.Location(it) }
@@ -797,7 +819,7 @@ class TrackingSessionCoordinator @Inject constructor(
             }
         }
 
-        val startEngine = CandidateStartEngine()
+        val startEngine = CandidateStartEngine(startProfile)
         var stopEngine: CandidateStopEngine? = null
         var activeCaptureId: String? = null
         var nextSequenceNumber = 0L
@@ -815,9 +837,10 @@ class TrackingSessionCoordinator @Inject constructor(
                         is CandidateStartDecision.Confirmed -> {
                             when (val started = startAutoCapture()) {
                                 is StartResult.Started -> {
+                                    bestEffortDetectorLog(EVENT_CANDIDATE_START_CONFIRMED, decision.reasonCode, started.captureId, decision.evidence)
                                     activeCaptureId = started.captureId
                                     nextSequenceNumber = (rawTrackPointDao.maxSequenceNumber(started.captureId) ?: -1) + 1
-                                    stopEngine = CandidateStopEngine()
+                                    stopEngine = CandidateStopEngine(stopProfile)
                                     signal = LocationSignalTracker(started.captureId, null, locationServicesEnabled, preciseLocationGranted, onLocationSignalChanged)
                                     writer = RawPointWriter(
                                         rawTrackPointDao, diagnosticEventDao, clock, idGenerator, started.captureId,
@@ -831,7 +854,10 @@ class TrackingSessionCoordinator @Inject constructor(
                                 is StartResult.AlreadyActive -> throw StopAutoDetection(AutoDetectionOutcome.CandidateAbandoned)
                             }
                         }
-                        CandidateStartDecision.Abandoned -> throw StopAutoDetection(AutoDetectionOutcome.CandidateAbandoned)
+                        is CandidateStartDecision.Abandoned -> {
+                            bestEffortDetectorLog(EVENT_CANDIDATE_START_REJECTED, decision.reasonCode, null, decision.evidence)
+                            throw StopAutoDetection(AutoDetectionOutcome.CandidateAbandoned)
+                        }
                         CandidateStartDecision.NoChange, CandidateStartDecision.CandidateOpened -> Unit
                     }
                 } else {
@@ -854,21 +880,44 @@ class TrackingSessionCoordinator @Inject constructor(
                             is CandidateStopDecision.Confirmed -> {
                                 writer?.finish()
                                 signal?.onRecordingStopped()
-                                val result = finishCapture(captureId, EndSource.AUTO)
+                                // DET-008: the Trip ends where the vehicle stopped, not after the grace period spent waiting
+                                // for proof - but only when the fixes seen since then say it really stayed stopped (or
+                                // walked): with no usable speed (poor accuracy), or a speed that was already vehicle-like,
+                                // the points after the stop might be real riding, and trimming would orphan them.
+                                val stayedStopped = decision.evidence.maxSpeedMps?.let { it < stopProfile.resumeSpeedMps } == true
+                                val result = finishCapture(
+                                    captureId,
+                                    EndSource.AUTO,
+                                    tripEndsAtElapsedRealtimeNanos = decision.candidateOpenedAtElapsedRealtimeNanos.takeIf { stayedStopped }
+                                )
+                                bestEffortDetectorLog(EVENT_CANDIDATE_STOP_CONFIRMED, decision.reasonCode, captureId, decision.evidence)
                                 throw StopAutoDetection(AutoDetectionOutcome.TripCompleted(captureId, result.tripId))
                             }
-                            CandidateStopDecision.NoChange, CandidateStopDecision.CandidateOpened, CandidateStopDecision.Abandoned -> Unit
+                            CandidateStopDecision.CandidateOpened ->
+                                bestEffortDetectorLog(EVENT_CANDIDATE_STOP_ENTERED, "IN_VEHICLE_EXIT", captureId, null)
+                            is CandidateStopDecision.Abandoned ->
+                                bestEffortDetectorLog(EVENT_CANDIDATE_STOP_CANCELLED, decision.reasonCode, captureId, decision.evidence)
+                            CandidateStopDecision.NoChange -> Unit
                         }
-                    } else if (event is DetectionEvent.Location) {
+                    } else {
                         // TRK-003/F0.3 §8: "automatic stop detection should not
                         // silently close a manually paused Trip" - the stop
-                        // engine never sees this event, freezing its own
-                        // grace-period clock instead of letting it tick during
-                        // a pause the user explicitly asked for (DP-005).
-                        // DET-005 still watches it for forgotten-pause evidence.
-                        forgottenPauseWatch.onPausedSample(openPause.id, event.sample) { decision ->
-                            logForgottenPauseWarning(captureId, openPause.id, decision)
-                            onForgottenPauseWarning()
+                        // engine never sees these events during a pause the user
+                        // explicitly asked for (DP-005). DET-008: and a stop
+                        // candidate that was open when the pause began is
+                        // discarded, not merely left unfed: the engine counts
+                        // grace time in absolute timestamps, so a candidate
+                        // surviving the pause would confirm on the first fix
+                        // after Resume and (now that a Finish trims the Trip
+                        // back to where the candidate opened) cut off the
+                        // riding that follows.
+                        if (checkNotNull(stopEngine).isCandidateOpen) stopEngine = CandidateStopEngine(stopProfile)
+                        if (event is DetectionEvent.Location) {
+                            // DET-005 still watches it for forgotten-pause evidence.
+                            forgottenPauseWatch.onPausedSample(openPause.id, event.sample) { decision ->
+                                logForgottenPauseWarning(captureId, openPause.id, decision)
+                                onForgottenPauseWarning()
+                            }
                         }
                     }
                 }
@@ -1357,6 +1406,43 @@ class TrackingSessionCoordinator @Inject constructor(
         )
     }
 
+    /**
+     * DET-008/DP-007: one `DETECTOR` event per candidate decision, carrying [evidence] (counts and speeds only, no
+     * coordinates). Best effort like the location bookkeeping: failing to explain a decision must never end the
+     * detection that is being explained.
+     */
+    private suspend fun bestEffortDetectorLog(eventType: String, reasonCode: String, captureId: String?, evidence: CandidateEvidence?) {
+        try {
+            diagnosticEventDao.insert(
+                DiagnosticEventEntity(
+                    eventId = idGenerator.newId(),
+                    occurredAt = clock.wallClockMillis(),
+                    elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
+                    category = DiagnosticCategory.DETECTOR,
+                    eventType = eventType,
+                    severity = DiagnosticSeverity.INFO,
+                    source = "tracking-service",
+                    captureId = captureId,
+                    tripId = null,
+                    correlationId = null,
+                    stateBefore = null,
+                    stateAfter = null,
+                    reasonCode = reasonCode,
+                    metadata = evidence?.toMetadata() ?: emptyMap(),
+                    appVersion = BuildConfig.VERSION_NAME,
+                    schemaVersion = 1,
+                    detectorVersion = DetectorVersion(0),
+                    locationProfileVersion = LocationProfileVersion(0),
+                    processingVersion = ProcessingVersion(0)
+                )
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "detector decision log failed (${error::class.simpleName}); detection continues")
+        }
+    }
+
     /** Same [DiagnosticCategory.DETECTOR]/[DiagnosticCategory.USER_COMMAND] split as [logFinishCommand], keyed off [source] instead. */
     private suspend fun logStartCommand(source: StartSource, result: StartResult) {
         val (captureId, reasonCode) = when (result) {
@@ -1522,6 +1608,16 @@ class TrackingSessionCoordinator @Inject constructor(
 
         /** REC-002: the [DiagnosticEventEntity.eventType] of a restart that couldn't legitimately resume an ACTIVE capture. */
         const val EVENT_RECOVERY_DEGRADED = "RECOVERY_DEGRADED"
+
+        /**
+         * DET-008: the detector's own decisions, with the evidence behind each (see [CandidateEvidence]). Named after
+         * `observability-diagnostics.md` §5.1's vocabulary, whose codes are a versioned contract.
+         */
+        const val EVENT_CANDIDATE_START_CONFIRMED = "CANDIDATE_START_CONFIRMED"
+        const val EVENT_CANDIDATE_START_REJECTED = "CANDIDATE_START_REJECTED"
+        const val EVENT_CANDIDATE_STOP_ENTERED = "CANDIDATE_STOP_ENTERED"
+        const val EVENT_CANDIDATE_STOP_CANCELLED = "CANDIDATE_STOP_CANCELLED"
+        const val EVENT_CANDIDATE_STOP_CONFIRMED = "CANDIDATE_STOP_CONFIRMED"
 
         /** REC-003: below this a sealed capture has no route worth showing, so it gets no partial Trip (its evidence stays). */
         const val MIN_POINTS_FOR_PARTIAL_TRIP = 2

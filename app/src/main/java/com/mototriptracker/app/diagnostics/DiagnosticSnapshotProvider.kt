@@ -146,6 +146,7 @@ class DiagnosticSnapshotProvider @Inject constructor(
     private companion object {
         /** Enough recent fixes for a stable median without loading a ride. */
         const val INTERVAL_SAMPLE = 12
-        const val DETECTOR_EVENTS = 5
+        /** DET-008: ten, not five - every stop candidate now logs a few rows, and a ride's start and end must not be pushed out by its stops. */
+        const val DETECTOR_EVENTS = 10
     }
 }

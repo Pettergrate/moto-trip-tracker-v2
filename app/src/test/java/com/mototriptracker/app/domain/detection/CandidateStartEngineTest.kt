@@ -6,6 +6,7 @@ import com.mototriptracker.app.core.model.LocationSample
 import com.mototriptracker.app.core.model.TransitionType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -33,15 +34,23 @@ class CandidateStartEngineTest {
         source = "test"
     )
 
-    private fun location(elapsedNanos: Long, latitude: Double, longitude: Double = -84.0) = LocationSample(
+    private fun location(elapsedNanos: Long, latitude: Double, longitude: Double = -84.0, speedMps: Float? = null) = LocationSample(
         wallTimeEpochMs = elapsedNanos / 1_000_000,
         elapsedRealtimeNanos = elapsedNanos,
         receivedAtElapsedRealtimeNanos = elapsedNanos,
         latitude = latitude,
         longitude = longitude,
         horizontalAccuracyM = 5.0f,
-        requestProfileId = "candidate-start-burst"
+        requestProfileId = "candidate-start-burst",
+        speedMps = speedMps
     )
+
+    private fun open() {
+        engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.ENTER, 0L)))
+    }
+
+    private fun fixAt(seconds: Int, speedMps: Float?, latitude: Double = 10.0) =
+        engine.accept(DetectionEvent.Location(location(seconds * 1_000_000_000L, latitude, speedMps = speedMps)))
 
     /** ~1m of latitude displacement per 0.00001 degree near the equator-ish latitudes used here - close enough for test fixtures, exact math is GeoMathTest's job. */
     private fun latitudeOffsetMeters(baseLatitude: Double, meters: Double): Double = baseLatitude + meters / 111_195.0
@@ -108,7 +117,9 @@ class CandidateStartEngineTest {
 
         val decision = engine.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, 2_000_000_000L)))
 
-        assertEquals(CandidateStartDecision.Abandoned, decision)
+        assertTrue(decision is CandidateStartDecision.Abandoned)
+        assertEquals(CandidateStartEngine.REASON_IN_VEHICLE_EXIT, (decision as CandidateStartDecision.Abandoned).reasonCode)
+        assertEquals(2_000L, decision.evidence.elapsedMs)
         assertFalse(engine.isCandidateOpen)
     }
 
@@ -118,7 +129,11 @@ class CandidateStartEngineTest {
 
         val decision = engine.accept(DetectionEvent.TimeTick(nowElapsedRealtimeNanos = 70_000_000_000L)) // > 60s max window
 
-        assertEquals(CandidateStartDecision.Abandoned, decision)
+        assertTrue(decision is CandidateStartDecision.Abandoned)
+        decision as CandidateStartDecision.Abandoned
+        assertEquals(CandidateStartEngine.REASON_WINDOW_EXPIRED, decision.reasonCode)
+        assertEquals("no fix ever arrived - the evidence says so", 0, decision.evidence.fixCount)
+        assertNull(decision.evidence.firstFixDelayMs)
         assertFalse(engine.isCandidateOpen)
     }
 
@@ -129,7 +144,100 @@ class CandidateStartEngineTest {
 
         val decision = engine.accept(DetectionEvent.Location(location(70_000_000_000L, 10.0)))
 
-        assertEquals(CandidateStartDecision.Abandoned, decision)
+        assertTrue(decision is CandidateStartDecision.Abandoned)
+        assertEquals(CandidateStartEngine.REASON_WINDOW_EXPIRED, (decision as CandidateStartDecision.Abandoned).reasonCode)
+    }
+
+    @Test
+    fun anExpiredCandidateReportsWhatItSawSoTheLostRideCanBeExplained() {
+        // DET-008: four whole rides in one day left no trace of why they never started.
+        open()
+        fixAt(2, speedMps = 0.2f)
+        fixAt(20, speedMps = 0.4f)
+
+        val decision = fixAt(70, speedMps = 0.1f)
+
+        decision as CandidateStartDecision.Abandoned
+        assertEquals("the expiring fix itself is not counted", 2, decision.evidence.fixCount)
+        assertEquals(2_000L, decision.evidence.firstFixDelayMs)
+        assertEquals(0.4f, decision.evidence.maxSpeedMps!!, 0.001f)
+        assertEquals(0.0, decision.evidence.displacementMeters!!, 0.5)
+    }
+
+    // --- DET-008: speed as evidence, and a window that survives a wait ---
+
+    @Test
+    fun aSustainedGpsSpeedConfirmsEvenWhenTheStraightLineDisplacementIsTooSmall() {
+        // A GPS that reports a steady vehicle speed while the positions barely move (a tight loop, a stale anchor).
+        open()
+        fixAt(0, speedMps = 3.0f)
+        fixAt(5, speedMps = 3.0f)
+
+        val decision = fixAt(11, speedMps = 3.0f) // 11 s >= 10 s, three fast fixes in a row, still ~0 m from the anchor
+
+        assertTrue(decision is CandidateStartDecision.Confirmed)
+        decision as CandidateStartDecision.Confirmed
+        assertEquals(CandidateStartEngine.REASON_CONFIRMED_SPEED, decision.reasonCode)
+        assertEquals(3.0f, decision.evidence.maxSpeedMps!!, 0.001f)
+    }
+
+    @Test
+    fun displacementStillConfirmsAndIsReportedAsTheReasonWhenBothHold() {
+        open()
+        fixAt(0, speedMps = 6f)
+        fixAt(5, speedMps = 6f)
+
+        val decision = fixAt(11, speedMps = 6f, latitude = latitudeOffsetMeters(10.0, 60.0))
+
+        decision as CandidateStartDecision.Confirmed
+        assertEquals(CandidateStartEngine.REASON_CONFIRMED_DISPLACEMENT, decision.reasonCode)
+    }
+
+    @Test
+    fun twoFastFixesAreNotEnoughAndASlowOneRestartsTheCount() {
+        // DP-001: one or two quick numbers are not a pattern.
+        open()
+        fixAt(0, speedMps = 4f)
+        fixAt(5, speedMps = 4f)
+        fixAt(8, speedMps = 0.5f) // breaks the run
+
+        assertEquals(CandidateStartDecision.NoChange, fixAt(11, speedMps = 4f))
+        assertEquals(CandidateStartDecision.NoChange, fixAt(12, speedMps = 4f))
+        assertTrue("three in a row after the break confirm", fixAt(13, speedMps = 4f) is CandidateStartDecision.Confirmed)
+    }
+
+    @Test
+    fun aWalkingPaceGpsSpeedNeverConfirms() {
+        open()
+        for (second in listOf(0, 4, 8, 12, 16, 20, 24)) {
+            assertEquals(CandidateStartDecision.NoChange, fixAt(second, speedMps = 1.8f))
+        }
+        assertTrue(engine.isCandidateOpen)
+    }
+
+    @Test
+    fun speedAloneNeverConfirmsBeforeTheMinimumDuration() {
+        open()
+        fixAt(0, speedMps = 5f)
+        fixAt(1, speedMps = 5f)
+
+        assertEquals("three fast fixes in 2 s is still not DP-002's sustained evidence", CandidateStartDecision.NoChange, fixAt(2, speedMps = 5f))
+    }
+
+    @Test
+    fun theDefaultWindowOutlastsATypicalWaitBeforeTheRiderActuallyLeaves() {
+        // The reason for 5 minutes: Activity Recognition says IN_VEHICLE once, when the engine is on, and never again.
+        val defaults = CandidateStartEngine()
+        defaults.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.ENTER, 0L)))
+        defaults.accept(DetectionEvent.Location(location(1_000_000_000L, 10.0, speedMps = 0f)))
+        // Warming up and waiting for 3 minutes, standing still: the old 2-minute window would have given up here.
+        assertEquals(CandidateStartDecision.NoChange, defaults.accept(DetectionEvent.Location(location(180_000_000_000L, 10.0, speedMps = 0f))))
+
+        // ...then the rider leaves.
+        defaults.accept(DetectionEvent.Location(location(185_000_000_000L, latitudeOffsetMeters(10.0, 40.0), speedMps = 8f)))
+        val decision = defaults.accept(DetectionEvent.Location(location(190_000_000_000L, latitudeOffsetMeters(10.0, 80.0), speedMps = 8f)))
+
+        assertTrue(decision is CandidateStartDecision.Confirmed)
     }
 
     @Test

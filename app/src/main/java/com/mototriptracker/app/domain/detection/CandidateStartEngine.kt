@@ -10,18 +10,28 @@ import com.mototriptracker.app.domain.haversineMeters
 sealed interface CandidateStartDecision {
     data object NoChange : CandidateStartDecision
     data object CandidateOpened : CandidateStartDecision
-    data object Abandoned : CandidateStartDecision
-    data class Confirmed(val candidateOpenedAtElapsedRealtimeNanos: Long, val confirmedAtElapsedRealtimeNanos: Long) : CandidateStartDecision
+
+    /** DET-008: says why, and with what evidence - an abandoned candidate used to vanish without a trace. */
+    data class Abandoned(val reasonCode: String, val evidence: CandidateEvidence) : CandidateStartDecision
+
+    data class Confirmed(
+        val candidateOpenedAtElapsedRealtimeNanos: Long,
+        val confirmedAtElapsedRealtimeNanos: Long,
+        /** DP-007 explainability — which kind of evidence confirmed it. */
+        val reasonCode: String,
+        val evidence: CandidateEvidence
+    ) : CandidateStartDecision
 }
 
 /**
  * DET-002: F0.3 §5's CANDIDATE_START state, scoped to exactly its own
  * acceptance criterion — "no single sample starts a Trip by itself"
  * (DP-001). `IN_VEHICLE` ENTER (ADR-007's passive trigger) only *opens* a
- * candidate; confirming it needs BOTH sustained time (DP-002 temporal
- * confirmation) AND real displacement from the candidate's anchor point —
- * activity evidence alone or a single GPS jump alone can never confirm
- * (SCN-015, SCN-025).
+ * candidate; confirming it needs sustained time (DP-002 temporal
+ * confirmation) AND real movement - either displacement from the
+ * candidate's anchor point, or (DET-008) a sustained GPS speed. Activity
+ * evidence alone or a single GPS jump alone can never confirm (SCN-015,
+ * SCN-025).
  *
  * Displacement is measured from the anchor (the first location fix
  * received *after* the candidate opened) to the current fix — straight-line
@@ -49,7 +59,13 @@ class CandidateStartEngine(private val profile: CandidateStartProfile = Candidat
         data class Candidate(
             val openedAtElapsedRealtimeNanos: Long,
             val anchorLatitude: Double? = null,
-            val anchorLongitude: Double? = null
+            val anchorLongitude: Double? = null,
+            val fixCount: Int = 0,
+            val firstFixAtElapsedRealtimeNanos: Long? = null,
+            val maxSpeedMps: Float? = null,
+            val lastDisplacementMeters: Double? = null,
+            val lastFix: LocationSample? = null,
+            val consecutiveFastFixes: Int = 0
         ) : State
     }
 
@@ -74,10 +90,7 @@ class CandidateStartEngine(private val profile: CandidateStartProfile = Candidat
             }
             sample.activityType == ActivityType.IN_VEHICLE &&
                 sample.transitionType == TransitionType.EXIT &&
-                current is State.Candidate -> {
-                state = State.Idle
-                CandidateStartDecision.Abandoned
-            }
+                current is State.Candidate -> abandon(current, REASON_IN_VEHICLE_EXIT, sample.elapsedRealtimeNanos)
             else -> CandidateStartDecision.NoChange
         }
     }
@@ -86,35 +99,73 @@ class CandidateStartEngine(private val profile: CandidateStartProfile = Candidat
         val candidate = state as? State.Candidate ?: return CandidateStartDecision.NoChange
 
         if (isExpired(candidate, sample.elapsedRealtimeNanos)) {
-            state = State.Idle
-            return CandidateStartDecision.Abandoned
+            return abandon(candidate, REASON_WINDOW_EXPIRED, sample.elapsedRealtimeNanos)
         }
 
+        val speed = FixSpeed.effectiveSpeedMps(candidate.lastFix, sample)
+        val fast = speed != null && speed >= profile.vehicleSpeedMps
+        var updated = candidate.copy(
+            fixCount = candidate.fixCount + 1,
+            firstFixAtElapsedRealtimeNanos = candidate.firstFixAtElapsedRealtimeNanos ?: sample.elapsedRealtimeNanos,
+            maxSpeedMps = listOfNotNull(candidate.maxSpeedMps, speed).maxOrNull(),
+            lastFix = sample,
+            consecutiveFastFixes = if (fast) candidate.consecutiveFastFixes + 1 else 0
+        )
+
         if (candidate.anchorLatitude == null || candidate.anchorLongitude == null) {
-            state = candidate.copy(anchorLatitude = sample.latitude, anchorLongitude = sample.longitude)
+            state = updated.copy(anchorLatitude = sample.latitude, anchorLongitude = sample.longitude)
             return CandidateStartDecision.NoChange
         }
 
         val elapsedSinceOpenMs = (sample.elapsedRealtimeNanos - candidate.openedAtElapsedRealtimeNanos) / 1_000_000
         val displacementMeters = haversineMeters(candidate.anchorLatitude, candidate.anchorLongitude, sample.latitude, sample.longitude)
+        updated = updated.copy(lastDisplacementMeters = displacementMeters)
 
-        if (elapsedSinceOpenMs >= profile.minConfirmationDurationMs && displacementMeters >= profile.minDisplacementMeters) {
-            val openedAt = candidate.openedAtElapsedRealtimeNanos
-            state = State.Idle
-            return CandidateStartDecision.Confirmed(openedAt, sample.elapsedRealtimeNanos)
+        if (elapsedSinceOpenMs >= profile.minConfirmationDurationMs) {
+            val byDisplacement = displacementMeters >= profile.minDisplacementMeters
+            val bySpeed = updated.consecutiveFastFixes >= profile.vehicleSpeedFixesRequired
+            if (byDisplacement || bySpeed) {
+                state = State.Idle
+                return CandidateStartDecision.Confirmed(
+                    candidateOpenedAtElapsedRealtimeNanos = candidate.openedAtElapsedRealtimeNanos,
+                    confirmedAtElapsedRealtimeNanos = sample.elapsedRealtimeNanos,
+                    reasonCode = if (byDisplacement) REASON_CONFIRMED_DISPLACEMENT else REASON_CONFIRMED_SPEED,
+                    evidence = evidenceOf(updated, sample.elapsedRealtimeNanos)
+                )
+            }
         }
+        state = updated
         return CandidateStartDecision.NoChange
     }
 
     private fun onTimeTick(nowElapsedRealtimeNanos: Long): CandidateStartDecision {
         val candidate = state as? State.Candidate ?: return CandidateStartDecision.NoChange
         if (isExpired(candidate, nowElapsedRealtimeNanos)) {
-            state = State.Idle
-            return CandidateStartDecision.Abandoned
+            return abandon(candidate, REASON_WINDOW_EXPIRED, nowElapsedRealtimeNanos)
         }
         return CandidateStartDecision.NoChange
     }
 
+    private fun abandon(candidate: State.Candidate, reasonCode: String, nowElapsedRealtimeNanos: Long): CandidateStartDecision.Abandoned {
+        state = State.Idle
+        return CandidateStartDecision.Abandoned(reasonCode, evidenceOf(candidate, nowElapsedRealtimeNanos))
+    }
+
+    private fun evidenceOf(candidate: State.Candidate, nowElapsedRealtimeNanos: Long) = CandidateEvidence(
+        elapsedMs = (nowElapsedRealtimeNanos - candidate.openedAtElapsedRealtimeNanos) / 1_000_000,
+        fixCount = candidate.fixCount,
+        firstFixDelayMs = candidate.firstFixAtElapsedRealtimeNanos?.let { (it - candidate.openedAtElapsedRealtimeNanos) / 1_000_000 },
+        maxSpeedMps = candidate.maxSpeedMps,
+        displacementMeters = candidate.lastDisplacementMeters
+    )
+
     private fun isExpired(candidate: State.Candidate, nowElapsedRealtimeNanos: Long): Boolean =
         (nowElapsedRealtimeNanos - candidate.openedAtElapsedRealtimeNanos) / 1_000_000 >= profile.maxCandidateWindowMs
+
+    companion object {
+        const val REASON_CONFIRMED_DISPLACEMENT = "CONFIRMED_DISPLACEMENT"
+        const val REASON_CONFIRMED_SPEED = "CONFIRMED_SPEED"
+        const val REASON_IN_VEHICLE_EXIT = "IN_VEHICLE_EXIT"
+        const val REASON_WINDOW_EXPIRED = "WINDOW_EXPIRED"
+    }
 }

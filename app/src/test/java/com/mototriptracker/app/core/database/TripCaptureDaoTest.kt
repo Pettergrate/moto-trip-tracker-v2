@@ -126,6 +126,33 @@ class TripCaptureDaoTest {
     }
 
     @Test
+    fun theMostRecentlyEndedCaptureIsPickedByWallClockNotByTheElapsedCounterThatRestartsAtEveryBoot() = runTest {
+        // DET-008: a capture sealed after a reboot keeps the previous boot's (much larger) elapsed value, and used to
+        // sort first - so DET-006's suppression looked at a stale row and never applied.
+        val dao = db.tripCaptureDao()
+        dao.insert(
+            capture("from-an-earlier-boot").copy(
+                status = CaptureStatus.ABORTED, endedAt = 5_000L, endElapsedRealtimeNanos = 700_000_000_000_000L, endSource = EndSource.RECOVERY
+            )
+        )
+        dao.insert(
+            capture("this-boot").copy(
+                status = CaptureStatus.COMPLETED, endedAt = 9_000_000L, endElapsedRealtimeNanos = 3_000_000_000L, endSource = EndSource.AUTO
+            )
+        )
+
+        assertEquals("this-boot", dao.findMostRecentlyEnded()?.id)
+    }
+
+    @Test
+    fun anActiveCaptureIsNeverTheMostRecentlyEnded() = runTest {
+        val dao = db.tripCaptureDao()
+        dao.insert(capture("still-recording"))
+
+        assertEquals(null, dao.findMostRecentlyEnded())
+    }
+
+    @Test
     fun deleteByIdRemovesAnUnreferencedCapture() = runTest {
         val dao = db.tripCaptureDao()
         dao.startCaptureIfNoneActive(capture("capture-1"))

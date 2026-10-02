@@ -286,6 +286,61 @@ class ActivityTransitionReceiverTest {
     }
 
     @Test
+    fun stillSuppressesWhenAnOlderCaptureFromBeforeARebootHasALargerElapsedClockValue() = runTest {
+        // DET-008, found in a real field day: the elapsed-realtime counter restarts at every boot, so a capture from
+        // before the last reboot can carry a bigger value than "now". Picking "the most recently ended" by that counter
+        // returned that stale row first, the reboot guard read it as "not suppressed", and DET-006 did nothing for the
+        // whole boot - two automatic trips started 67 s and 79 s after a Finish.
+        db.tripCaptureDao().insert(
+            activeCapture().copy(
+                id = "from-before-the-reboot",
+                status = CaptureStatus.ABORTED,
+                startedAt = 500L,
+                endedAt = 600L, // long ago on the wall clock...
+                endElapsedRealtimeNanos = 900_000_000_000_000L, // ...but a huge value of the previous boot's counter
+                endSource = EndSource.RECOVERY
+            )
+        )
+        db.tripCaptureDao().insert(
+            activeCapture().copy(
+                id = "just-finished",
+                status = CaptureStatus.COMPLETED,
+                startedAt = 40_000_000L,
+                endedAt = 50_000_000L,
+                endElapsedRealtimeNanos = 1_000L,
+                endSource = EndSource.MANUAL
+            )
+        )
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+        receiver.clock = FakeClock(wallMillis = 51_000_000L, elapsedNanos = 1_000L + 52_000_000_000L) // 52 s after the Finish
+
+        receiver.maybeStartAutoDetection(
+            ApplicationProvider.getApplicationContext(),
+            listOf(sample(ActivityType.IN_VEHICLE, TransitionType.ENTER))
+        )
+
+        assertNull(nextStartedServiceAction())
+        assertEquals(ActivityTransitionRecorder.REASON_POST_FINISH_SUPPRESSED, latestDecision()?.reasonCode)
+    }
+
+    @Test
+    fun doesNotSuppressAfterAnAutomaticFinishBecauseTheRideMayBeContinuing() = runTest {
+        // DET-008: the detector now finishes at least a grace period after the vehicle stopped. An IN_VEHICLE ENTER right
+        // after such a Finish is the ride going on (Activity Recognition will not emit it again) - suppressing it would
+        // lose everything that follows. The window is for a Finish the rider asked for while still moving.
+        db.tripCaptureDao().insert(mostRecentlyEndedCapture(endElapsedRealtimeNanos = 1_000L).copy(endSource = EndSource.AUTO))
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+        receiver.clock = FakeClock(wallMillis = 1_000L, elapsedNanos = 1_000L + 5_000_000_000L) // 5 s after the automatic Finish
+
+        receiver.maybeStartAutoDetection(
+            ApplicationProvider.getApplicationContext(),
+            listOf(sample(ActivityType.IN_VEHICLE, TransitionType.ENTER))
+        )
+
+        assertEquals(TrackingForegroundService.ACTION_AUTO_DETECT, nextStartedServiceAction())
+    }
+
+    @Test
     fun startsAutoDetectionOnceThePostFinishSuppressionWindowHasElapsed() = runTest {
         db.tripCaptureDao().insert(mostRecentlyEndedCapture(endElapsedRealtimeNanos = 1_000L))
         val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))

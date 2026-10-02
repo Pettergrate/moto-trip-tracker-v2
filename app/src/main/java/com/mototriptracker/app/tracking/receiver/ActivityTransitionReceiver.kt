@@ -14,6 +14,7 @@ import com.mototriptracker.app.core.model.ActivityTransitionSample
 import com.mototriptracker.app.core.model.ActivityType
 import com.mototriptracker.app.core.model.CapabilityMode
 import com.mototriptracker.app.core.model.CaptureStatus
+import com.mototriptracker.app.core.model.EndSource
 import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.domain.capability.CapabilityResolver
 import com.mototriptracker.app.domain.capability.DetectionListening
@@ -200,7 +201,11 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
             return
         }
 
-        val lastEnded = tripCaptureDao.findMostRecentlyEnded()
+        // DET-008: what the window protects against is a Finish somebody *asked for* while the device is still
+        // moving (F0.3 §9: "post-manual-finish suppression"). A Finish the detector decided on itself is a different
+        // case: it comes at least a grace period after the vehicle stopped, so an `IN_VEHICLE` ENTER right after it is
+        // the ride continuing (Activity Recognition will not say it twice), and suppressing it would lose the rest.
+        val lastEnded = tripCaptureDao.findMostRecentlyEnded()?.takeIf { it.endSource != EndSource.AUTO }
         if (PostFinishSuppression.isSuppressed(lastEnded?.endElapsedRealtimeNanos, clock.elapsedRealtimeNanos())) {
             logDecision(ActivityTransitionRecorder.EVENT_AUTO_DETECTION_NOT_STARTED, ActivityTransitionRecorder.REASON_POST_FINISH_SUPPRESSED)
             return

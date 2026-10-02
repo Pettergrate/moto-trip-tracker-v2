@@ -194,6 +194,24 @@ class DiagnosticBundleBuilderTest {
     }
 
     @Test
+    fun theDetectorsEvidenceSurvivesTheScrubberIntactSoTheNextFieldSessionCanBeTunedFromIt() {
+        // DET-008: counts, speeds and one rounded straight-line distance - none of it names a place, so none of it is
+        // dropped (if a future key rename trips the scrubber's risky-key list this fails instead of silently emptying
+        // the evidence the detector's thresholds are tuned with).
+        val evidence = mapOf(
+            "elapsedMs" to "181234", "fixCount" to "42", "firstFixDelayMs" to "1250",
+            "maxSpeedMps" to "7.5", "displacementM" to "312", "walkingSeen" to "true"
+        )
+        val detectorEvent = event("d1", 5_000L, type = "CANDIDATE_STOP_CONFIRMED", reason = "GRACE_PERIOD_ELAPSED", metadata = evidence)
+
+        val entries = DiagnosticBundleBuilder.build(9_000_000L, snapshot, listOf(detectorEvent), route, ExportOptions())
+
+        val metadata = entries.byPath("diagnostic-events.jsonl").text.trim().lines().map(::JSONObject).single().getJSONObject("metadata")
+        assertEquals(evidence, metadata.keys().asSequence().associateWith { metadata.getString(it) })
+        assertEquals(0, JSONObject(entries.byPath("manifest.json").text).getInt("metadataEntriesScrubbed"))
+    }
+
+    @Test
     fun theProcessExitsFileHasOnlyExitsWithTheirStateAtTheTime() {
         val exits = JSONArray(standard().byPath("process-exits.json").text)
 
