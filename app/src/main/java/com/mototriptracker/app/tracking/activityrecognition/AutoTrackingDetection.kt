@@ -2,6 +2,7 @@ package com.mototriptracker.app.tracking.activityrecognition
 
 import com.mototriptracker.app.domain.capability.DetectionListening
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
+import com.mototriptracker.app.tracking.movement.MovementWatching
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -26,7 +27,9 @@ interface ActivityTransitionRegistration {
 @Singleton
 class AutoTrackingDetection @Inject constructor(
     private val registration: ActivityTransitionRegistration,
-    private val capabilityInputsProvider: CapabilityInputsProvider
+    private val capabilityInputsProvider: CapabilityInputsProvider,
+    /** DET-011: follows the same on/off - armed while listening, removed when not. Observation mode: it only records. */
+    private val movementWatch: MovementWatching
 ) {
     private val mutex = Mutex()
 
@@ -40,6 +43,16 @@ class AutoTrackingDetection @Inject constructor(
             false
         }
         if (listening) registration.register() else registration.unregister()
+        // DET-011: after the registration, and never allowed to undo it - a movement watch that fails must not
+        // take Activity Recognition (the thing that actually starts trips) down with it.
+        try {
+            movementWatch.sync(listening)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            // Deliberately swallowed: the watcher records its own failures (`MOVEMENT_WATCH_ARM_FAILED`), and this class
+            // stays free of Android so its on/off logic can be tested as plain Kotlin.
+        }
         listening
     }
 }

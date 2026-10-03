@@ -10,6 +10,7 @@ import com.mototriptracker.app.tracking.activityrecognition.AutoTrackingDetectio
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.testing.FailingDataStore
 import com.mototriptracker.app.testing.FakeActivityTransitionRegistration
+import com.mototriptracker.app.testing.FakeMovementWatching
 import com.mototriptracker.app.testing.InMemoryDataStore
 import com.mototriptracker.app.testing.FakeCapabilityInputsProvider
 import kotlinx.coroutines.Dispatchers
@@ -68,7 +69,7 @@ class AutoTrackingViewModelTest {
         val followsThePreference = object : CapabilityInputsProvider {
             override suspend fun current() = provider.current().copy(autoTrackingEnabledByUser = preferences.autoTrackingEnabled.first())
         }
-        return AutoTrackingViewModel(preferences, provider, AutoTrackingDetection(registration, followsThePreference))
+        return AutoTrackingViewModel(preferences, provider, AutoTrackingDetection(registration, followsThePreference, FakeMovementWatching()))
             .also { it.recheckMs = 100L } // the screen re-reads every 3 s; the tests must not wait that long
             .also { viewModel = it }
     }

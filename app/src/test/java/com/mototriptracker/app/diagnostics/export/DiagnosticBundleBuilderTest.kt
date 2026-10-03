@@ -212,6 +212,27 @@ class DiagnosticBundleBuilderTest {
     }
 
     @Test
+    fun theMovementWatchsMeasurementsSurviveTheScrubberIntactSoItsDayOfDataCanBeReadBack() {
+        // DET-011: the whole point of observation mode is reading these back from an export - the radius, the accuracy
+        // and age of the position that centred the circle, the reason. None names a place; none may be scrubbed away.
+        val armed = mapOf("radiusM" to "150", "fixAccuracyM" to "20", "fixAgeMs" to "5000", "source" to "current")
+        val exit = mapOf("captureActive" to "false")
+        val failed = mapOf("armReason" to "STILL", "fixAccuracyM" to "400", "error" to "IllegalStateException")
+        val events = listOf(
+            event("w1", 5_000L, type = "MOVEMENT_WATCH_ARMED", reason = "SYNC", metadata = armed),
+            event("w2", 6_000L, type = "MOVEMENT_WATCH_EXIT", reason = "GEOFENCE_EXIT", metadata = exit),
+            event("w3", 7_000L, type = "MOVEMENT_WATCH_ARM_FAILED", reason = "POOR_FIX", metadata = failed)
+        )
+
+        val entries = DiagnosticBundleBuilder.build(9_000_000L, snapshot, events, route, ExportOptions())
+
+        val written = entries.byPath("diagnostic-events.jsonl").text.trim().lines().map(::JSONObject)
+            .map { it.getJSONObject("metadata").let { m -> m.keys().asSequence().associateWith { k -> m.getString(k) } } }
+        assertEquals(listOf(armed, exit, failed), written)
+        assertEquals(0, JSONObject(entries.byPath("manifest.json").text).getInt("metadataEntriesScrubbed"))
+    }
+
+    @Test
     fun theProcessExitsFileHasOnlyExitsWithTheirStateAtTheTime() {
         val exits = JSONArray(standard().byPath("process-exits.json").text)
 

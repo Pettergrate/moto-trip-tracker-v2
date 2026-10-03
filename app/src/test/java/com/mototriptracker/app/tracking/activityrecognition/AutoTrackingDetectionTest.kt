@@ -3,6 +3,7 @@ package com.mototriptracker.app.tracking.activityrecognition
 import com.mototriptracker.app.core.model.CapabilityInputs
 import com.mototriptracker.app.testing.FakeActivityTransitionRegistration
 import com.mototriptracker.app.testing.FakeCapabilityInputsProvider
+import com.mototriptracker.app.testing.FakeMovementWatching
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -19,7 +20,8 @@ class AutoTrackingDetectionTest {
 
     private val registration = FakeActivityTransitionRegistration()
     private val provider = FakeCapabilityInputsProvider(everything)
-    private val detection = AutoTrackingDetection(registration, provider)
+    private val movementWatch = FakeMovementWatching()
+    private val detection = AutoTrackingDetection(registration, provider, movementWatch)
 
     @Test
     fun onWithThePermissionItRegisters() = runBlocking {
@@ -78,6 +80,26 @@ class AutoTrackingDetectionTest {
         assertFalse(detection.sync())
 
         assertEquals(false, registration.isRegistered)
+    }
+
+    // --- DET-011: the movement watch follows the same on/off, and can never take Activity Recognition down with it ---
+
+    @Test
+    fun theMovementWatchIsToldWhetherTheAppIsListening() = runBlocking {
+        detection.sync()
+        provider.set(everything.copy(autoTrackingEnabledByUser = false))
+        detection.sync()
+
+        assertEquals(listOf("sync(true)", "sync(false)"), movementWatch.calls)
+    }
+
+    @Test
+    fun aMovementWatchThatFailsDoesNotUndoTheActivityRegistrationNorTheAnswer() = runBlocking {
+        movementWatch.failWith = IllegalStateException("platform refused")
+
+        assertTrue(detection.sync())
+
+        assertEquals("activity detection is registered regardless", true, registration.isRegistered)
     }
 
     @Test

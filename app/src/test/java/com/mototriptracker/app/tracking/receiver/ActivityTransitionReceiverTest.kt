@@ -19,6 +19,7 @@ import com.mototriptracker.app.core.model.StartSource
 import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.testing.FakeCapabilityInputsProvider
 import com.mototriptracker.app.testing.FakeCapabilityProvider
+import com.mototriptracker.app.testing.FakeMovementWatching
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionRecorder
@@ -56,6 +57,7 @@ import org.robolectric.Shadows.shadowOf
 class ActivityTransitionReceiverTest {
 
     private lateinit var db: MotoTripDatabase
+    private val movementWatch = FakeMovementWatching()
 
     @Before
     fun setUp() {
@@ -119,6 +121,7 @@ class ActivityTransitionReceiverTest {
         activityTransitionBus = ActivityTransitionBus()
         tripCaptureDao = db.tripCaptureDao()
         this.capabilityInputsProvider = capabilityInputsProvider
+        this.movementWatch = this@ActivityTransitionReceiverTest.movementWatch
     }
 
     private fun nextStartedService(): Intent? {
@@ -461,6 +464,56 @@ class ActivityTransitionReceiverTest {
         val published = collectPublished(receiver)
 
         receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(sample(ActivityType.WALKING, TransitionType.ENTER)))
+
+        assertEquals(1, db.diagnosticEventDao().count())
+        assertEquals(1, published.size)
+    }
+
+    // --- DET-011 (ADR-030): STILL says the phone has settled somewhere - the place the movement watch watches from ---
+
+    @Test
+    fun aStillEnterWhileListeningAsksTheMovementWatchToRecentre() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn))
+
+        receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(sample(ActivityType.STILL, TransitionType.ENTER)))
+
+        assertEquals(listOf("ensureArmed(STILL)"), movementWatch.calls)
+    }
+
+    @Test
+    fun nothingButAStillEnterTouchesTheMovementWatch() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn))
+
+        receiver.handleTransitions(
+            ApplicationProvider.getApplicationContext(),
+            listOf(
+                sample(ActivityType.STILL, TransitionType.EXIT),
+                sample(ActivityType.WALKING, TransitionType.ENTER),
+                sample(ActivityType.IN_VEHICLE, TransitionType.EXIT),
+                sample(ActivityType.ON_BICYCLE, TransitionType.EXIT)
+            )
+        )
+
+        assertEquals(emptyList<String>(), movementWatch.calls)
+    }
+
+    @Test
+    fun withAutoTrackingOffAStillEnterIsDroppedAndTheMovementWatchIsNotAsked() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn.copy(autoTrackingEnabledByUser = false)))
+
+        receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(sample(ActivityType.STILL, TransitionType.ENTER)))
+
+        assertEquals(emptyList<String>(), movementWatch.calls)
+    }
+
+    /** The watcher is a side observation: whatever goes wrong in it, the transition is still stored and published. */
+    @Test
+    fun aMovementWatchThatFailsDoesNotCostTheTransitionItsStorageOrItsPublication() = runTest {
+        movementWatch.failWith = IllegalStateException("platform refused")
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn))
+        val published = collectPublished(receiver)
+
+        receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(sample(ActivityType.STILL, TransitionType.ENTER)))
 
         assertEquals(1, db.diagnosticEventDao().count())
         assertEquals(1, published.size)
