@@ -12,6 +12,7 @@ import com.mototriptracker.app.core.model.CaptureStatus
 import com.mototriptracker.app.domain.GeoPoint
 import com.mototriptracker.app.domain.LiveRouteState
 import com.mototriptracker.app.domain.buildLiveRoute
+import com.mototriptracker.app.domain.isRoutePoint
 import com.mototriptracker.app.domain.liveDistanceMeters
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
@@ -99,8 +100,9 @@ class ActiveTripViewModel @Inject constructor(
                         )
                     ) { persistence, settings, accuracyReason -> Triple(persistence, settings, accuracyReason) }
                 ) { points, openPause, openGapReason, _, (persistence, settings, accuracyReason) ->
-                    // ADR-022: an approximate-only fix is excluded from the live route, same as liveDistanceMeters.
-                    val geoPoints = points.filter { it.isApproximateLocation != true }.map { GeoPoint(it.latitude, it.longitude) }
+                    // ADR-022 / PRC-004: a fix that is not evidence of a position (approximate-only, or of poor accuracy) is
+                    // excluded from the live route, same as liveDistanceMeters.
+                    val geoPoints = points.filter { it.isRoutePoint() }.map { GeoPoint(it.latitude, it.longitude) }
                     val liveRoute = buildLiveRoute(liveRouteState, geoPoints)
                     liveRouteState = liveRoute.nextState
                     ActiveTripUiState.Active(

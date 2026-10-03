@@ -49,6 +49,7 @@ import com.mototriptracker.app.domain.detection.ForgottenPauseDecision
 import com.mototriptracker.app.domain.detection.ForgottenPauseEngine
 import com.mototriptracker.app.domain.detection.LocationSignalWatch
 import com.mototriptracker.app.domain.detection.entersFirstAtTheSameInstant
+import com.mototriptracker.app.domain.processing.FixQuality
 import com.mototriptracker.app.domain.liveDistanceMeters
 import com.mototriptracker.app.tracking.location.LocationGateway
 import com.mototriptracker.app.tracking.persistence.PersistenceState
@@ -936,7 +937,7 @@ class TrackingSessionCoordinator @Inject constructor(
                 } else {
                     val openPause = manualPauseIntervalDao.findOpenByCapture(captureId)
                     when (event) {
-                        is DetectionEvent.Location -> signal?.onSample(event.sample, paused = openPause != null, usable = preciseLocationGranted())
+                        is DetectionEvent.Location -> signal?.onSample(event.sample, paused = openPause != null, usable = preciseLocationGranted() && FixQuality.isUsablePosition(event.sample.horizontalAccuracyM))
                         is DetectionEvent.TimeTick -> {
                             signal?.onTick(paused = openPause != null)
                             writer?.retryPending()
@@ -1256,7 +1257,7 @@ class TrackingSessionCoordinator @Inject constructor(
                     val approximate = !preciseLocationGranted()
                     // Every received fix counts as signal, persisted or not (a paused recording still
                     // hears the GPS; resuming must not look like a gap) - except an approximate one.
-                    signal.onSample(sample, paused = openPause != null, usable = !approximate)
+                    signal.onSample(sample, paused = openPause != null, usable = !approximate && FixQuality.isUsablePosition(sample.horizontalAccuracyM))
                     if (openPause == null) {
                         forgottenPauseWatch.onResumed()
                         writer.write(sample.toRawTrackPointEntity(captureId, nextSequenceNumber, approximate))
@@ -1342,8 +1343,9 @@ class TrackingSessionCoordinator @Inject constructor(
 
         /**
          * [paused]: the rider asked for no route evidence, so this fix is heard but the silence before it is not judged.
-         * [usable]: false for a fix taken with only approximate location - heard, but not evidence of a position, so it
-         * is not signal and does not close a gap.
+         * [usable]: false for a fix taken with only approximate location, or (PRC-004) reporting an accuracy too poor to be
+         * a position (the network fixes a lost GPS falls back to) - heard, but not evidence of a position, so it is not
+         * signal and does not close a gap.
          */
         suspend fun onSample(sample: LocationSample, paused: Boolean, usable: Boolean = true) = turn.withLock {
             evaluateAccuracy()

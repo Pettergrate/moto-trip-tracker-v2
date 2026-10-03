@@ -130,7 +130,11 @@ class TripProcessingWorker @AssistedInject constructor(
         const val KEY_TRIP_ID = "tripId"
         const val KEY_CAPTURE_ID = "captureId"
 
-        /** PRC-001's initial algorithm — the first *real* processing version, not a "no pipeline" placeholder. */
-        val CURRENT_PROCESSING_VERSION = ProcessingVersion(0)
+        /**
+         * 0: PRC-001's initial algorithm - the first *real* processing version, not a "no pipeline" placeholder.
+         * 1: PRC-004 (`ADR-029`) - fixes with a poor reported accuracy no longer count as positions. Existing Trips are
+         * reprocessed at the next app start by `DerivedDataReconciler` (ADR-014: the version-0 rows stay).
+         */
+        val CURRENT_PROCESSING_VERSION = ProcessingVersion(1)
     }
 }

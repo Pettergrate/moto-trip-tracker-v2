@@ -128,7 +128,7 @@ class DiagnosticSnapshotProviderTest {
         assertEquals("MOTO-001 bumped schema to v4 (MIGRATION_3_4)", 4, app.databaseSchemaVersion)
         assertEquals(36, app.androidApi)
         assertEquals("Acme Phone 9", app.device)
-        assertEquals(0, app.processingVersion)
+        assertEquals("PRC-004 moved processing to v1 (poor-accuracy fixes rejected)", 1, app.processingVersion)
     }
 
     @Test

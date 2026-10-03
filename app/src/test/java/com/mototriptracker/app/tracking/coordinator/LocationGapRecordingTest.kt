@@ -77,10 +77,10 @@ class LocationGapRecordingTest {
         db.close()
     }
 
-    private fun fixNow() = LocationSample(
+    private fun fixNow(accuracyM: Float = 5.0f) = LocationSample(
         wallTimeEpochMs = clock.wallClockMillis(), elapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
         receivedAtElapsedRealtimeNanos = clock.elapsedRealtimeNanos(),
-        latitude = 10.0 + clock.elapsedRealtimeNanos() * 1e-12, longitude = -20.0, horizontalAccuracyM = 5.0f,
+        latitude = 10.0 + clock.elapsedRealtimeNanos() * 1e-12, longitude = -20.0, horizontalAccuracyM = accuracyM,
         requestProfileId = "test-profile"
     )
 
@@ -142,6 +142,36 @@ class LocationGapRecordingTest {
         assertEquals("65000", ended.metadata["durationMs"])
         assertEquals(listOf(LocationSignalReport.LOST_NO_FIX, LocationSignalReport.RESTORED), reports.toList())
         awaitTrue("second point") { pointCount(captureId) == 2 }
+        job.cancelAndJoin()
+    }
+
+    /**
+     * PRC-004 (2026-10-02): entering a garage the GPS was lost and the phone kept delivering network fixes of 78-400 m
+     * accuracy for two and a half minutes. They counted as signal, so the app said nothing was wrong. They are still kept
+     * as raw evidence (ADR-006), but a fix that poor is not a position: the stretch is a gap, and only a usable fix ends it.
+     */
+    @Test
+    fun fixesTooPoorToBeAPositionAreKeptButAreNotSignalSoTheStretchIsAGapUntilAGoodFixReturns() = runBlocking {
+        val captureId = startCapture()
+        val job = record(captureId)
+        gateway.channel.send(fixNow())
+        awaitTrue("first point") { pointCount(captureId) == 1 }
+
+        clock.advanceMillis(60_000L)
+        gateway.channel.send(fixNow(accuracyM = 300f))
+        awaitTrue("the poor fix is kept as raw evidence") { pointCount(captureId) == 2 }
+        awaitTrue("gap started") { gapEvents(TrackingSessionCoordinator.EVENT_LOCATION_GAP_STARTED).size == 1 }
+
+        clock.advanceMillis(5_000L)
+        gateway.channel.send(fixNow(accuracyM = 400f))
+        awaitTrue("the second poor fix is kept too") { pointCount(captureId) == 3 }
+        assertEquals("poor fixes do not end the gap", 0, gapEvents(TrackingSessionCoordinator.EVENT_LOCATION_GAP_ENDED).size)
+        assertEquals(listOf(LocationSignalReport.LOST_NO_FIX), reports.toList())
+
+        clock.advanceMillis(5_000L)
+        gateway.channel.send(fixNow(accuracyM = 8f))
+        awaitTrue("gap ended by a usable fix") { gapEvents(TrackingSessionCoordinator.EVENT_LOCATION_GAP_ENDED).size == 1 }
+        assertEquals(listOf(LocationSignalReport.LOST_NO_FIX, LocationSignalReport.RESTORED), reports.toList())
         job.cancelAndJoin()
     }
 

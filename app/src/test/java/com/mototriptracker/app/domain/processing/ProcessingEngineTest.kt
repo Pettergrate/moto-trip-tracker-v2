@@ -27,7 +27,8 @@ class ProcessingEngineTest {
         elapsedNanos: Long,
         capturedAt: Long = elapsedNanos / 1_000_000,
         latitude: Double = 10.0,
-        isApproximateLocation: Boolean? = null
+        isApproximateLocation: Boolean? = null,
+        accuracyM: Float? = null
     ) = RawTrackPointEntity(
         captureId = captureId,
         sequenceNumber = sequenceNumber,
@@ -36,7 +37,7 @@ class ProcessingEngineTest {
         receivedAtElapsedRealtimeNanos = elapsedNanos,
         latitude = latitude,
         longitude = -20.0,
-        horizontalAccuracyM = if (isApproximateLocation == true) 2000.0f else 5.0f,
+        horizontalAccuracyM = accuracyM ?: if (isApproximateLocation == true) 2000.0f else 5.0f,
         altitudeEllipsoidM = null,
         altitudeMslM = null,
         verticalAccuracyM = null,
@@ -303,6 +304,101 @@ class ProcessingEngineTest {
         assertEquals(5_000L, gap.durationMs)
         assertEquals("capture-a:0", gap.startSourceRef)
         assertEquals("capture-b:0", gap.endSourceRef)
+    }
+
+    // --- PRC-004 (processing v1, ADR-029): a fix whose own accuracy is poor is not a position ---
+
+    @Test
+    fun aFixWhoseOwnAccuracyIsPoorIsRejectedAndNeverEntersTheRoute() {
+        val points = listOf(
+            point(sequenceNumber = 0, elapsedNanos = 1_000_000_000L),
+            point(sequenceNumber = 1, elapsedNanos = 3_000_000_000L, latitude = 10.003, accuracyM = 300f),
+            point(sequenceNumber = 2, elapsedNanos = 5_000_000_000L)
+        )
+
+        val result = engine.process("trip-1", version, listOf(part()), mapOf("capture-1" to points))
+
+        val poor = result.assessments.single { it.sequenceNumber == 1L }
+        assertEquals(TrackPointDecision.REJECTED, poor.decision)
+        assertEquals(ProcessingEngine.REASON_POOR_ACCURACY, poor.reasonCodes)
+        assertEquals(listOf(0L, 2L), result.processedPoints.map { it.sourceSequenceNumber })
+    }
+
+    @Test
+    fun theLimitItselfIsStillUsableAndJustPastItIsNot() {
+        val points = listOf(
+            point(sequenceNumber = 0, elapsedNanos = 1_000_000_000L, accuracyM = FixQuality.MAX_USABLE_HORIZONTAL_ACCURACY_M),
+            point(sequenceNumber = 1, elapsedNanos = 3_000_000_000L, accuracyM = FixQuality.MAX_USABLE_HORIZONTAL_ACCURACY_M + 0.1f)
+        )
+
+        val result = engine.process("trip-1", version, listOf(part()), mapOf("capture-1" to points))
+
+        assertEquals(listOf(TrackPointDecision.ACCEPTED, TrackPointDecision.REJECTED), result.assessments.map { it.decision })
+    }
+
+    /**
+     * The real case (2026-10-02, the 13.8 km ride): entering a garage the GPS was lost and for about two and a half
+     * minutes the phone delivered network positions of 78-400 m accuracy that jump hundreds of metres. They added 3.1 km
+     * to the ride and scribbled its end. Now the route ends where the good fixes end, the distance does not include the
+     * jumps, and the stretch is an explicit gap.
+     */
+    @Test
+    fun theStretchOfNetworkFixesAfterALostGpsIsNotRouteAndBecomesAnExplicitGap() {
+        val points = mutableListOf<RawTrackPointEntity>()
+        var seq = 0L
+        // Ten good fixes, 2 s apart, riding north.
+        repeat(10) { i -> points += point(sequenceNumber = seq++, elapsedNanos = (1L + 2 * i) * 1_000_000_000L, latitude = 10.0 + i * 0.0002) }
+        // ~2.5 minutes of network fixes: 78-400 m, jumping ~300 m around.
+        val networkAccuracies = listOf(400f, 100f, 100f, 100f, 78f, 287f, 100f, 400f, 83f, 283f, 300f, 83f, 381f, 300f)
+        networkAccuracies.forEachIndexed { i, accuracy ->
+            points += point(
+                sequenceNumber = seq++, elapsedNanos = (30L + 10 * i) * 1_000_000_000L,
+                latitude = 10.0 + 0.0018 + (if (i % 2 == 0) 0.003 else -0.003), accuracyM = accuracy
+            )
+        }
+        // The GPS comes back, standing at the destination.
+        repeat(3) { i -> points += point(sequenceNumber = seq++, elapsedNanos = (180L + 2 * i) * 1_000_000_000L, latitude = 10.0018, accuracyM = 10f) }
+
+        val result = engine.process("trip-1", version, listOf(part()), mapOf("capture-1" to points))
+
+        assertEquals("only the 13 good fixes are in the route", 13, result.processedPoints.size)
+        assertTrue(result.processedPoints.none { it.sourceSequenceNumber in 10L..23L })
+        assertEquals(14, result.assessments.count { it.reasonCodes == ProcessingEngine.REASON_POOR_ACCURACY })
+        val gap = result.gaps.single()
+        // From the last good fix (19 s) to the first one back (180 s): disclosed, not bridged.
+        assertEquals(19_000L, gap.startedAt)
+        assertEquals(180_000L, gap.endedAt)
+        assertEquals(161_000L, gap.durationMs)
+        assertEquals(ProcessingEngine.REASON_GAP_NO_FIX, gap.reasonCode)
+    }
+
+    @Test
+    fun aPoorFixAsTheFirstPointOfACaptureIsRejectedAndTheNextGoodOneStartsTheRoute() {
+        // The first fix after a cold start is often poor (71 and 88 m on the phone).
+        val points = listOf(
+            point(sequenceNumber = 0, elapsedNanos = 1_000_000_000L, accuracyM = 88f),
+            point(sequenceNumber = 1, elapsedNanos = 5_000_000_000L, accuracyM = 4f)
+        )
+
+        val result = engine.process("trip-1", version, listOf(part()), mapOf("capture-1" to points))
+
+        assertEquals(listOf(1L), result.processedPoints.map { it.sourceSequenceNumber })
+        assertEquals(ProcessingEngine.REASON_POOR_ACCURACY, result.assessments.single { it.sequenceNumber == 0L }.reasonCodes)
+    }
+
+    @Test
+    fun aPoorFixIsRejectedEvenWhenItIsTheFirstOfASecondCapture() {
+        val partA = part(captureId = "capture-a")
+        val partB = part(captureId = "capture-b", orderIndex = 1)
+        val pointsA = listOf(point(captureId = "capture-a", sequenceNumber = 0, elapsedNanos = 1_000_000_000L, capturedAt = 1_000L))
+        val pointsB = listOf(
+            point(captureId = "capture-b", sequenceNumber = 0, elapsedNanos = 1_000_000_000L, capturedAt = 600_000L, accuracyM = 250f),
+            point(captureId = "capture-b", sequenceNumber = 1, elapsedNanos = 3_000_000_000L, capturedAt = 602_000L)
+        )
+
+        val result = engine.process("trip-1", version, listOf(partA, partB), mapOf("capture-a" to pointsA, "capture-b" to pointsB))
+
+        assertEquals(listOf("capture-a:0", "capture-b:1"), result.processedPoints.map { "${it.sourceCaptureId}:${it.sourceSequenceNumber}" })
     }
 
     @Test

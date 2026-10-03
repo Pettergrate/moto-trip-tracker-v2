@@ -402,6 +402,21 @@ Verified with `./gradlew assembleDebug testDebugUnitTest`: 71/71 tests pass (up 
 
 ---
 
+### PRC-004 — Reject fixes whose own accuracy is too poor to be a position (processing v1)
+**Objective:** stop network-based fallback fixes from scribbling a Trip's route and adding distance that does not exist (`ADR-029`); found from the owner's observation that the end of the 13.8 km ride "se volvió un poco loco o difuso".
+
+**Constraints:** ADR-006 (raw preserved - processing only), ADR-014 (processing versioning, versions coexist), ADR-016 (gaps explicit), ADR-018 (the limit is a field-gated placeholder), F0.5 §7.1 (no global accuracy rule without field data).
+
+**Evidence (the phone's own `raw_track_point`, 2026-10-02):** in the 13.8 km ride the GPS was lost at 09:58:21 (entering a garage) and for about 2.5 minutes the phone delivered 15 network fixes of 78-400 m accuracy jumping 125-396 m from one to the next; summed over every point the ride is 14.10 km, over the points reporting 50 m or better 11.00 km (3.1 km that did not exist). Over all 13,101 stored points in 58 captures: 97.6 % report 20 m or better, 240 report 20-50 m, exactly one 50-75 m, then 74 report 78 m or worse.
+
+**Status: Implemented (2026-10-02), awaiting reprocessing on the phone.**
+
+**Implementation** (`ADR-029`): new `FixQuality` (limit 50 m, the limit itself usable). `ProcessingEngine` rejects a fix reporting worse (`REJECTED_POOR_ACCURACY`), after the approximate-location rule and before the capture-boundary one; the stretch it leaves becomes a `GAP_NO_FIX` through the existing gap detection. `CURRENT_PROCESSING_VERSION` 0 → 1: `DerivedDataReconciler` (which runs at every app start) reprocesses every Trip, the version-0 rows stay. The live views use the same rule (`liveDistanceMeters`, the live route: `RawTrackPointEntity.isRoutePoint()`), and `REC-005`'s signal watch no longer counts such a fix as signal, so a stretch of only poor fixes is a `LOCATION_GAP` that a usable fix ends. The raw points are kept either way.
+
+**Verified:** 887 unit tests pass from clean (879 before): a poor fix is rejected and never enters the route; the limit itself is usable and just past it is not; a replay of the real garage stretch (ten good fixes, fourteen network fixes of 78-400 m jumping ~300 m, three good ones back) leaves 13 route points, 14 rejections and one 161 s gap; a poor first fix of a capture and of a second capture are rejected; the live distance ignores poor fixes; stored poor fixes are kept as raw points but are not signal (gap until a usable fix); the diagnostic snapshot reports processing version 1. Five mutations each failed exactly the tests that own the guarantee and were restored identical: no rule (5 tests), the rule after the capture-boundary one (1), live distance ignoring accuracy (2), the signal watch counting poor fixes (1), the limit itself unusable (2). The gap test class ran 5 of 5 green repeatedly without the build cache.
+
+**Honest gaps:** (a) **Not seen on the phone yet**: the reprocessing runs at the next app start and the three rides of 2026-10-02 should show about 11.0 km for the long one. (b) The limit comes from one phone; another device's GPS may report accuracy on a different scale. (c) Speed-spike/teleport rejection is still not done (2 "impossible" jumps among 11,986 points at 10 m or better, worth a look first). (d) The first fix of a capture (often 71-88 m) is now rejected, so the route starts one point later. (e) Every Trip is reprocessed at once on first launch (58 captures on this phone).
+
 ### UI-001 — App shell, Home and Active Trip
 
 **Objective:** implement F0.9 primary navigation and active-trip-first Home behavior.

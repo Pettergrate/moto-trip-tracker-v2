@@ -16,12 +16,18 @@ import javax.inject.Inject
  * CHECK → GAP DETECTION → PROCESSED TRACK`), scoped to what F0.5 §7.1
  * actually licenses *without* field-tested thresholds: "no existirá
  * inicialmente una regla global como si accuracy > X → borrar punto". So
- * this v1 rejects only what's unambiguous with zero invented numbers —
- * non-monotonic `elapsedRealtimeNanos` (F0.5 §6.1) — and otherwise accepts
+ * processing v0 rejected only what's unambiguous with zero invented numbers —
+ * non-monotonic `elapsedRealtimeNanos` (F0.5 §6.1) — and otherwise accepted
  * every point (ADR-006: raw evidence isn't filtered away just for being
- * mediocre). Speed-spike/teleport/accuracy-cutoff rejection needs F0.6 field
- * data before any threshold here would be defensible; that's a later
- * `processingVersion`, not this one pretending to have evidence it doesn't.
+ * mediocre). Speed-spike/teleport rejection still needs field data before any
+ * threshold would be defensible.
+ *
+ * **Processing v1 (PRC-004, `ADR-029`) adds the accuracy cutoff, now that there
+ * is field data for it**: a fix reporting worse than [FixQuality]'s limit is
+ * rejected (`REJECTED_POOR_ACCURACY`). The phone's own network fallback after a
+ * GPS loss produced 74 such fixes in 58 captures, jumping hundreds of metres
+ * and adding 3.1 km to one ride. The raw points stay; Trips are reprocessed
+ * under the new version (ADR-014: versions coexist).
  *
  * No Android dependency (ADR-013) — [RawTrackPointEntity] et al. are plain
  * Kotlin data (their Room annotations live in `core.database.entity`, not
@@ -78,6 +84,11 @@ class ProcessingEngine @Inject constructor(
                     // those) but a known cause recorded with the point at receipt. The raw point stays
                     // (ADR-006); it just is not evidence of where the rider went.
                     point.isApproximateLocation == true -> TrackPointDecision.REJECTED to REASON_APPROXIMATE_LOCATION
+                    // PRC-004 (processing v1): a fix whose own accuracy is worse than FixQuality's limit is not a
+                    // position - the network fixes the phone falls back to when the GPS is lost (a garage) jump hundreds
+                    // of metres. Raw stays (ADR-006); the route and the distance simply do not use it, and the stretch it
+                    // covered becomes an explicit gap below.
+                    !FixQuality.isUsablePosition(point.horizontalAccuracyM) -> TrackPointDecision.REJECTED to REASON_POOR_ACCURACY
                     crossesCaptureBoundary -> TrackPointDecision.ACCEPTED to REASON_ACCEPTED
                     else -> assess(point, lastAccepted)
                 }
@@ -192,6 +203,7 @@ class ProcessingEngine @Inject constructor(
         const val REASON_OUT_OF_ORDER = "REJECTED_OUT_OF_ORDER"
         const val REASON_DUPLICATE = "REJECTED_DUPLICATE"
         const val REASON_APPROXIMATE_LOCATION = "REJECTED_APPROXIMATE_LOCATION"
+        const val REASON_POOR_ACCURACY = "REJECTED_POOR_ACCURACY"
         const val REASON_GAP_NO_FIX = "GAP_NO_FIX"
         const val REASON_CAPTURE_BOUNDARY = "CAPTURE_BOUNDARY"
         const val POINT_ROLE_GAP_BOUNDARY = "GAP_BOUNDARY"
