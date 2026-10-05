@@ -74,14 +74,6 @@
             android:exported="false" />
 
         <!--
-          DET-011/ADR-030: the PendingIntent target of the movement watch's geofence (observation mode). Not exported,
-          like the Activity Recognition one: Play Services invokes it through the PendingIntent this process handed over.
-        -->
-        <receiver
-            android:name=".tracking.movement.MovementWatchReceiver"
-            android:exported="false" />
-
-        <!--
           DET-001/F0.4 §4.5 (AND-007): re-registers Activity Recognition
           after reboot/app-update, since Google documents that registration
           doesn't survive either. Exported=true is the standard, broadly

@@ -4,7 +4,6 @@ import android.content.Context
 import com.google.android.gms.location.ActivityRecognition
 import com.google.android.gms.location.ActivityRecognitionClient
 import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.GeofencingClient
 import com.google.android.gms.location.LocationServices
 import com.mototriptracker.app.core.common.AndroidClock
 import com.mototriptracker.app.core.common.AndroidDispatcherProvider
@@ -26,12 +25,6 @@ import com.mototriptracker.app.tracking.location.FusedLocationGateway
 import com.mototriptracker.app.tracking.location.InMemoryLocationProfileSelector
 import com.mototriptracker.app.tracking.location.LocationGateway
 import com.mototriptracker.app.tracking.location.LocationProfileSelector
-import com.mototriptracker.app.tracking.movement.FusedMovementFixSource
-import com.mototriptracker.app.tracking.movement.GeofenceMovementWatchRegistration
-import com.mototriptracker.app.tracking.movement.MovementFixSource
-import com.mototriptracker.app.tracking.movement.MovementWatch
-import com.mototriptracker.app.tracking.movement.MovementWatchRegistration
-import com.mototriptracker.app.tracking.movement.MovementWatching
 import com.mototriptracker.app.tracking.processing.ProcessingScheduler
 import com.mototriptracker.app.tracking.processing.WorkManagerProcessingScheduler
 import com.mototriptracker.app.worker.TrashPurgeScheduler
@@ -82,17 +75,6 @@ interface AppModule {
 
     @Binds
     fun bindActivityTransitionRegistration(impl: ActivityRecognitionRegistrar): ActivityTransitionRegistration
-
-    /** DET-011: the movement watch (observation mode) and the two platform pieces it is built from. */
-    @Binds
-    @Singleton
-    fun bindMovementWatching(impl: MovementWatch): MovementWatching
-
-    @Binds
-    fun bindMovementWatchRegistration(impl: GeofenceMovementWatchRegistration): MovementWatchRegistration
-
-    @Binds
-    fun bindMovementFixSource(impl: FusedMovementFixSource): MovementFixSource
 
     @Binds
     fun bindProcessingScheduler(impl: WorkManagerProcessingScheduler): ProcessingScheduler
@@ -145,9 +127,5 @@ interface AppModule {
         @Provides
         fun provideActivityRecognitionClient(@ApplicationContext context: Context): ActivityRecognitionClient =
             ActivityRecognition.getClient(context)
-
-        @Provides
-        fun provideGeofencingClient(@ApplicationContext context: Context): GeofencingClient =
-            LocationServices.getGeofencingClient(context)
     }
 }

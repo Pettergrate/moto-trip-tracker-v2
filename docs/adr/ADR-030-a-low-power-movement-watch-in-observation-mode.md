@@ -1,6 +1,6 @@
 # ADR-030 — A low-power movement watch (geofence), in observation mode: it records when a detector built on it would have started, and starts nothing
 
-**Status:** Accepted
+**Status:** Superseded - removed on 2026-10-04 after the measurement (see "Result of the measurement"; replaced by ADR-031)
 **Date:** 2026-10-02
 **Project:** Moto Trip Tracker V2
 **Phase:** Phase 1 — `DET-011` (owner-approved: "me gusta la recomendación" - first measure, then decide)
@@ -40,6 +40,18 @@ For each ride, from the `MOVEMENT_WATCH_*` events and the capture:
 - **How much earlier would it have started?** Lead = the capture's `startedAt` - the first `MOVEMENT_WATCH_EXIT` after an `ARMED` and before `AUTO_DETECTION_STARTED`. Positive means the watch noticed the phone leaving before recording began; multiplied by the ride's early speed (stored points) it is the distance that would have been recovered.
 - **How often does it fire for no ride?** `MOVEMENT_WATCH_EXIT` with no capture within the next five minutes: walks, a phone carried around, network-position jitter. Each would have been a start candidate (GPS for up to 5 minutes).
 - **What does it cost?** Android attributes the network-location work to this app's own uid. Baseline taken before the watch ever ran (2026-10-02 21:02, after installing, before the first launch), `dumpsys batterystats --charged`: time on battery 10 h 26 m 48 s; **UID `u0a485`: 34.2 mAh** (foreground 2.74, background 2.83, foreground service 5.97, cached 21.9), i.e. ~0.57 % of the 6,000 mAh battery; wake locks attributed to the app: `NetworkLocationScanner` 149 times / 2 m 11 s, `CollectionLib-SigCollector` 325 times / 5 m 4 s, `NetworkLocationLocator` 168 times / 12.7 s; device-wide Wi-Fi scan time 1 h 53 m (18 %). After a day or two, the same command, compared by rate (mAh per hour on battery) - the counter resets when the phone is charged - plus the number of watch events per day as the app-side cost.
+
+## Result of the measurement (2026-10-04, two days, 7 automatic rides, phone database)
+
+**The geofence is not a usable trigger. It never fired earlier than Activity Recognition; the one EXIT it delivered came 2 min 28 s after it.**
+
+- **One EXIT in seven rides** (2026-10-03 06:46:45), against an Activity Recognition trigger at 06:44:17: late by ~2.5 minutes, at riding speed several kilometres. That latency is what Android documents for geofences in the background (tens of seconds to a couple of minutes); it is not under the app's control.
+- **The circle was rarely where the ride began.** In 6 of the 7 rides the first recorded point was 400 m to 2.5 km from where the previous capture ended: the phone moves between rides, and the watch is only re-centred on `STILL` or a finished capture.
+- **Re-centring failed 26 times out of 59 (44 %)**, always `STALE_FIX`: with the phone still, Google has no fresh position, and the `STALE_FIX` rule I added (after seeing a 4.8-minute-old "current" position) rejected positions that were old *because the phone had not moved*. The circle then stayed where it was.
+- **Cost:** not visible. The app's attributed share was 22.6 mAh over 36 h 54 min on battery (0.61 mAh/h) against 34.2 mAh over 10 h 27 min before the watch (3.3 mAh/h) - by rate, the counter having reset on a charge in between. Whatever the geofence itself costs is attributed to Google Play Services, not measured. It did not matter: the lead was the question, and there was none.
+- **What the data suggested instead:** a `STILL`→`WALKING` transition (about 20 a day) preceded the Activity Recognition trigger by 1.6, 2.0, 4.1, 6.2 and 10.1 minutes in 5 of 9 rides (none in the other 4); GPS recording costs ≈ 0.19 mAh per minute on this phone (10.6 mAh for 55 min of foreground service). That is `ADR-031`.
+
+The watch, its receiver, its position source, its hooks and its tests were removed. A geofence registered by that build outlives it in Play Services, so a one-time cleanup (`LegacyGeofenceCleanup`) removes the leftover at the next app start and is to be deleted once the owner's phone has run it. The diagnostic rows already written (`MOVEMENT_WATCH_*`) age out with `DIA-004`'s retention.
 
 ## Rationale
 

@@ -16,7 +16,6 @@ import com.mototriptracker.app.core.model.LocationSample
 import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.core.notification.TrackingNotificationController
 import com.mototriptracker.app.testing.FakeLocationGateway
-import com.mototriptracker.app.testing.FakeMovementWatching
 import com.mototriptracker.app.testing.FakeProcessingScheduler
 import com.mototriptracker.app.testing.TestDatabaseFactory
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
@@ -68,7 +67,6 @@ class TrackingForegroundServiceTest {
 
     private lateinit var db: MotoTripDatabase
     private val processingScheduler = FakeProcessingScheduler()
-    private val movementWatch = FakeMovementWatching()
 
     @Before
     fun setUp() {
@@ -120,7 +118,6 @@ class TrackingForegroundServiceTest {
         )
         service.dispatchers = AndroidDispatcherProvider()
         service.activityTransitionBus = ActivityTransitionBus()
-        service.movementWatch = movementWatch
         return controller
     }
 
@@ -551,68 +548,6 @@ class TrackingForegroundServiceTest {
         )
         assertEquals(0, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
         assertTrue(shadowOf(controller.get()).isStoppedBySelf)
-    }
-
-    // --- DET-011 (ADR-030): where a capture ended is the place the movement watch should watch from ---
-
-    @Test
-    fun finishingACaptureAsksTheMovementWatchToRecentreWhereTheRideEnded() = runBlocking {
-        val controller = buildServiceController()
-        controller.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext()))
-            .startCommand(0, 0)
-        controller.get().lastCommandJob?.join()
-
-        controller.withIntent(TrackingForegroundService.createFinishIntent(ApplicationProvider.getApplicationContext()))
-            .startCommand(0, 0)
-        controller.get().lastCommandJob?.join()
-
-        assertEquals(listOf("ensureArmed(CAPTURE_FINISHED)"), movementWatch.calls)
-    }
-
-    @Test
-    fun aFinishWithNoActiveCaptureLeavesTheMovementWatchAlone() = runBlocking {
-        val controller = buildServiceController()
-
-        controller.withIntent(TrackingForegroundService.createFinishIntent(ApplicationProvider.getApplicationContext()))
-            .startCommand(0, 0)
-        controller.get().lastCommandJob?.join()
-
-        assertEquals(emptyList<String>(), movementWatch.calls)
-    }
-
-    @Test
-    fun aMovementWatchThatFailsNeverStopsTheFinishNorTheServiceFromStopping() = runBlocking {
-        movementWatch.failWith = IllegalStateException("platform refused")
-        val controller = buildServiceController()
-        controller.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext()))
-            .startCommand(0, 0)
-        controller.get().lastCommandJob?.join()
-        val captureId = requireNotNull(db.tripCaptureDao().findByStatus(CaptureStatus.ACTIVE)).id
-
-        controller.withIntent(TrackingForegroundService.createFinishIntent(ApplicationProvider.getApplicationContext()))
-            .startCommand(0, 0)
-        controller.get().lastCommandJob?.join()
-
-        assertEquals(CaptureStatus.COMPLETED, requireNotNull(db.tripCaptureDao().findById(captureId)).status)
-        assertTrue("the service still stops itself", shadowOf(controller.get()).isStoppedBySelf)
-    }
-
-    @Test
-    fun anAutomaticCandidateThatCameToNothingAlsoAsksTheMovementWatchToRecentre() = runBlocking {
-        val controller = buildServiceController()
-        controller.withIntent(
-            TrackingForegroundService.createAutoDetectIntent(
-                ApplicationProvider.getApplicationContext(),
-                activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L)
-            )
-        ).startCommand(0, 0)
-        val bus = controller.get().activityTransitionBus
-        withTimeout(5_000) { bus.subscriptionCount.first { it > 0 } }
-        bus.emit(activitySample(ActivityType.IN_VEHICLE, TransitionType.EXIT, elapsedNanos = 1_000_000L))
-
-        withTimeout(5_000) { controller.get().autoDetectionJob?.join() }
-
-        assertEquals(listOf("ensureArmed(CAPTURE_FINISHED)"), movementWatch.calls)
     }
 
     /** A bare `ACTION_AUTO_DETECT` (no seed extras - `seedFromIntent` returns `null`) still arms watching via the bus alone, exactly as before this fix. */

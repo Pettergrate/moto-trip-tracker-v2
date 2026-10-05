@@ -93,6 +93,14 @@ class LocationGapRecordingTest {
         }
     }
 
+    /**
+     * The diagnostic event is written just *before* the report reaches the UI callback, so the event existing says nothing
+     * about the report having arrived (a full-suite run caught exactly that: the event was there, the report not yet).
+     * Waits for the reports instead of assuming they came with the event.
+     */
+    private suspend fun awaitReports(expected: List<LocationSignalReport>) =
+        awaitTrue("the reports to be $expected") { reports.toList() == expected }
+
     private suspend fun gapEvents(type: String) =
         db.diagnosticEventDao().findAll().filter { it.eventType == type }
 
@@ -130,7 +138,7 @@ class LocationGapRecordingTest {
         assertEquals(TrackingSessionCoordinator.REASON_NO_FIX, started.reasonCode)
         assertEquals("LIVE", started.metadata["detection"])
         assertEquals("60000", started.metadata["silenceMsWhenDetected"])
-        assertEquals(listOf(LocationSignalReport.LOST_NO_FIX), reports.toList())
+        awaitReports(listOf(LocationSignalReport.LOST_NO_FIX))
         assertEquals("the trip is never ended or paused because fixes stopped (§13.2)", CaptureStatus.ACTIVE, db.tripCaptureDao().findById(captureId)?.status)
         assertEquals("nothing is invented to bridge the gap", 1, pointCount(captureId))
 
@@ -140,7 +148,7 @@ class LocationGapRecordingTest {
 
         val ended = gapEvents(TrackingSessionCoordinator.EVENT_LOCATION_GAP_ENDED).single()
         assertEquals("65000", ended.metadata["durationMs"])
-        assertEquals(listOf(LocationSignalReport.LOST_NO_FIX, LocationSignalReport.RESTORED), reports.toList())
+        awaitReports(listOf(LocationSignalReport.LOST_NO_FIX, LocationSignalReport.RESTORED))
         awaitTrue("second point") { pointCount(captureId) == 2 }
         job.cancelAndJoin()
     }
@@ -166,12 +174,12 @@ class LocationGapRecordingTest {
         gateway.channel.send(fixNow(accuracyM = 400f))
         awaitTrue("the second poor fix is kept too") { pointCount(captureId) == 3 }
         assertEquals("poor fixes do not end the gap", 0, gapEvents(TrackingSessionCoordinator.EVENT_LOCATION_GAP_ENDED).size)
-        assertEquals(listOf(LocationSignalReport.LOST_NO_FIX), reports.toList())
+        awaitReports(listOf(LocationSignalReport.LOST_NO_FIX))
 
         clock.advanceMillis(5_000L)
         gateway.channel.send(fixNow(accuracyM = 8f))
         awaitTrue("gap ended by a usable fix") { gapEvents(TrackingSessionCoordinator.EVENT_LOCATION_GAP_ENDED).size == 1 }
-        assertEquals(listOf(LocationSignalReport.LOST_NO_FIX, LocationSignalReport.RESTORED), reports.toList())
+        awaitReports(listOf(LocationSignalReport.LOST_NO_FIX, LocationSignalReport.RESTORED))
         job.cancelAndJoin()
     }
 
@@ -186,7 +194,7 @@ class LocationGapRecordingTest {
         awaitTrue("gap started") { gapEvents(TrackingSessionCoordinator.EVENT_LOCATION_GAP_STARTED).size == 1 }
 
         assertEquals(TrackingSessionCoordinator.REASON_LOCATION_SERVICES_OFF, gapEvents(TrackingSessionCoordinator.EVENT_LOCATION_GAP_STARTED).single().reasonCode)
-        assertEquals(listOf(LocationSignalReport.LOST_LOCATION_SERVICES_OFF), reports.toList())
+        awaitReports(listOf(LocationSignalReport.LOST_LOCATION_SERVICES_OFF))
         job.cancelAndJoin()
     }
 
@@ -205,7 +213,7 @@ class LocationGapRecordingTest {
         val started = gapEvents(TrackingSessionCoordinator.EVENT_LOCATION_GAP_STARTED).single()
         assertEquals("RETROACTIVE", started.metadata["detection"])
         assertEquals("120000", gapEvents(TrackingSessionCoordinator.EVENT_LOCATION_GAP_ENDED).single().metadata["durationMs"])
-        assertEquals(listOf(LocationSignalReport.LOST_NO_FIX, LocationSignalReport.RESTORED), reports.toList())
+        awaitReports(listOf(LocationSignalReport.LOST_NO_FIX, LocationSignalReport.RESTORED))
         job.cancelAndJoin()
     }
 

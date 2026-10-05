@@ -20,8 +20,6 @@ import com.mototriptracker.app.core.notification.TrackingNotificationController
 import com.mototriptracker.app.core.notification.TrackingNotificationController.Companion.NOTIFICATION_ID
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
-import com.mototriptracker.app.tracking.movement.MovementWatch
-import com.mototriptracker.app.tracking.movement.MovementWatching
 import com.mototriptracker.app.tracking.persistence.PersistenceHealthBus
 import com.mototriptracker.app.tracking.persistence.PersistenceState
 import com.mototriptracker.app.tracking.persistence.PersistenceLevel
@@ -30,8 +28,6 @@ import com.mototriptracker.app.tracking.recovery.ProcessStateTracker
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -40,8 +36,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import androidx.annotation.VisibleForTesting
 
@@ -67,7 +61,6 @@ class TrackingForegroundService : Service() {
     @Inject lateinit var notificationController: TrackingNotificationController
     @Inject lateinit var dispatchers: DispatcherProvider
     @Inject lateinit var activityTransitionBus: ActivityTransitionBus
-    @Inject lateinit var movementWatch: MovementWatching
     @Inject lateinit var persistenceHealthBus: PersistenceHealthBus
     @Inject lateinit var processState: ProcessStateTracker
 
@@ -281,7 +274,6 @@ class TrackingForegroundService : Service() {
         if (active != null) {
             locationRecordingJob?.cancelAndJoin()
             lastFinishResult = coordinator.finishCapture(active.id)
-            rearmMovementWatchAfterFinish()
         }
         stopForeground(STOP_FOREGROUND_REMOVE)
         processState.reset()
@@ -471,26 +463,8 @@ class TrackingForegroundService : Service() {
             resumeCaptureId = resumeCaptureId
         )
         lastAutoDetectionOutcome = outcome
-        rearmMovementWatchAfterFinish()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
-    }
-
-    /**
-     * DET-011: a capture just ended (or an automatic candidate came to nothing), so the phone is where the ride ended -
-     * the place the movement watch should watch from. Observation mode: it records, it starts nothing. Bounded, so the
-     * service does not linger, and never allowed to disturb the finish that already happened.
-     */
-    private suspend fun rearmMovementWatchAfterFinish() {
-        try {
-            withContext(NonCancellable) {
-                withTimeoutOrNull(MOVEMENT_REARM_TIMEOUT_MS) { movementWatch.ensureArmed(MovementWatch.REASON_CAPTURE_FINISHED) }
-            }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (error: Exception) {
-            Log.w(TAG, "movement watch could not be re-centred after the finish (${error::class.simpleName})")
-        }
     }
 
     override fun onDestroy() {
@@ -507,9 +481,6 @@ class TrackingForegroundService : Service() {
         // "stale for a while" and rescanning the whole raw-point history
         // needlessly often.
         private const val NOTIFICATION_REFRESH_INTERVAL_MS = 30_000L
-
-        /** DET-011: the longest the end of a capture waits for the movement watch to be centred on where the ride ended. */
-        private const val MOVEMENT_REARM_TIMEOUT_MS = 12_000L
         const val ACTION_START = "com.mototriptracker.app.action.START_TRACKING"
         const val ACTION_FINISH = "com.mototriptracker.app.action.FINISH_TRACKING"
         const val ACTION_PAUSE = "com.mototriptracker.app.action.PAUSE_TRACKING"

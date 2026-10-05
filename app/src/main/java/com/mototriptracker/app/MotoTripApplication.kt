@@ -6,6 +6,7 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 import com.mototriptracker.app.tracking.activityrecognition.AutoTrackingDetection
 import com.mototriptracker.app.tracking.coordinator.TrackingSessionCoordinator
+import com.mototriptracker.app.tracking.recovery.LegacyGeofenceCleanup
 import com.mototriptracker.app.tracking.recovery.ProcessExitRecorder
 import com.mototriptracker.app.tracking.recovery.RebootReconciler
 import com.mototriptracker.app.tracking.recovery.UserStopReconciler
@@ -75,6 +76,9 @@ class MotoTripApplication : Application() {
     /** DIA-004: records how earlier processes ended (evidence only; recovery decisions stay with [userStopReconciler]). */
     @Inject lateinit var processExitRecorder: Lazy<ProcessExitRecorder>
 
+    /** DET-011 was removed (`ADR-031`); this drops the geofence it left registered with Play Services on a phone that ran it. Delete once the owner's phone has run it. */
+    @Inject lateinit var legacyGeofenceCleanup: Lazy<LegacyGeofenceCleanup>
+
     override fun onCreate() {
         super.onCreate()
         if (!WorkManager.isInitialized()) {
@@ -101,6 +105,7 @@ class MotoTripApplication : Application() {
             runCatching { rebootReconciler.get().reconcile() }
             runCatching { trackingCoordinator.get().reconcileActiveCaptureAfterReboot() }
             runCatching { derivedDataReconciler.get().reconcile() }
+            runCatching { legacyGeofenceCleanup.get().removeIfPresent() }
         }
     }
 }

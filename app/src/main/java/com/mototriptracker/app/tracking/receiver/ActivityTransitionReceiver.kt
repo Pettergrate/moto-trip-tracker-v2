@@ -27,8 +27,6 @@ import com.mototriptracker.app.tracking.activityrecognition.mapActivityType
 import com.mototriptracker.app.tracking.activityrecognition.mapTransitionType
 import com.mototriptracker.app.tracking.activityrecognition.reconstructWallTimeEpochMs
 import com.mototriptracker.app.tracking.capability.CapabilityInputsProvider
-import com.mototriptracker.app.tracking.movement.MovementWatch
-import com.mototriptracker.app.tracking.movement.MovementWatching
 import com.mototriptracker.app.tracking.service.TrackingForegroundService
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -56,7 +54,6 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
     @Inject lateinit var activityTransitionBus: ActivityTransitionBus
     @Inject lateinit var tripCaptureDao: TripCaptureDao
     @Inject lateinit var capabilityInputsProvider: CapabilityInputsProvider
-    @Inject lateinit var movementWatch: MovementWatching
 
     override fun onReceive(context: Context, intent: Intent) {
         val reading = readBroadcast(intent)
@@ -142,17 +139,6 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
         // The bus emit is non-suspending and never throws (tryEmit), so it runs whatever happened to the writes above.
         for (sample in samples.entersFirstAtTheSameInstant()) activityTransitionBus.emit(sample)
         maybeStartAutoDetection(context, samples)
-        // DET-011: Activity Recognition says the phone has settled somewhere - the place the movement watch should watch
-        // from. Observation mode: it records, it starts nothing. Never allowed to disturb the detection above.
-        if (samples.any { it.activityType == ActivityType.STILL && it.transitionType == TransitionType.ENTER }) {
-            try {
-                movementWatch.ensureArmed(MovementWatch.REASON_STILL)
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                Log.w(TAG, "movement watch could not be re-centred (${error::class.simpleName}); activity detection is unaffected")
-            }
-        }
     }
 
     /**

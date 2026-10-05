@@ -117,7 +117,7 @@ Ejemplos:
 - `CANDIDATE_STOP_ENTERED`
 - `CANDIDATE_STOP_CANCELLED`
 - `CANDIDATE_STOP_CONFIRMED`
-- `MOVEMENT_WATCH_ARMED` / `MOVEMENT_WATCH_ARM_FAILED` / `MOVEMENT_WATCH_EXIT` / `MOVEMENT_WATCH_DISARMED` / `MOVEMENT_WATCH_BROADCAST_EMPTY` (DET-011, modo observación: la geovalla de bajo consumo que avisa de que el teléfono salió del lugar donde estaba parado; `reasonCode` = por qué se armó, por qué falló o `GEOFENCE_EXIT`; metadatos solo de radio/precisión/edad, sin coordenadas)
+- (retirado el 2026-10-04, ADR-030 supersedido: la geovalla no sirvió como disparador; los eventos ya escritos caducan con la retención) `MOVEMENT_WATCH_ARMED` / `MOVEMENT_WATCH_ARM_FAILED` / `MOVEMENT_WATCH_EXIT` / `MOVEMENT_WATCH_DISARMED` / `MOVEMENT_WATCH_BROADCAST_EMPTY` (DET-011, modo observación: la geovalla de bajo consumo que avisa de que el teléfono salió del lugar donde estaba parado; `reasonCode` = por qué se armó, por qué falló o `GEOFENCE_EXIT`; metadatos solo de radio/precisión/edad, sin coordenadas)
 - `AUTO_STOP_MONITORING_RESUMED` (AUTO-002: un servicio reiniciado volvió a vigilar el fin de un Trip automático; `reasonCode` = `TRACKING` o `STOP_CANDIDATE_OPEN`)
 - `AUTO_HOLD_ENTERED`
 - `AUTO_HOLD_EXITED`
