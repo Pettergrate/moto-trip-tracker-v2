@@ -166,6 +166,127 @@ class ActivityTransitionReceiverTest {
         assertEquals(TransitionType.ENTER, seed?.transitionType)
     }
 
+    // --- DET-012 (ADR-031, measurement mode): a STILL EXIT opens a short GPS look - the start probe ---
+
+    private val stillExit get() = sample(ActivityType.STILL, TransitionType.EXIT)
+
+    @Test
+    fun aStillExitStartsAStartProbeAndLogsNothingOfItsOwn() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+
+        receiver.maybeStartProbe(
+            ApplicationProvider.getApplicationContext(),
+            listOf(stillExit, sample(ActivityType.WALKING, TransitionType.ENTER))
+        )
+
+        assertEquals(TrackingForegroundService.ACTION_START_PROBE, nextStartedServiceAction())
+        assertNull("the probe's own events are the coordinator's; the receiver adds none on the normal path", latestDecision())
+    }
+
+    @Test
+    fun aBatchThatAlsoCarriesAVehicleEnterLeavesItToTheRealDetection() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+
+        // The 2026-10-04 06:44 shape: STILL EXIT and IN_VEHICLE ENTER in one broadcast.
+        receiver.maybeStartProbe(
+            ApplicationProvider.getApplicationContext(),
+            listOf(stillExit, sample(ActivityType.IN_VEHICLE, TransitionType.ENTER))
+        )
+
+        assertNull(nextStartedServiceAction())
+    }
+
+    @Test
+    fun onlyAStillExitOpensAProbe() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+
+        receiver.maybeStartProbe(
+            ApplicationProvider.getApplicationContext(),
+            listOf(
+                sample(ActivityType.WALKING, TransitionType.ENTER),
+                sample(ActivityType.STILL, TransitionType.ENTER),
+                sample(ActivityType.IN_VEHICLE, TransitionType.EXIT),
+                sample(ActivityType.WALKING, TransitionType.EXIT)
+            )
+        )
+
+        assertNull(nextStartedServiceAction())
+    }
+
+    @Test
+    fun noProbeWhileACaptureIsAlreadyActive() = runTest {
+        db.tripCaptureDao().startCaptureIfNoneActive(activeCapture())
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+
+        receiver.maybeStartProbe(ApplicationProvider.getApplicationContext(), listOf(stillExit))
+
+        assertNull(nextStartedServiceAction())
+    }
+
+    @Test
+    fun noProbeUnlessAutoTrackingCanStartTripsByItself() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.cleanInstall()))
+
+        receiver.maybeStartProbe(ApplicationProvider.getApplicationContext(), listOf(stillExit))
+
+        assertNull(nextStartedServiceAction())
+    }
+
+    /** The rider walking away from the bike is a STILL EXIT too, and not the start of anything. */
+    @Test
+    fun noProbeRightAfterARideEndedButAgainOnceTheQuietTimeHasPassed() = runTest {
+        db.tripCaptureDao().insert(mostRecentlyEndedCapture(endElapsedRealtimeNanos = 1_000L)) // ended at wall 0 ms
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+        receiver.clock = FakeClock(wallMillis = 120_000L, elapsedNanos = 1_000L) // two minutes after
+
+        receiver.maybeStartProbe(ApplicationProvider.getApplicationContext(), listOf(stillExit))
+        assertNull("inside the three quiet minutes", nextStartedServiceAction())
+
+        receiver.clock = FakeClock(wallMillis = 200_000L, elapsedNanos = 1_000L) // three minutes and a bit after
+        receiver.maybeStartProbe(ApplicationProvider.getApplicationContext(), listOf(stillExit))
+        assertEquals(TrackingForegroundService.ACTION_START_PROBE, nextStartedServiceAction())
+    }
+
+    @Test
+    fun aRefusedProbeServiceStartIsRecordedRatherThanCrashingTheReceiver() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(FakeCapabilityProvider.fullAuto()))
+        val refusingContext = object : android.content.ContextWrapper(ApplicationProvider.getApplicationContext()) {
+            override fun startForegroundService(service: Intent) = throw IllegalStateException("background start not allowed")
+        }
+
+        receiver.maybeStartProbe(refusingContext, listOf(stillExit))
+
+        val decision = latestDecision()
+        assertEquals(ActivityTransitionRecorder.EVENT_START_PROBE_NOT_STARTED, decision?.eventType)
+        assertEquals(ActivityTransitionRecorder.REASON_SERVICE_START_FAILED, decision?.reasonCode)
+        assertEquals("IllegalStateException", decision?.stateAfter)
+    }
+
+    @Test
+    fun theProbeIsConsideredAfterTheRealDetectionAndNeverBlocksIt() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn))
+
+        // Through the normal entry point, with the batch that carries both: only the real detection starts a service.
+        receiver.handleTransitions(
+            ApplicationProvider.getApplicationContext(),
+            listOf(stillExit, sample(ActivityType.IN_VEHICLE, TransitionType.ENTER))
+        )
+
+        assertEquals(TrackingForegroundService.ACTION_AUTO_DETECT, nextStartedServiceAction())
+    }
+
+    @Test
+    fun aStillExitThroughTheNormalEntryPointStartsTheProbeAndStoresAndPublishesTheTransition() = runTest {
+        val receiver = buildReceiver(FakeCapabilityInputsProvider(fullyOn))
+        val published = collectPublished(receiver)
+
+        receiver.handleTransitions(ApplicationProvider.getApplicationContext(), listOf(stillExit))
+
+        assertEquals(TrackingForegroundService.ACTION_START_PROBE, nextStartedServiceAction())
+        assertEquals(1, published.size)
+        assertEquals(1, db.diagnosticEventDao().count())
+    }
+
     // --- DET-009 (ADR-026): Android also gives a motorcycle the label ON_BICYCLE ---
 
     @Test

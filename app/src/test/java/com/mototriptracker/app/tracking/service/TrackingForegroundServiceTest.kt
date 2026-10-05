@@ -550,6 +550,109 @@ class TrackingForegroundServiceTest {
         assertTrue(shadowOf(controller.get()).isStoppedBySelf)
     }
 
+    // --- DET-012 (ADR-031, measurement mode): the start probe's life inside the service ---
+
+    private suspend fun probeEvent(type: String) = db.diagnosticEventDao().findAll().filter { it.eventType == type }
+
+    private suspend fun awaitProbeEvent(type: String) = withTimeout(5_000) { while (probeEvent(type).isEmpty()) delay(20L) }
+
+    private fun startProbeIntent() = TrackingForegroundService.createStartProbeIntent(ApplicationProvider.getApplicationContext())
+
+    private fun walkAt(seconds: Int) = LocationSample(
+        wallTimeEpochMs = 2_000L + seconds * 1_000L, elapsedRealtimeNanos = seconds * 1_000_000_000L,
+        receivedAtElapsedRealtimeNanos = seconds * 1_000_000_000L, latitude = 10.0 + seconds * 0.00001, longitude = -20.0,
+        horizontalAccuracyM = 5f, requestProfileId = "test-profile", speedMps = 1.2f
+    )
+
+    @Test
+    fun actionStartProbeRunsAProbeUnderTheCheckingNotificationAndCreatesNoCapture() = runBlocking {
+        val controller = buildServiceController()
+
+        controller.withIntent(startProbeIntent()).startCommand(0, 0)
+        awaitProbeEvent(TrackingSessionCoordinator.EVENT_START_PROBE_STARTED)
+
+        val probe = controller.get().probeJob
+        assertNotNull(probe)
+        assertTrue(probe!!.isActive)
+        val manager = ApplicationProvider.getApplicationContext<android.content.Context>().getSystemService(NotificationManager::class.java)
+        val notification = (shadowOf(manager) as ShadowNotificationManager).getNotification(TrackingNotificationController.NOTIFICATION_ID)
+        assertNotNull(notification)
+        assertNotEquals(
+            "a probe must not say 'Recording your trip'",
+            "Recording your trip",
+            notification.extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+        )
+        assertEquals(0, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+        controller.destroy()
+        Unit
+    }
+
+    @Test
+    fun aProbeThatEndsByItselfStopsTheServiceBecauseNothingElseNeedsIt() = runBlocking {
+        val controller = buildServiceController(locationSamples = (0..400 step 10).map { walkAt(it) })
+
+        controller.withIntent(startProbeIntent()).startCommand(0, 0)
+        withTimeout(10_000) { controller.get().probeJob?.join() }
+
+        assertEquals("WINDOW_EXPIRED", controller.get().lastProbeOutcome?.endReason)
+        assertTrue("an idle service stops itself", shadowOf(controller.get()).isStoppedBySelf)
+        assertEquals(0, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+    }
+
+    @Test
+    fun aProbeWhileACaptureIsAlreadyActiveDoesNothing() = runBlocking {
+        val controller = buildServiceController()
+        controller.get().coordinator.startManualCapture()
+
+        controller.withIntent(startProbeIntent()).startCommand(0, 0)
+        withTimeout(5_000) { controller.get().probeJob?.join() }
+
+        assertNull(controller.get().lastProbeOutcome)
+        assertEquals(0, probeEvent(TrackingSessionCoordinator.EVENT_START_PROBE_STARTED).size)
+    }
+
+    @Test
+    fun aRealDetectionStartingWhileAProbeRunsEndsTheProbeAndTheServiceKeepsRunning() = runBlocking {
+        val controller = buildServiceController()
+        controller.withIntent(startProbeIntent()).startCommand(0, 0)
+        awaitProbeEvent(TrackingSessionCoordinator.EVENT_START_PROBE_STARTED)
+        val probe = checkNotNull(controller.get().probeJob)
+
+        controller.withIntent(
+            TrackingForegroundService.createAutoDetectIntent(
+                ApplicationProvider.getApplicationContext(),
+                activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L)
+            )
+        ).startCommand(0, 0)
+        withTimeout(5_000) { probe.join() }
+        awaitProbeEvent(TrackingSessionCoordinator.EVENT_START_PROBE_ENDED)
+
+        assertEquals("SUPERSEDED_BY_DETECTION", probeEvent(TrackingSessionCoordinator.EVENT_START_PROBE_ENDED).single().reasonCode)
+        assertTrue("the real detection took the phone over", controller.get().autoDetectionJob?.isActive == true)
+        assertTrue("and the service is still there for it", !shadowOf(controller.get()).isStoppedBySelf)
+        controller.destroy()
+        Unit
+    }
+
+    @Test
+    fun aManualStartWhileAProbeRunsEndsTheProbeBecauseACaptureIsStarting() = runBlocking {
+        val controller = buildServiceController()
+        controller.withIntent(startProbeIntent()).startCommand(0, 0)
+        awaitProbeEvent(TrackingSessionCoordinator.EVENT_START_PROBE_STARTED)
+        val probe = checkNotNull(controller.get().probeJob)
+
+        controller.withIntent(TrackingForegroundService.createStartIntent(ApplicationProvider.getApplicationContext())).startCommand(0, 0)
+        controller.get().lastCommandJob?.join()
+        withTimeout(5_000) { probe.join() }
+        awaitProbeEvent(TrackingSessionCoordinator.EVENT_START_PROBE_ENDED)
+
+        assertEquals("CAPTURE_STARTED", probeEvent(TrackingSessionCoordinator.EVENT_START_PROBE_ENDED).single().reasonCode)
+        assertEquals(1, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+        assertTrue("the capture's service was not stopped by the probe ending", !shadowOf(controller.get()).isStoppedBySelf)
+        controller.destroy()
+        Unit
+    }
+
     /** A bare `ACTION_AUTO_DETECT` (no seed extras - `seedFromIntent` returns `null`) still arms watching via the bus alone, exactly as before this fix. */
     @Test
     fun aBareAutoDetectIntentWithNoSeedStillArmsWatchingFromTheBusAlone() = runBlocking {

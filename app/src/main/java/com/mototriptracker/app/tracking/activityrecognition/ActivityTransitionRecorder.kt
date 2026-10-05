@@ -131,6 +131,9 @@ class ActivityTransitionRecorder @Inject constructor(
         /** The vocabulary of `eventType`/`reasonCode` on an auto-detection decision. */
         const val EVENT_AUTO_DETECTION_STARTED = "AUTO_DETECTION_STARTED"
         const val EVENT_AUTO_DETECTION_NOT_STARTED = "AUTO_DETECTION_NOT_STARTED"
+
+        /** DET-012: the start probe could not be started (the service start was refused); the probe's own events are the coordinator's. */
+        const val EVENT_START_PROBE_NOT_STARTED = "START_PROBE_NOT_STARTED"
         const val REASON_IN_VEHICLE_ENTER = "IN_VEHICLE_ENTER"
         /** DET-009 (`ADR-026`): Android also labels a motorcycle ride `ON_BICYCLE`; that ENTER starts detection too. */
         const val REASON_ON_BICYCLE_ENTER = "ON_BICYCLE_ENTER"

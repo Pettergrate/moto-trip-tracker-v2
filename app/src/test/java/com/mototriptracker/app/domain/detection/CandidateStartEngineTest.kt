@@ -393,4 +393,76 @@ class CandidateStartEngineTest {
         assertEquals(CandidateStartDecision.NoChange, decision)
         assertTrue(engine.isCandidateOpen)
     }
+
+    // --- DET-012 (ADR-031): a start probe - a candidate opened without any vehicle label, confirmed by speed alone ---
+
+    private val probeProfile = StartProbeProfile()
+
+    private fun probeEngine() = CandidateStartEngine(probeProfile.toCandidateProfile()).also { it.openByProbe(0L) }
+
+    private fun CandidateStartEngine.probeFix(seconds: Int, speedMps: Float?, latitude: Double = 10.0) =
+        accept(DetectionEvent.Location(location(seconds * 1_000_000_000L, latitude, speedMps = speedMps)))
+
+    @Test
+    fun aProbeOpensACandidateWithNoLabelAndOnlyOnce() {
+        val probe = CandidateStartEngine(probeProfile.toCandidateProfile())
+
+        assertEquals(CandidateStartDecision.CandidateOpened, probe.openByProbe(0L))
+        assertTrue(probe.isCandidateOpen)
+        assertEquals("a second open changes nothing", CandidateStartDecision.NoChange, probe.openByProbe(1_000_000_000L))
+    }
+
+    /** Walking 300 m is the commonest thing a probe will see: it must never look like the start of a trip. */
+    @Test
+    fun aProbeNeverConfirmsOnDisplacementHoweverFarTheWalkerGoes() {
+        val probe = probeEngine()
+        var latitude = 10.0
+
+        val decisions = (0..200 step 5).map { seconds ->
+            latitude = latitudeOffsetMeters(10.0, seconds * 1.5)
+            probe.probeFix(seconds, speedMps = 1.5f, latitude = latitude)
+        }
+
+        assertTrue("300 m on foot confirms nothing", decisions.none { it is CandidateStartDecision.Confirmed })
+        assertTrue(probe.isCandidateOpen)
+    }
+
+    @Test
+    fun aProbeConfirmsOnThreeFastFixesInARowAfterItsMinimumDuration() {
+        val probe = probeEngine()
+        probe.probeFix(0, speedMps = 0.4f)
+        probe.probeFix(60, speedMps = 1.2f)
+
+        probe.probeFix(100, speedMps = 6.0f)
+        probe.probeFix(102, speedMps = 6.5f)
+        val decision = probe.probeFix(104, speedMps = 7.0f)
+
+        assertTrue(decision is CandidateStartDecision.Confirmed)
+        decision as CandidateStartDecision.Confirmed
+        assertEquals(CandidateStartEngine.REASON_CONFIRMED_SPEED, decision.reasonCode)
+        assertEquals(7.0f, decision.evidence.maxSpeedMps!!, 0.001f)
+        assertEquals(104_000L, decision.evidence.elapsedMs)
+    }
+
+    @Test
+    fun aProbeAbandonsWhenItsWindowExpires() {
+        val probe = probeEngine()
+        probe.probeFix(0, speedMps = 1.0f)
+
+        val decision = probe.probeFix(361, speedMps = 1.0f)
+
+        assertTrue(decision is CandidateStartDecision.Abandoned)
+        assertEquals(CandidateStartEngine.REASON_WINDOW_EXPIRED, (decision as CandidateStartDecision.Abandoned).reasonCode)
+        assertFalse(probe.isCandidateOpen)
+    }
+
+    @Test
+    fun aProbeHasNoLabelSoAVehicleExitIsNotWhatEndsIt() {
+        val probe = probeEngine()
+
+        val decision = probe.accept(DetectionEvent.Activity(activity(ActivityType.IN_VEHICLE, TransitionType.EXIT, 5_000_000_000L)))
+
+        assertEquals(CandidateStartDecision.NoChange, decision)
+        assertTrue(probe.isCandidateOpen)
+    }
 }

@@ -26,6 +26,7 @@ import com.mototriptracker.app.tracking.persistence.PersistenceLevel
 import com.mototriptracker.app.tracking.recovery.ProcessStateSummary
 import com.mototriptracker.app.tracking.recovery.ProcessStateTracker
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -153,6 +154,19 @@ class TrackingForegroundService : Service() {
         private set
 
     /**
+     * DET-012 (`ADR-031`, measurement mode): the single start probe this service may be running - a short GPS look opened by
+     * `ActivityTransitionReceiver` when the phone stops being still. It owns neither a capture nor the service: a real
+     * detection or a capture starting takes the phone over ([endProbe]), and the probe never stops a service that has other work.
+     */
+    @VisibleForTesting
+    var probeJob: Job? = null
+        private set
+
+    @VisibleForTesting
+    var lastProbeOutcome: TrackingSessionCoordinator.StartProbeOutcome? = null
+        private set
+
+    /**
      * A `launch`ed child under a bare `SupervisorJob()` silently drops an
      * uncaught exception (`Job.join()` does not rethrow it) — found while
      * writing this service's own test, where a real failure inside
@@ -187,10 +201,12 @@ class TrackingForegroundService : Service() {
             return START_NOT_STICKY
         }
 
-        val initialNotification = if (action == ACTION_AUTO_DETECT) {
-            notificationController.buildValidatingCandidateNotification()
-        } else {
-            notificationController.buildTrackingNotification()
+        val initialNotification = when {
+            action == ACTION_AUTO_DETECT -> notificationController.buildValidatingCandidateNotification()
+            // DET-012: a probe on its own is "checking"; if a ride is already being recorded or detected (the receiver checks,
+            // but a race is possible) the foreground notification must stay the one that says so.
+            action == ACTION_START_PROBE && !otherWorkRunning() -> notificationController.buildValidatingCandidateNotification()
+            else -> notificationController.buildTrackingNotification()
         }
         // Even with the permission present the platform can still refuse the
         // foreground (e.g. revoked between the check and this call). A Finish
@@ -210,7 +226,7 @@ class TrackingForegroundService : Service() {
                 ensureLocationRecording(result.captureId)
                 ensureNotificationRefreshTicker(result.captureId)
                 refreshNotification(result.captureId)
-            }
+            }.also { endProbe(TrackingSessionCoordinator.PROBE_END_CAPTURE_STARTED) }
             ACTION_FINISH -> serviceScope.launch { finishActiveCaptureAndStop() }
             ACTION_PAUSE -> serviceScope.launch {
                 val result = coordinator.pauseCapture()
@@ -224,7 +240,11 @@ class TrackingForegroundService : Service() {
                 resumedCaptureId(result)?.let { processState.update { s -> s.copy(paused = false) } }
                 resumedCaptureId(result)?.let { refreshNotification(it) }
             }
+            // The real detection is started first and only then is the probe ended, so the probe's own end (which may
+            // stop an idle service) always finds this job already running.
             ACTION_AUTO_DETECT -> ensureAutoDetection(seedFromIntent(intent))
+                .also { endProbe(TrackingSessionCoordinator.PROBE_END_SUPERSEDED_BY_DETECTION) }
+            ACTION_START_PROBE -> ensureProbe()
             else -> serviceScope.launch { rehydrateOrStop() }
         }
 
@@ -432,6 +452,42 @@ class TrackingForegroundService : Service() {
         return serviceScope.launch { runAutoDetectionAndStop(seed, resumeCaptureId) }.also { autoDetectionJob = it }
     }
 
+    /** DET-012: launches the start probe, or reuses the one already running. */
+    private fun ensureProbe(): Job {
+        probeJob?.takeIf { it.isActive }?.let { return it }
+        return serviceScope.launch { runProbeAndStop() }.also { probeJob = it }
+    }
+
+    private suspend fun runProbeAndStop() {
+        // Nothing to look for when a ride is already being recorded or detected.
+        if (coordinator.findActiveCapture() != null || autoDetectionJob?.isActive == true) {
+            stopServiceIfIdle()
+            return
+        }
+        // Ended by the service (a real detection or a capture took over), this throws a cancellation and nothing below runs:
+        // the phone belongs to someone else now. Only a probe that ends by itself checks whether the service is still needed.
+        lastProbeOutcome = coordinator.runStartProbe()
+        stopServiceIfIdle()
+    }
+
+    /** DET-012: hands the phone to whoever starts now. The probe records its own end, with what it had seen. */
+    private fun endProbe(reason: String) {
+        probeJob?.takeIf { it.isActive }?.cancel(CancellationException(reason))
+    }
+
+    /** Whether anything other than the probe itself is keeping this service useful. */
+    private fun otherWorkRunning(): Boolean =
+        autoDetectionJob?.isActive == true ||
+            locationRecordingJob?.isActive == true ||
+            (lastCommandJob?.isActive == true && lastCommandJob !== probeJob)
+
+    private suspend fun stopServiceIfIdle() {
+        if (!otherWorkRunning() && coordinator.findActiveCapture() == null) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
     private suspend fun runAutoDetectionAndStop(seed: ActivityTransitionSample?, resumeCaptureId: String? = null) {
         // Found on the phone (2026-09-29): activityTransitionBus is a SharedFlow with no replay, so an emission with no
         // subscriber yet present is lost for good - and the receiver always emits *before* this subscription can exist
@@ -486,7 +542,13 @@ class TrackingForegroundService : Service() {
         const val ACTION_PAUSE = "com.mototriptracker.app.action.PAUSE_TRACKING"
         const val ACTION_RESUME = "com.mototriptracker.app.action.RESUME_TRACKING"
         const val ACTION_AUTO_DETECT = "com.mototriptracker.app.action.AUTO_DETECT"
-        private val COMMAND_ACTIONS = setOf(ACTION_START, ACTION_FINISH, ACTION_PAUSE, ACTION_RESUME, ACTION_AUTO_DETECT)
+
+        /** DET-012 (`ADR-031`, measurement mode): a short GPS look when the phone stops being still; see [probeJob]. */
+        const val ACTION_START_PROBE = "com.mototriptracker.app.action.START_PROBE"
+        private val COMMAND_ACTIONS = setOf(ACTION_START, ACTION_FINISH, ACTION_PAUSE, ACTION_RESUME, ACTION_AUTO_DETECT, ACTION_START_PROBE)
+
+        fun createStartProbeIntent(context: Context): Intent =
+            Intent(context, TrackingForegroundService::class.java).setAction(ACTION_START_PROBE)
         const val REASON_LOCATION_PERMISSION_MISSING = "LOCATION_PERMISSION_MISSING"
 
         fun createStartIntent(context: Context): Intent =

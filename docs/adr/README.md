@@ -67,6 +67,7 @@ An ADR exists so a future implementation agent can answer five questions without
 | ADR-028 | Un servicio reiniciado vuelve a vigilar el fin de un Trip automático, reconstruyendo el motor de parada desde lo registrado | Accepted | `ADR-028-a-restarted-service-resumes-watching-an-automatic-trip-for-its-end.md` |
 | ADR-029 | Processing v1 rechaza los fixes cuya propia precisión reportada es demasiado mala para ser una posición | Accepted | `ADR-029-processing-v1-rejects-fixes-whose-own-accuracy-is-poor.md` |
 | ADR-030 | Un vigilante de movimiento de bajo consumo (geovalla), en modo observación: registra cuándo habría arrancado y no arranca nada | Superseded (removed 2026-10-04) | `ADR-030-a-low-power-movement-watch-in-observation-mode.md` |
+| ADR-031 | Un sondeo de inicio, en modo medición: una mirada corta con GPS cuando el teléfono deja de estar quieto, para saber si un viaje empieza antes de que Android lo llame viaje | Accepted (modo medición) | `ADR-031-a-start-probe-in-measurement-mode.md` |
 
 ---
 

@@ -19,6 +19,7 @@ import com.mototriptracker.app.core.model.TransitionType
 import com.mototriptracker.app.domain.capability.CapabilityResolver
 import com.mototriptracker.app.domain.capability.DetectionListening
 import com.mototriptracker.app.domain.detection.PostFinishSuppression
+import com.mototriptracker.app.domain.detection.StartProbeProfile
 import com.mototriptracker.app.domain.detection.entersFirstAtTheSameInstant
 import com.mototriptracker.app.domain.detection.isVehicleLike
 import com.mototriptracker.app.tracking.activityrecognition.ActivityTransitionBus
@@ -139,6 +140,45 @@ class ActivityTransitionReceiver : BroadcastReceiver() {
         // The bus emit is non-suspending and never throws (tryEmit), so it runs whatever happened to the writes above.
         for (sample in samples.entersFirstAtTheSameInstant()) activityTransitionBus.emit(sample)
         maybeStartAutoDetection(context, samples)
+        // DET-012: a probe never gets in the way of the detection above, whatever goes wrong with it.
+        try {
+            maybeStartProbe(context, samples)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            Log.w(TAG, "start probe not considered (${error::class.simpleName}); activity detection is unaffected")
+        }
+    }
+
+    /**
+     * DET-012 (`ADR-031`), measurement mode: when Activity Recognition says the phone stopped being still, a short GPS look
+     * (the start probe) is opened, to learn whether a ride is beginning before Android is willing to call the rider a
+     * vehicle. Of nine rides, five had such a transition 1.6 to 10 minutes before the trigger; about twenty a day happen.
+     *
+     * Not for a batch that also carries a vehicle ENTER (the real detection opens its own, better-informed candidate), not while a
+     * capture is ACTIVE, not unless Auto Tracking can start trips by itself (the same capability gate as [maybeStartAutoDetection]),
+     * and not within [StartProbeProfile.quietAfterRideMs] of a ride ending: that `STILL`→`WALKING` is the rider walking away from the
+     * bike. A probe records what it would have done and does nothing - no capture, no point stored.
+     */
+    @VisibleForTesting
+    internal suspend fun maybeStartProbe(context: Context, samples: List<ActivityTransitionSample>) {
+        if (samples.none { it.activityType == ActivityType.STILL && it.transitionType == TransitionType.EXIT }) return
+        if (samples.any { it.activityType.isVehicleLike() && it.transitionType == TransitionType.ENTER }) return
+        if (tripCaptureDao.findByStatus(CaptureStatus.ACTIVE) != null) return
+        val mode = CapabilityResolver.resolve(capabilityInputsProvider.current())
+        if (mode != CapabilityMode.FULL_AUTO && mode != CapabilityMode.ASSISTED_AUTO) return
+        val lastEndedAt = tripCaptureDao.findMostRecentlyEnded()?.endedAt
+        if (lastEndedAt != null && clock.wallClockMillis() - lastEndedAt < StartProbeProfile().quietAfterRideMs) return
+        try {
+            context.startForegroundService(TrackingForegroundService.createStartProbeIntent(context))
+        } catch (error: Exception) {
+            // The one branch that is not a quiet, deliberate return: Android 12+ can refuse a foreground service started from here.
+            Log.w(TAG, "startForegroundService for the start probe failed", error)
+            logDecision(
+                ActivityTransitionRecorder.EVENT_START_PROBE_NOT_STARTED, ActivityTransitionRecorder.REASON_SERVICE_START_FAILED,
+                stateAfter = error::class.simpleName
+            )
+        }
     }
 
     /**
