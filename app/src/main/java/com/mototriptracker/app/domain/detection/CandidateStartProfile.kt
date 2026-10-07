@@ -30,5 +30,15 @@ data class CandidateStartProfile(
     /** F0.3 §5: a candidate must not wait indefinitely for evidence that never arrives. */
     val maxCandidateWindowMs: Long = 300_000L,
     val vehicleSpeedMps: Float = 2.5f,
-    val vehicleSpeedFixesRequired: Int = 3
+    val vehicleSpeedFixesRequired: Int = 3,
+    /**
+     * DET-013 (`ADR-032`): displacement may not confirm a start while the phone is *demonstrably still* - its last
+     * [stillFixesRequired] fixes all report a speed below [stillSpeedMps]. Found on the owner's phone (2026-10-06, 17:49):
+     * on a treadmill, with Android calling it `IN_VEHICLE`, the first fix of the candidate was 73 m off (it reported 36 m of
+     * accuracy, inside any sensible limit), every later fix sat within a few metres of the second and reported 0.0 m/s -
+     * and the 73 m "displacement" from that anchor confirmed a 24-minute trip of 0.14 km. 0.5 m/s is below any walking pace,
+     * and an *unknown* speed never blocks: a real ride with a weak GPS must still start.
+     */
+    val stillSpeedMps: Float = 0.5f,
+    val stillFixesRequired: Int = 3
 )

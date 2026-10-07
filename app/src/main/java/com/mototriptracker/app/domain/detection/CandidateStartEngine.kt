@@ -68,7 +68,9 @@ class CandidateStartEngine(private val profile: CandidateStartProfile = Candidat
             val maxSpeedMps: Float? = null,
             val lastDisplacementMeters: Double? = null,
             val lastFix: LocationSample? = null,
-            val consecutiveFastFixes: Int = 0
+            val consecutiveFastFixes: Int = 0,
+            /** DET-013: the effective speed of the last few fixes (`null` = unknown), to tell a phone that is still from one that is moving. */
+            val recentSpeedsMps: List<Float?> = emptyList()
         ) : State
     }
 
@@ -119,7 +121,8 @@ class CandidateStartEngine(private val profile: CandidateStartProfile = Candidat
             firstFixAtElapsedRealtimeNanos = candidate.firstFixAtElapsedRealtimeNanos ?: sample.elapsedRealtimeNanos,
             maxSpeedMps = listOfNotNull(candidate.maxSpeedMps, speed).maxOrNull(),
             lastFix = sample,
-            consecutiveFastFixes = if (fast) candidate.consecutiveFastFixes + 1 else 0
+            consecutiveFastFixes = if (fast) candidate.consecutiveFastFixes + 1 else 0,
+            recentSpeedsMps = (candidate.recentSpeedsMps + speed).takeLast(profile.stillFixesRequired)
         )
 
         if (candidate.anchorLatitude == null || candidate.anchorLongitude == null) {
@@ -132,7 +135,9 @@ class CandidateStartEngine(private val profile: CandidateStartProfile = Candidat
         updated = updated.copy(lastDisplacementMeters = displacementMeters)
 
         if (elapsedSinceOpenMs >= profile.minConfirmationDurationMs) {
-            val byDisplacement = displacementMeters >= profile.minDisplacementMeters
+            // DET-013: a displacement is no evidence of a ride while every recent fix says the phone is not moving - it is
+            // a first fix that was off (or GPS drift indoors), which is what a treadmill produced. Speed still confirms.
+            val byDisplacement = displacementMeters >= profile.minDisplacementMeters && !isDemonstrablyStill(updated)
             val bySpeed = updated.consecutiveFastFixes >= profile.vehicleSpeedFixesRequired
             if (byDisplacement || bySpeed) {
                 state = State.Idle
@@ -147,6 +152,11 @@ class CandidateStartEngine(private val profile: CandidateStartProfile = Candidat
         state = updated
         return CandidateStartDecision.NoChange
     }
+
+    /** Enough recent fixes, every one with a *known* speed below the still threshold. An unknown speed is never evidence of stillness. */
+    private fun isDemonstrablyStill(candidate: State.Candidate): Boolean =
+        candidate.recentSpeedsMps.size >= profile.stillFixesRequired &&
+            candidate.recentSpeedsMps.all { it != null && it < profile.stillSpeedMps }
 
     private fun onTimeTick(nowElapsedRealtimeNanos: Long): CandidateStartDecision {
         val candidate = state as? State.Candidate ?: return CandidateStartDecision.NoChange

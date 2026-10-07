@@ -614,6 +614,35 @@ class TrackingSessionCoordinatorTest {
         assertEquals(oldestKept, requireNotNull(db.tripCaptureDao().findById(tripCompleted.captureId)).startElapsedRealtimeNanos)
     }
 
+    // --- DET-013 (ADR-032): a candidate that is demonstrably still never becomes a trip ---
+
+    /**
+     * The real case, replayed (2026-10-06, 17:49, a treadmill with Android saying IN_VEHICLE): the candidate's first fix was
+     * 73 m off, then every fix sat within a few metres of the second and reported 0.0 m/s. It used to confirm a start by
+     * displacement after 16 s and record 24 minutes of 0.14 km.
+     */
+    @Test
+    fun aTreadmillWithAndroidSayingInVehicleNeverBecomesATripBecauseEveryFixSaysThePhoneIsStill() = runTest {
+        val activityFlow = timedFlow(0L to activitySample(ActivityType.IN_VEHICLE, TransitionType.ENTER, elapsedNanos = 0L))
+        val offsetDegrees = 73.0 / 111_195.0
+        val locationFlow = timedFlow(
+            0L to sample(elapsedNanos = 0L, lat = 10.0, speedMps = 0.0f),
+            1_000L to sample(elapsedNanos = 1_000_000_000L, lat = 10.0 + offsetDegrees, speedMps = 0.3f),
+            *(2..320 step 2).map { s -> (s * 1_000L) to sample(elapsedNanos = s * 1_000_000_000L, lat = 10.0 + offsetDegrees + 0.00001, speedMps = 0.0f) }.toTypedArray()
+        )
+
+        val outcome = coordinatorWithLocationFlow(locationFlow).runAutoDetection(activityFlow)
+
+        assertEquals(TrackingSessionCoordinator.AutoDetectionOutcome.CandidateAbandoned, outcome)
+        assertEquals("no capture was ever created", 0, db.tripCaptureDao().countByStatus(CaptureStatus.ACTIVE))
+        assertNull(db.tripCaptureDao().findMostRecentlyEnded())
+        val rejected = db.diagnosticEventDao().findAll().single { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_START_REJECTED }
+        assertEquals("WINDOW_EXPIRED", rejected.reasonCode)
+        assertEquals("0.3", rejected.metadata["maxSpeedMps"])
+        assertTrue("the evidence still shows the displacement that no longer confirms", rejected.metadata.getValue("displacementM").toInt() in 70..80)
+        assertEquals(0, db.diagnosticEventDao().findAll().count { it.eventType == TrackingSessionCoordinator.EVENT_CANDIDATE_START_CONFIRMED })
+    }
+
     // --- AUTO-002 (ADR-028): an automatic capture whose service was restarted goes back to watching for its end ---
 
     private fun rawPoint(captureId: String, sequenceNumber: Long, elapsedNanos: Long, lat: Double = 10.0, speedMps: Float? = null) = RawTrackPointEntity(

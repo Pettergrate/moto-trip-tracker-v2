@@ -384,6 +384,124 @@ class CandidateStartEngineTest {
         }
     }
 
+    // --- DET-013 (ADR-032): a candidate that is demonstrably still cannot confirm by displacement ---
+
+    /**
+     * The real case (2026-10-06, a treadmill with Android saying IN_VEHICLE): the first fix of the candidate was 73 m off
+     * while reporting 36 m of accuracy, every later fix sat within a few metres of the second and reported 0.0 m/s. The
+     * 73 m from that anchor confirmed a 24-minute trip of 0.14 km.
+     */
+    @Test
+    fun aFirstFixThatWasOffDoesNotConfirmATripWhileEveryLaterFixSaysThePhoneIsStill() {
+        open()
+        fixAt(0, speedMps = 0.0f, latitude = 10.0)
+        fixAt(1, speedMps = 0.3f, latitude = latitudeOffsetMeters(10.0, 73.0))
+
+        val decisions = (3..13 step 2).map { s -> fixAt(s, speedMps = 0.0f, latitude = latitudeOffsetMeters(10.0, 74.0)) }
+
+        assertTrue("past the minimum duration and 73 m from the anchor, and still not a trip", decisions.none { it is CandidateStartDecision.Confirmed })
+        assertTrue(engine.isCandidateOpen)
+        val expired = fixAt(61, speedMps = 0.0f, latitude = latitudeOffsetMeters(10.0, 74.0))
+        assertTrue(expired is CandidateStartDecision.Abandoned)
+        expired as CandidateStartDecision.Abandoned
+        assertEquals(CandidateStartEngine.REASON_WINDOW_EXPIRED, expired.reasonCode)
+        assertEquals(0.3f, expired.evidence.maxSpeedMps!!, 0.001f)
+        assertEquals(73.0, expired.evidence.displacementMeters!!, 2.0)
+    }
+
+    @Test
+    fun aRealRideWithAnUnknownSpeedStillConfirmsOnDisplacementBecauseUnknownIsNeverEvidenceOfStillness() {
+        // Sparse fixes (16 s apart, past the 15 s limit for deriving a speed from two of them) with no reported speed:
+        // every speed is genuinely unknown - a weak GPS on a real ride.
+        open()
+        fixAt(0, speedMps = null, latitude = 10.0)
+        fixAt(16, speedMps = null, latitude = latitudeOffsetMeters(10.0, 14.0))
+        fixAt(32, speedMps = null, latitude = latitudeOffsetMeters(10.0, 28.0))
+
+        val decision = fixAt(48, speedMps = null, latitude = latitudeOffsetMeters(10.0, 42.0))
+
+        assertTrue(decision is CandidateStartDecision.Confirmed)
+        assertEquals(CandidateStartEngine.REASON_CONFIRMED_DISPLACEMENT, (decision as CandidateStartDecision.Confirmed).reasonCode)
+        assertNull("the speed really was unknown the whole way", decision.evidence.maxSpeedMps)
+    }
+
+    @Test
+    fun aRideThatStartsSlowlyStillConfirmsOnDisplacement() {
+        open()
+        fixAt(0, speedMps = 0.8f, latitude = 10.0)
+        fixAt(6, speedMps = 0.9f, latitude = latitudeOffsetMeters(10.0, 30.0))
+
+        val decision = fixAt(11, speedMps = 1.0f, latitude = latitudeOffsetMeters(10.0, 60.0))
+
+        assertTrue(decision is CandidateStartDecision.Confirmed)
+    }
+
+    @Test
+    fun aCandidateThatWasStillAndThenMovesOffConfirms() {
+        open()
+        (0..20 step 2).forEach { s -> fixAt(s, speedMps = 0.0f, latitude = 10.0) }
+
+        val decisions = listOf(
+            fixAt(22, speedMps = 6.0f, latitude = latitudeOffsetMeters(10.0, 12.0)),
+            fixAt(24, speedMps = 6.5f, latitude = latitudeOffsetMeters(10.0, 25.0)),
+            fixAt(26, speedMps = 7.0f, latitude = latitudeOffsetMeters(10.0, 40.0))
+        )
+
+        assertTrue("it confirms once it really moves", decisions.last() is CandidateStartDecision.Confirmed)
+    }
+
+    @Test
+    fun theStillThresholdItselfIsNotStill() {
+        open()
+        fixAt(0, speedMps = 0.5f, latitude = 10.0)
+        fixAt(4, speedMps = 0.5f, latitude = latitudeOffsetMeters(10.0, 30.0))
+        fixAt(8, speedMps = 0.5f, latitude = latitudeOffsetMeters(10.0, 50.0))
+
+        val decision = fixAt(12, speedMps = 0.5f, latitude = latitudeOffsetMeters(10.0, 80.0))
+
+        assertTrue(decision is CandidateStartDecision.Confirmed)
+    }
+
+    @Test
+    fun fewerFixesThanTheRulesWindowAreNotEnoughToCallThePhoneStill() {
+        open()
+        fixAt(0, speedMps = 0.0f, latitude = 10.0)
+
+        // Only two fixes in twelve seconds, both reporting no movement: not the three the rule needs to call it still.
+        val decision = fixAt(12, speedMps = 0.0f, latitude = latitudeOffsetMeters(10.0, 60.0))
+
+        assertTrue(decision is CandidateStartDecision.Confirmed)
+    }
+
+    @Test
+    fun aFixThatReportsMovementAmongTheLastThreeKeepsDisplacementValid() {
+        open()
+        fixAt(0, speedMps = 0.0f, latitude = 10.0)
+        fixAt(1, speedMps = 0.3f, latitude = latitudeOffsetMeters(10.0, 73.0))
+        fixAt(5, speedMps = 0.0f, latitude = latitudeOffsetMeters(10.0, 74.0))
+        fixAt(8, speedMps = 0.7f, latitude = latitudeOffsetMeters(10.0, 76.0))
+
+        // The first eligible fix (10 s): the last three speeds are 0.0, 0.7 and 0.0 - one of them is movement.
+        val decision = fixAt(10, speedMps = 0.0f, latitude = latitudeOffsetMeters(10.0, 77.0))
+
+        assertTrue(decision is CandidateStartDecision.Confirmed)
+    }
+
+    @Test
+    fun onlyTheLastThreeFixesDecideSoAnEarlierMovementDoesNotKeepDisplacementValid() {
+        open()
+        fixAt(0, speedMps = 0.0f, latitude = 10.0)
+        fixAt(1, speedMps = 0.3f, latitude = latitudeOffsetMeters(10.0, 73.0))
+        fixAt(2, speedMps = 0.7f, latitude = latitudeOffsetMeters(10.0, 74.0)) // a movement, but long gone from the window
+        fixAt(4, speedMps = 0.0f, latitude = latitudeOffsetMeters(10.0, 74.0))
+        fixAt(6, speedMps = 0.0f, latitude = latitudeOffsetMeters(10.0, 74.0))
+        fixAt(8, speedMps = 0.0f, latitude = latitudeOffsetMeters(10.0, 74.0))
+
+        val decision = fixAt(11, speedMps = 0.0f, latitude = latitudeOffsetMeters(10.0, 74.0))
+
+        assertEquals(CandidateStartDecision.NoChange, decision)
+    }
+
     @Test
     fun anExitOfAnotherLabelDoesNotAbandonACandidateThatNeverSawThatLabel() {
         label(ActivityType.ON_BICYCLE, TransitionType.ENTER, 0)
