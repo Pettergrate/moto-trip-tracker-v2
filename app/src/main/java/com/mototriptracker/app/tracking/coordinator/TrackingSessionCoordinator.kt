@@ -46,13 +46,10 @@ import com.mototriptracker.app.domain.detection.DetectionEvent
 import com.mototriptracker.app.domain.detection.ForgottenFinishDecision
 import com.mototriptracker.app.domain.detection.ForgottenFinishEngine
 import com.mototriptracker.app.domain.detection.ForgottenPauseDecision
-import com.mototriptracker.app.domain.detection.FixSpeed
 import com.mototriptracker.app.domain.detection.ForgottenPauseEngine
 import com.mototriptracker.app.domain.detection.LocationSignalWatch
-import com.mototriptracker.app.domain.detection.StartProbeProfile
 import com.mototriptracker.app.domain.detection.entersFirstAtTheSameInstant
 import com.mototriptracker.app.domain.processing.FixQuality
-import com.mototriptracker.app.domain.haversineMeters
 import com.mototriptracker.app.domain.liveDistanceMeters
 import com.mototriptracker.app.tracking.location.LocationGateway
 import com.mototriptracker.app.tracking.persistence.PersistenceState
@@ -60,7 +57,6 @@ import com.mototriptracker.app.tracking.persistence.RawPointWriter
 import com.mototriptracker.app.tracking.processing.ProcessingScheduler
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
-import kotlin.math.roundToInt
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1000,111 +996,6 @@ class TrackingSessionCoordinator @Inject constructor(
     /** A structured way to unwind out of [runAutoDetection]'s `collect` early with a known result. */
     private class StopAutoDetection(val outcome: AutoDetectionOutcome) : CancellationException()
 
-    /** DET-012: how a start probe ended *by itself*. A probe ended by the service (a real detection or a capture took over) ends by cancellation instead. */
-    data class StartProbeOutcome(val endReason: String, val wouldHaveStarted: Boolean)
-
-    private class StopProbe(val reason: String) : CancellationException(reason)
-
-    /**
-     * DET-012 (`ADR-031`), **measurement mode**: a short GPS look, opened when Activity Recognition says the phone stopped
-     * being still, to learn whether a ride is beginning before Android is willing to call the rider a vehicle - which on
-     * the owner's phone it does late (all three rides of 2026-10-02 began recording at speed or after their first stop).
-     *
-     * It looks at the fixes with the same start engine the detector uses, driven by speed alone (a walker covering 300 m
-     * is not a trip), and *records what it would have done* - `START_PROBE_WOULD_START` the first time speed says a ride
-     * has begun, `START_PROBE_ENDED` with the evidence at the end - while doing none of it: **no capture is created, no
-     * raw point is written, nothing about how rides are recorded changes**. The coordinates stay in memory for the length
-     * of the probe and are never logged (ADR-009); the events carry counts, speeds, milliseconds and metres.
-     *
-     * It ends by itself when its window passes ([StartProbeProfile.windowMs]), returning the outcome. Anything else that
-     * ends it - the service handing the phone to a real detection or a capture - arrives as a cancellation whose message
-     * is the reason; the end is recorded either way, with what had been seen so far.
-     */
-    suspend fun runStartProbe(profile: StartProbeProfile = StartProbeProfile()): StartProbeOutcome {
-        val startedAtElapsed = clock.elapsedRealtimeNanos()
-        val engine = CandidateStartEngine(profile.toCandidateProfile())
-        engine.openByProbe(startedAtElapsed)
-        bestEffortDetectorLog(EVENT_START_PROBE_STARTED, PROBE_START_STILL_EXIT, null, null)
-
-        var fixCount = 0
-        var anchor: LocationSample? = null
-        var last: LocationSample? = null
-        var maxSpeedMps: Float? = null
-        var lastEventElapsed = startedAtElapsed
-        var wouldStartAfterMs: Long? = null
-        var displacementAtWouldStartM: Int? = null
-        var endReason = PROBE_END_WINDOW_EXPIRED
-
-        val locationFlow: Flow<DetectionEvent> = locationGateway.locationUpdates().map { DetectionEvent.Location(it) }
-        val tickerFlow: Flow<DetectionEvent> = flow {
-            while (true) {
-                delay(TICKER_INTERVAL_MS)
-                emit(DetectionEvent.TimeTick(clock.elapsedRealtimeNanos()))
-            }
-        }
-
-        try {
-            merge(locationFlow, tickerFlow).collect { event ->
-                val nowElapsed = when (event) {
-                    is DetectionEvent.Location -> {
-                        fixCount++
-                        anchor = anchor ?: event.sample
-                        FixSpeed.effectiveSpeedMps(last, event.sample)?.let { speed -> maxSpeedMps = maxOf(maxSpeedMps ?: speed, speed) }
-                        last = event.sample
-                        event.sample.elapsedRealtimeNanos
-                    }
-                    is DetectionEvent.TimeTick -> event.nowElapsedRealtimeNanos
-                    is DetectionEvent.Activity -> return@collect // a probe is never fed activity labels
-                }
-                lastEventElapsed = maxOf(lastEventElapsed, nowElapsed)
-                if (wouldStartAfterMs == null) {
-                    when (val decision = engine.accept(event)) {
-                        is CandidateStartDecision.Confirmed -> {
-                            wouldStartAfterMs = (decision.confirmedAtElapsedRealtimeNanos - startedAtElapsed) / 1_000_000
-                            displacementAtWouldStartM = displacementMeters(anchor, last)
-                            bestEffortDetectorLog(
-                                EVENT_START_PROBE_WOULD_START, decision.reasonCode, null, decision.evidence,
-                                mapOf("afterMs" to checkNotNull(wouldStartAfterMs).toString())
-                            )
-                        }
-                        is CandidateStartDecision.Abandoned -> throw StopProbe(PROBE_END_WINDOW_EXPIRED)
-                        CandidateStartDecision.NoChange, CandidateStartDecision.CandidateOpened -> Unit
-                    }
-                } else if ((nowElapsed - startedAtElapsed) / 1_000_000 >= profile.windowMs) {
-                    // The engine stopped watching once it confirmed; the window is still the probe's own length.
-                    throw StopProbe(PROBE_END_WINDOW_EXPIRED)
-                }
-            }
-        } catch (stop: StopProbe) {
-            endReason = stop.reason
-        } catch (cancelled: CancellationException) {
-            endReason = cancelled.message?.takeIf { it in PROBE_END_REASONS } ?: PROBE_END_CANCELLED
-            throw cancelled
-        } finally {
-            withContext(NonCancellable) {
-                val endElapsed = maxOf(clock.elapsedRealtimeNanos(), lastEventElapsed)
-                bestEffortDetectorLog(
-                    EVENT_START_PROBE_ENDED, endReason, null, null,
-                    buildMap {
-                        put("elapsedMs", ((endElapsed - startedAtElapsed) / 1_000_000).toString())
-                        put("fixCount", fixCount.toString())
-                        maxSpeedMps?.let { put("maxSpeedMps", "%.1f".format(java.util.Locale.ROOT, it)) }
-                        displacementMeters(anchor, last)?.let { put("displacementM", it.toString()) }
-                        put("wouldHaveStarted", (wouldStartAfterMs != null).toString())
-                        wouldStartAfterMs?.let { put("wouldStartAfterMs", it.toString()) }
-                        displacementAtWouldStartM?.let { put("displacementAtWouldStartM", it.toString()) }
-                    }
-                )
-            }
-        }
-        return StartProbeOutcome(endReason, wouldStartAfterMs != null)
-    }
-
-    /** Straight-line metres between two fixes, or `null` when either is missing. In memory only: the number is logged, never the positions. */
-    private fun displacementMeters(from: LocationSample?, to: LocationSample?): Int? =
-        if (from == null || to == null) null
-        else haversineMeters(from.latitude, from.longitude, to.latitude, to.longitude).roundToInt()
-
     /**
      * The automatic Finish, shared by the live path and by a replay that already says the ride ended (AUTO-002).
      *
@@ -1930,21 +1821,6 @@ class TrackingSessionCoordinator @Inject constructor(
 
         /** AUTO-002: a restarted service went back to watching an automatic capture for its end; `reasonCode` says what the rebuilt state was. */
         const val EVENT_AUTO_STOP_MONITORING_RESUMED = "AUTO_STOP_MONITORING_RESUMED"
-
-        /**
-         * DET-012 (measurement mode): the start probe's own events, with the evidence behind each. `STARTED` carries the
-         * trigger as its reason; `WOULD_START` the kind of evidence that said a ride had begun (`CONFIRMED_SPEED`);
-         * `ENDED` why it ended and what had been seen (`wouldHaveStarted`, `wouldStartAfterMs`, `maxSpeedMps`, ...).
-         */
-        const val EVENT_START_PROBE_STARTED = "START_PROBE_STARTED"
-        const val EVENT_START_PROBE_WOULD_START = "START_PROBE_WOULD_START"
-        const val EVENT_START_PROBE_ENDED = "START_PROBE_ENDED"
-        const val PROBE_START_STILL_EXIT = "STILL_EXIT"
-        const val PROBE_END_WINDOW_EXPIRED = "WINDOW_EXPIRED"
-        const val PROBE_END_SUPERSEDED_BY_DETECTION = "SUPERSEDED_BY_DETECTION"
-        const val PROBE_END_CAPTURE_STARTED = "CAPTURE_STARTED"
-        const val PROBE_END_CANCELLED = "CANCELLED"
-        private val PROBE_END_REASONS = setOf(PROBE_END_WINDOW_EXPIRED, PROBE_END_SUPERSEDED_BY_DETECTION, PROBE_END_CAPTURE_STARTED)
 
         /** REC-003: below this a sealed capture has no route worth showing, so it gets no partial Trip (its evidence stays). */
         const val MIN_POINTS_FOR_PARTIAL_TRIP = 2

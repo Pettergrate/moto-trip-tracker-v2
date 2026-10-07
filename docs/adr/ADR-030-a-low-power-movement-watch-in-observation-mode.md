@@ -51,7 +51,7 @@ For each ride, from the `MOVEMENT_WATCH_*` events and the capture:
 - **Cost:** not visible. The app's attributed share was 22.6 mAh over 36 h 54 min on battery (0.61 mAh/h) against 34.2 mAh over 10 h 27 min before the watch (3.3 mAh/h) - by rate, the counter having reset on a charge in between. Whatever the geofence itself costs is attributed to Google Play Services, not measured. It did not matter: the lead was the question, and there was none.
 - **What the data suggested instead:** a `STILL`→`WALKING` transition (about 20 a day) preceded the Activity Recognition trigger by 1.6, 2.0, 4.1, 6.2 and 10.1 minutes in 5 of 9 rides (none in the other 4); GPS recording costs ≈ 0.19 mAh per minute on this phone (10.6 mAh for 55 min of foreground service). That is `ADR-031`.
 
-The watch, its receiver, its position source, its hooks and its tests were removed. A geofence registered by that build outlives it in Play Services, so a one-time cleanup (`LegacyGeofenceCleanup`) removes the leftover at the next app start and is to be deleted once the owner's phone has run it. The diagnostic rows already written (`MOVEMENT_WATCH_*`) age out with `DIA-004`'s retention.
+The watch, its receiver, its position source, its hooks and its tests were removed. A geofence registered by that build outlives it in Play Services, so a one-time cleanup (`LegacyGeofenceCleanup`) removed the leftover at the next app start; it ran on the owner's phone for two days (no trace of the geofence remained in the system) and was deleted on 2026-10-06 with the removal of `ADR-031`. The diagnostic rows already written (`MOVEMENT_WATCH_*`) age out with `DIA-004`'s retention.
 
 ## Rationale
 

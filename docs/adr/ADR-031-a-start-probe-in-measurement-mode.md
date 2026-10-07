@@ -1,6 +1,6 @@
 # ADR-031 — A start probe, in measurement mode: a short GPS look when the phone stops being still, to learn whether a ride begins before Android calls it one
 
-**Status:** Accepted (measurement mode; making it start captures is a separate, later decision)
+**Status:** Superseded - removed on 2026-10-06 after the measurement (see "Result of the measurement"): no lead, and a battery cost six times the estimate
 **Date:** 2026-10-04
 **Project:** Moto Trip Tracker V2
 **Phase:** Phase 1 — `DET-012` (owner-approved: "sí" to the recommendation after `ADR-030`'s measurement)
@@ -32,6 +32,17 @@ From `START_PROBE_*` and the captures (phone database; copy with `adb exec-out r
 - **False starts:** `START_PROBE_WOULD_START` with no capture within the next five minutes: a run, a bicycle, a phone in a car - each would have been a trip nobody wanted.
 - **Rides it misses:** captures with no probe, or whose probe never reached `WOULD_START` before the label did (the four of nine with no preceding transition, and any whose walking was slower than 2.5 m/s until it was too late).
 - **Cost:** the sum of `START_PROBE_ENDED.elapsedMs` per day (GPS minutes) against the battery statistics of the app's uid before and after (`dumpsys batterystats --charged`, compared by rate - the counter resets on a charge). Baseline before the probe ever ran: 22.6 mAh over 36 h 54 min on battery (0.61 mAh/h), of which the foreground service 10.6 mAh (55 min 38 s).
+
+## Result of the measurement (2026-10-06, two days - 5 and 6 October - 8 automatic rides, phone database)
+
+**The probe never started earlier than the label detection, and cost far more battery than estimated. It was removed.**
+
+- **Lead: none.** Five of the eight rides had a probe open when the detection triggered. In two of them the probe's `WOULD_START` fell in the very second of the label trigger (2026-10-05 18:19:34 and 2026-10-06 06:46:02: 0 s of lead); in the other three it had seen only walking speed (1.7, 2.0 and 3.0 m/s, the last without three fast fixes in a row). In the remaining three no probe was open (two) or it had expired 2.4 minutes before (one).
+- **The label was on time this time.** Seven of the eight rides triggered within 2 seconds of the capture's first fix, the eighth within 7. On 2-4 October six of nine rides had begun already at speed (11 to 39 m/s at the first usable fix); on 5-6 October three of eight had 6 m/s or more on the second retained fix, and those are the rides whose movement began in the very second of the trigger. Whether the probe's warm GPS helped the label (location lets Google's classifier see speed) cannot be separated from ride-to-ride variation: three rides without an active probe were equally punctual.
+- **False and idle probes.** 37 probes (20 and 17 a day), 29 of them ended by their window having seen nothing (walks, the phone moved around the house), 8 handed over to a real detection; one false `WOULD_START` (2026-10-06 15:19, 3.8 m/s, 61 m, no ride). About 196 minutes of GPS in two days (102 and 94), 5.3 minutes per probe on average.
+- **Battery - six times the estimate.** The app's attributed share went from **0.61 mAh/h** (22.6 mAh over 36 h 54 min on battery) to **6.8 mAh/h** (110 mAh over 16 h 13 min), about +150 mAh a day, ≈ 2.5 % of the 6,000 mAh battery, against the 0.1 - 0.4 % a day estimated from the foreground-service share alone. The breakdown shows why the estimate was wrong: besides the foreground service (30.5 mAh for 2 h 56 min, 0.17 mAh a minute as measured) the system blames the app for **47 min 41 s of Wi-Fi scanning in 988 scans** and a "cached" share of 77.1 mAh, both driven by the location requests: GPS recording at high accuracy makes Google scan Wi-Fi constantly, which my cost model did not include.
+
+Both removal conditions in "Reopen / supersede triggers" were met (no meaningful lead; a cost that is not small). The probe, its service hooks, its receiver trigger, its engine entry point and its tests were removed, and with them the one-time `LegacyGeofenceCleanup` left by `ADR-030` (the phone had run it for two days and no trace of the old geofence remained in the system). Main code is byte-identical to its state before `DET-011`. The late starts of 2-4 October did not repeat in the next eight rides; if they do, the retained fixes of `ADR-027` and the candidate events already say how late a ride's first usable fix was, so the problem can be seen again without anything running in the background.
 
 ## Rationale
 

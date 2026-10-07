@@ -212,32 +212,6 @@ class DiagnosticBundleBuilderTest {
     }
 
     @Test
-    fun theStartProbesMeasurementsSurviveTheScrubberIntactSoItsDayOfDataCanBeReadBack() {
-        // DET-012: the whole point of measurement mode is reading these back from an export - when the probe would have
-        // started, how fast, how far it had gone, how long it ran. None names a place; none may be scrubbed away.
-        val wouldStart = mapOf(
-            "elapsedMs" to "68999", "fixCount" to "34", "firstFixDelayMs" to "1250", "maxSpeedMps" to "7.0",
-            "displacementM" to "84", "afterMs" to "68999"
-        )
-        val ended = mapOf(
-            "elapsedMs" to "360120", "fixCount" to "180", "maxSpeedMps" to "8.0", "displacementM" to "2150",
-            "wouldHaveStarted" to "true", "wouldStartAfterMs" to "68999", "displacementAtWouldStartM" to "84"
-        )
-        val events = listOf(
-            event("p1", 5_000L, type = "START_PROBE_STARTED", reason = "STILL_EXIT", metadata = emptyMap()),
-            event("p2", 6_000L, type = "START_PROBE_WOULD_START", reason = "CONFIRMED_SPEED", metadata = wouldStart),
-            event("p3", 7_000L, type = "START_PROBE_ENDED", reason = "WINDOW_EXPIRED", metadata = ended)
-        )
-
-        val entries = DiagnosticBundleBuilder.build(9_000_000L, snapshot, events, route, ExportOptions())
-
-        val written = entries.byPath("diagnostic-events.jsonl").text.trim().lines().map(::JSONObject)
-            .map { it.getJSONObject("metadata").let { m -> m.keys().asSequence().associateWith { k -> m.getString(k) } } }
-        assertEquals(listOf(emptyMap(), wouldStart, ended), written)
-        assertEquals(0, JSONObject(entries.byPath("manifest.json").text).getInt("metadataEntriesScrubbed"))
-    }
-
-    @Test
     fun theProcessExitsFileHasOnlyExitsWithTheirStateAtTheTime() {
         val exits = JSONArray(standard().byPath("process-exits.json").text)
 

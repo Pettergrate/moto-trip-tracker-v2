@@ -76,18 +76,6 @@ class CandidateStartEngine(private val profile: CandidateStartProfile = Candidat
 
     val isCandidateOpen: Boolean get() = state is State.Candidate
 
-    /**
-     * DET-012 (`ADR-031`): opens a candidate with no vehicle label behind it - a start *probe*, opened because Activity
-     * Recognition said the phone stopped being still. It confirms exactly like any candidate (the profile decides how: the
-     * probe's switches displacement off and keeps speed), is abandoned by the window expiring, and no activity event is
-     * ever fed to it, so nothing abandons it for a label. Does nothing if a candidate is already open.
-     */
-    fun openByProbe(atElapsedRealtimeNanos: Long): CandidateStartDecision {
-        if (state !is State.Idle) return CandidateStartDecision.NoChange
-        state = State.Candidate(openedAtElapsedRealtimeNanos = atElapsedRealtimeNanos, label = ActivityType.UNKNOWN)
-        return CandidateStartDecision.CandidateOpened
-    }
-
     fun accept(event: DetectionEvent): CandidateStartDecision = when (event) {
         is DetectionEvent.Activity -> onActivity(event.sample)
         is DetectionEvent.Location -> onLocation(event.sample)
